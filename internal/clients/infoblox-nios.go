@@ -41,8 +41,16 @@ const (
 	SSLmode = "sslmode"
 	// Port Key
 	Port = "port"
-	// ConnectionTimeout Key
+	// ConnectionTimeout is the credentials-secret JSON key for the connection
+	// timeout. It is kept as-is for backward compatibility with documented
+	// secrets, but it is mapped onto the Terraform provider schema field
+	// ConnectTimeout (below) when building the provider configuration.
 	ConnectionTimeout = "connection_timeout"
+	// ConnectTimeout is the Terraform provider schema field name for the
+	// connection timeout (infoblox provider schema: "connect_timeout",
+	// TypeInt). The value carried under the secret key ConnectionTimeout is
+	// emitted under this key so the provider actually honors it.
+	ConnectTimeout = "connect_timeout"
 	// PoolConnections Key
 	PoolConnections = "pool_connections"
 	// WapiVersion Key
@@ -186,8 +194,13 @@ func buildConfiguration(creds map[string]string, read bool) map[string]any {
 	if v, ok := creds[Password]; ok {
 		cfg[Password] = v
 	}
+	// The secret carries the timeout under ConnectionTimeout ("connection_timeout")
+	// for backward compatibility, but the Terraform provider schema field is
+	// ConnectTimeout ("connect_timeout"). Emit it under the schema key so the
+	// value is actually honored instead of being silently dropped (the provider
+	// would otherwise fall back to its default of 60s).
 	if v, ok := creds[ConnectionTimeout]; ok {
-		cfg[ConnectionTimeout] = v
+		cfg[ConnectTimeout] = v
 	}
 	if v, ok := creds[PoolConnections]; ok {
 		cfg[PoolConnections] = v
