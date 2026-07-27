@@ -92,6 +92,11 @@ import (
 // and MUST be validated against the customer's real replication behavior.
 var GraceWindow = 30 * time.Second
 
+// now returns the current wall-clock time. It is a package-level indirection so
+// tests can drive the grace-window state machine deterministically; production
+// code leaves it as time.Now and behavior is unchanged.
+var now = time.Now
+
 // ManagementPolicies mirrors the provider's --enable-management-policies flag
 // onto the read connecter so the read-side Observe merges init parameters the
 // same way the write connecter does (avoiding spurious drift). main sets this
@@ -256,10 +261,10 @@ func (e *external) routeReadToPrimary(mg xpresource.Managed) bool {
 	if s.wasRunning {
 		// The async write just completed; start the replication grace window.
 		s.wasRunning = false
-		s.graceUntil = time.Now().Add(GraceWindow)
+		s.graceUntil = now().Add(GraceWindow)
 		return true
 	}
-	return time.Now().Before(s.graceUntil)
+	return now().Before(s.graceUntil)
 }
 
 func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.ExternalObservation, error) {
