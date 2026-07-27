@@ -29,6 +29,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/apis/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/split"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/features"
 )
@@ -90,6 +91,20 @@ func main() {
 		SetupFn:               clients.TerraformSetupBuilder(provider.TerraformProvider),
 		OperationTrackerStore: tjcontroller.NewOperationStore(log),
 	}
+
+	// Register the read side of the Infoblox gridmaster read/write split. Read
+	// traffic (Observe) is routed to a gridmaster candidate (credential key
+	// "read_server") while writes stay on the primary gridmaster ("server").
+	// The read connecters deliberately SHARE the write side's
+	// OperationTrackerStore: the async runtime coordinates in-flight operations
+	// via a per-MR AsyncTracker, and Observe (read) must see the LastOperation
+	// started by Create/Update/Delete (write) to return early while a write is
+	// in flight. A separate store would break that coordination and cause
+	// reconcile churn. When the credentials secret has no distinct read_server,
+	// TerraformReadSetupBuilder produces a setup identical to the write setup,
+	// so the split is a functional no-op. See internal/clients/split.
+	split.ManagementPolicies = *enableManagementPolicies
+	split.Configure(clients.TerraformReadSetupBuilder(provider.TerraformProvider), o.OperationTrackerStore)
 
 	if *enableExternalSecretStores {
 		o.SecretStoreConfigGVK = &v1alpha1.StoreConfigGroupVersionKind
