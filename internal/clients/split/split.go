@@ -81,6 +81,8 @@ import (
 	tjcontroller "github.com/crossplane/upjet/pkg/controller"
 	ujresource "github.com/crossplane/upjet/pkg/resource"
 	"github.com/crossplane/upjet/pkg/terraform"
+	tfsdk "github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -275,11 +277,55 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 }
 
 func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.ExternalCreation, error) {
+	if err := e.primeWrite(ctx, mg); err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "cannot prime the write client before create")
+	}
 	return e.write.Create(ctx, mg)
 }
 
 func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.ExternalUpdate, error) {
+	if err := e.primeWrite(ctx, mg); err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, "cannot prime the write client before update")
+	}
 	return e.write.Update(ctx, mg)
+}
+
+// primeWrite ensures the write (primary) client has computed its Terraform
+// instance diff before a mutating Create/Update is applied.
+//
+// The upjet Terraform Plugin SDK external client computes the instance diff in
+// Observe and consumes it in Create/Update (schema.Resource.Apply is called with
+// that diff). Because the split routes the reconciler's Observe to the *read*
+// (candidate) client, the *write* (primary) client never observed and its diff
+// is nil; upjet's Create/Update (unlike Delete) do not guard against a nil diff
+// and would panic (Create) or apply an empty diff (Update). Priming the write
+// client with its own Observe against the primary populates that diff.
+//
+// This is also semantically correct for a read/write split: the create/update
+// decision is (re)confirmed against the authoritative primary gridmaster rather
+// than a possibly-stale replication candidate. When the read connect fell back
+// to the write client (sameClient), the reconciler's Observe already ran on the
+// write client, so no priming is necessary.
+//
+// The read client's Observe additionally mutates the *shared* Terraform state on
+// the operation tracker. For a not-yet-created resource RefreshWithoutUpgrade
+// returns a nil state, so the tracker's tfState becomes nil; the write client's
+// priming Observe would then dereference a nil state and panic. Seed a non-nil
+// empty state first (RefreshWithoutUpgrade treats an empty ID as "does not
+// exist"), so the write client observes not-exists and computes the correct
+// creation diff.
+func (e *external) primeWrite(ctx context.Context, mg xpresource.Managed) error {
+	if e.sameClient {
+		return nil
+	}
+	if tr, ok := mg.(ujresource.Terraformed); ok {
+		t := e.ots.Tracker(tr)
+		if t.GetTfState() == nil {
+			t.SetTfState(&tfsdk.InstanceState{})
+		}
+	}
+	_, err := e.write.Observe(ctx, mg)
+	return err
 }
 
 func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.ExternalDelete, error) {

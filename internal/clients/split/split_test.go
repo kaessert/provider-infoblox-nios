@@ -73,7 +73,11 @@ func newOTS() *tjcontroller.OperationTrackerStore {
 
 // TestExternalRouting asserts each managed.ExternalClient verb is routed to the
 // correct endpoint: Observe->read (no write in flight, no grace), the mutating
-// verbs->write, and Disconnect->both.
+// verbs->write, and Disconnect->both. Create and Update first prime the write
+// client with its own Observe (against the primary), because upjet computes the
+// Terraform instance diff during Observe and consumes it during Create/Update;
+// since the reconciler's Observe was routed to the read client, the write client
+// must observe before it can apply a mutation.
 func TestExternalRouting(t *testing.T) {
 	resetForTest()
 
@@ -105,10 +109,12 @@ func TestExternalRouting(t *testing.T) {
 	}
 
 	want := []string{
-		"read:Observe",
+		"read:Observe",  // reconciler Observe -> read (candidate)
+		"write:Observe", // Create primes the write client's diff -> write (primary)
 		"write:Create",
+		"write:Observe", // Update primes the write client's diff -> write (primary)
 		"write:Update",
-		"write:Delete",
+		"write:Delete", // Delete needs no priming (upjet guards a nil diff)
 		"write:Disconnect",
 		"read:Disconnect",
 	}
