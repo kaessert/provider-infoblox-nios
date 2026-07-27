@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	tfsdk "github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,11 +22,12 @@ import (
 
 const (
 	// error messages
-	errNoProviderConfig     = "no providerConfigRef provided"
-	errGetProviderConfig    = "cannot get referenced ProviderConfig"
-	errTrackUsage           = "cannot track ProviderConfig usage"
-	errExtractCredentials   = "cannot extract credentials"
-	errUnmarshalCredentials = "cannot unmarshal infoblox-nios credentials as JSON"
+	errNoProviderConfig      = "no providerConfigRef provided"
+	errGetProviderConfig     = "cannot get referenced ProviderConfig"
+	errTrackUsage            = "cannot track ProviderConfig usage"
+	errExtractCredentials    = "cannot extract credentials"
+	errUnmarshalCredentials  = "cannot unmarshal infoblox-nios credentials as JSON"
+	errConfigureNoForkClient = "cannot configure the no-fork Terraform provider client"
 )
 
 const (
@@ -48,15 +51,9 @@ const (
 
 // TerraformSetupBuilder builds Terraform a terraform.SetupFn function which
 // returns Terraform provider setup configuration
-func TerraformSetupBuilder(version, providerSource, providerVersion string) terraform.SetupFn { //nolint:gocyclo
+func TerraformSetupBuilder(tfProvider *schema.Provider) terraform.SetupFn { //nolint:gocyclo
 	return func(ctx context.Context, client client.Client, mg resource.Managed) (terraform.Setup, error) {
-		ps := terraform.Setup{
-			Version: version,
-			Requirement: terraform.ProviderRequirement{
-				Source:  providerSource,
-				Version: providerVersion,
-			},
-		}
+		ps := terraform.Setup{}
 
 		configRef := mg.GetProviderConfigReference()
 		if configRef == nil {
@@ -107,6 +104,28 @@ func TerraformSetupBuilder(version, providerSource, providerVersion string) terr
 		if v, ok := creds[WapiVersion]; ok {
 			ps.Configuration[WapiVersion] = v
 		}
+
+		// Configure the in-process (no-fork) Terraform provider client. The
+		// provider is passed by value so that Configure operates on a copy:
+		// the SDK configures the provider once and we must avoid a shared
+		// ProviderConfig being mutated concurrently across MRs.
+		if err := configureNoForkClient(ctx, &ps, *tfProvider); err != nil {
+			return ps, errors.Wrap(err, errConfigureNoForkClient)
+		}
 		return ps, nil
 	}
+}
+
+// configureNoForkClient configures the given Terraform Plugin SDKv2 provider
+// with the credentials populated in ps.Configuration and stores the resulting
+// provider meta on ps.Meta for the no-fork runtime.
+func configureNoForkClient(ctx context.Context, ps *terraform.Setup, p schema.Provider) error {
+	diag := p.Configure(context.WithoutCancel(ctx), &tfsdk.ResourceConfig{
+		Config: ps.Configuration,
+	})
+	if diag != nil && diag.HasError() {
+		return errors.Errorf("failed to configure the provider: %v", diag)
+	}
+	ps.Meta = p.Meta()
+	return nil
 }
