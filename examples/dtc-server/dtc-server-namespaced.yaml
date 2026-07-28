@@ -1,0 +1,31 @@
+# DTCServer is the namespace-scoped variant of the Infoblox NIOS DTC
+# (DNS Traffic Control) server. See dtc-server.yaml for the cluster-scoped
+# variant and full field documentation — this file only documents what
+# differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the name/host below differ from dtc-server.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same DTC Server display name.
+apiVersion: dtcserver.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCServer
+metadata:
+  name: example-dtcserver-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: dtcserver/v1alpha1/dtcserver
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # dtc-server.yaml for the rationale.
+spec:
+  forProvider:
+    name: example-server-ns.example.com
+    host: 192.0.2.31
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
