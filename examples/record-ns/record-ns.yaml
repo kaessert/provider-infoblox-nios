@@ -1,0 +1,58 @@
+# NSRecord is a cluster-scoped Infoblox NIOS DNS delegation "NS" record
+# (WAPI object type record:ns). See record-ns-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:ns/ZG5zLmJpbmRfbnM:subdomain.zone.com/default") from
+# Create (a synchronous WAPI POST — the record exists immediately after
+# the 201 response); Crossplane stores it in the crossplane.io/
+# external-name annotation. Do not set that annotation manually — the
+# controller populates it.
+#
+# Required fields:
+#   name:       the delegated zone/subdomain in FQDN format. Live-verified
+#               immutable — WAPI rejects a PUT that changes this field
+#               even though the underlying SDK's update call still
+#               accepts a name parameter.
+#   nameserver: FQDN of the authoritative server for the delegated zone.
+#   view:       the DNS view the record is created in. Live-verified hard
+#               immutable (CEL rule enforced) — the update call has no
+#               view parameter.
+#   addresses:  at least one glue address record for the name server.
+#               Live-verified required on create (WAPI returns
+#               "field for create missing: addresses" without it), even
+#               though it is optional in the underlying SDK's field
+#               table.
+#
+# NS quirk: Grid policy may block manual NS record creation for zones it
+# does not consider delegated. This example targets a subdomain of a zone
+# that is expected to allow delegation NS records — adjust `name` and
+# `nameserver` to a zone/nameserver pair permitted by your Grid Manager
+# policy before applying.
+#
+# Optional mutable fields: msDelegationName. (addresses can also be
+# changed after creation, but as a list it is not a safe uptest
+# update-parameter target — see the annotation note below.)
+apiVersion: recordns.infobloxnios.crossplane.io/v1alpha1
+kind: NSRecord
+metadata:
+  name: example-nsrecord
+  annotations:
+    meta.upbound.io/example-id: recordns/v1alpha1/nsrecord
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted: the
+    # only mutable fields are msDelegationName (rarely exercised) and the
+    # addresses list, which is not a safe scalar target for uptest's
+    # update-parameter (known uptest v2.2.0 shell-quoting bugs with JSON
+    # values). Field-level update testing is wired via post-assert-hook
+    # during the E2E ticket instead.
+spec:
+  forProvider:
+    name: subdomain.zone.com
+    nameserver: ns1.example.com
+    addresses:
+      - address: 192.0.2.53
+        autoCreatePtr: false
+    view: default
+  providerConfigRef:
+    name: default
