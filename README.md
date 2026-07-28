@@ -18,8 +18,10 @@ resources declaratively using Kubernetes custom resources.
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
   (cluster-scoped and namespace-scoped)
 - **CNAMERecord** — create and manage Infoblox NIOS DNS "CNAME" records
+  (cluster-scoped and namespace-scoped)
 - **MXRecord** — create and manage Infoblox NIOS DNS "MX" records
   (cluster-scoped and namespace-scoped)
+- **NetworkView** — create and manage Infoblox NIOS network views
   (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
@@ -580,6 +582,58 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/record-srv/record-srv.yaml
 kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+```
+
+### NetworkView
+
+Manage Infoblox NIOS network views (WAPI object type `networkview`).
+
+**Cluster-scoped** (`networkview.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: networkview.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkView
+metadata:
+  name: example-network-view
+spec:
+  forProvider:
+    name: "test-network-view"
+    comment: "Test network view created by Crossplane"
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`networkview.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: networkview.infobloxnios.m.crossplane.io/v1alpha1
+kind: NetworkView
+metadata:
+  name: example-network-view-ns
+  namespace: default
+spec:
+  forProvider:
+    name: "test-network-view-ns"
+    comment: "Test namespaced network view created by Crossplane"
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `networkview/ZG5z...:test-network-view/false`). Crossplane stores this
+in the `crossplane.io/external-name` annotation — do not set it manually.
+
+The Grid always has a well-known "default" network view (`is_default=true`)
+that cannot be deleted or un-defaulted; `isDefault` is a server-controlled,
+read-only field. Standard CRUD applies to any additional network view you
+create, such as the example above.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/network-view/network-view.yaml
+kubectl apply -f examples/network-view/network-view-namespaced.yaml
 ```
 
 ## Development
