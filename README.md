@@ -23,6 +23,8 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **NetworkView** — create and manage Infoblox NIOS network views
   (cluster-scoped and namespace-scoped)
+- **Network** — create and manage Infoblox NIOS networks and IPv6 networks
+  (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -694,6 +696,62 @@ Apply the full set of example manifests:
 kubectl apply -f examples/network-view/network-view.yaml
 kubectl apply -f examples/network-view/network-view-namespaced.yaml
 ```
+
+### Network
+
+Manage Infoblox NIOS networks (WAPI object type `network`, or `ipv6network`
+for an IPv6 CIDR — the type is selected automatically from the CIDR format).
+
+**Cluster-scoped** (`network.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network
+spec:
+  forProvider:
+    networkView: default
+    network: 198.51.100.0/24
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`network.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: network.infobloxnios.m.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-ns
+  namespace: default
+spec:
+  forProvider:
+    networkView: default
+    network: 198.51.101.0/24
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+Both `networkView` and `network` are immutable after creation: the
+underlying SDK's update call has no parameters for either field. `networkView`
+references a NetworkView by name; this example uses the Grid's well-known
+"default" network view so it runs standalone without creating a NetworkView
+resource first.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/network/network.yaml
+kubectl apply -f examples/network/network-namespaced.yaml
+```
+
 
 ## Development
 
