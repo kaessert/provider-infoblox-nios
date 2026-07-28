@@ -17,6 +17,8 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
   (cluster-scoped and namespace-scoped)
+- **ZoneAuth** — create and manage Infoblox NIOS authoritative DNS zones
+  (cluster-scoped and namespace-scoped)
 - **CNAMERecord** — create and manage Infoblox NIOS DNS "CNAME" records
   (cluster-scoped and namespace-scoped)
 - **MXRecord** — create and manage Infoblox NIOS DNS "MX" records
@@ -441,6 +443,60 @@ spec:
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
+```
+
+### ZoneAuth
+
+Manage Infoblox NIOS authoritative DNS zones (WAPI object type `zone_auth`).
+
+**Cluster-scoped** (`zoneauth.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zoneauth.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneAuth
+metadata:
+  name: example-zoneauth
+spec:
+  forProvider:
+    fqdn: example.com
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`zoneauth.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zoneauth.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneAuth
+metadata:
+  name: example-zoneauth-ns
+  namespace: default
+spec:
+  forProvider:
+    fqdn: example-ns.com
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `zone_auth/ZG5zLnpvbmUk...:example.com/default`). Crossplane stores
+this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation:
+WAPI rejects a PUT that changes `fqdn` or `zoneFormat` with "Field is not
+allowed for update", and rejects a `view` change with "Cannot move zones
+between views". All other fields (`comment`, `disable`, the SOA timers,
+`nsGroup`, `extAttrs`, and the primary/secondary server lists) are mutable
+in place via WAPI PUT.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/zone-auth/zone-auth.yaml
+kubectl apply -f examples/zone-auth/zone-auth-namespaced.yaml
 ```
 
 ### CNAMERecord

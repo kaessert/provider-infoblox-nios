@@ -1,0 +1,46 @@
+# ZoneAuth is a cluster-scoped Infoblox NIOS authoritative DNS zone (WAPI
+# object type zone_auth). See zone-auth-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "zone_auth/ZG5zLnpvbmUk...:example.com/default") from Create;
+# Crossplane stores it in the crossplane.io/external-name annotation. Do
+# not set that annotation manually — the controller populates it.
+#
+# Create behavior: sync — the WAPI POST returns the new object's `_ref`
+# immediately (HTTP 201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   fqdn: fully-qualified domain name of the zone, e.g. "example.com".
+#         Immutable after creation (CEL rule enforced) — WAPI rejects a PUT
+#         that changes it with "Field is not allowed for update".
+#
+# Optional immutable fields: view, zoneFormat (both fixed at creation —
+# WAPI rejects a PUT that changes either: view with "Cannot move zones
+# between views", zoneFormat with "Field is not allowed for update").
+#
+# Optional mutable fields: comment, disable, soaDefaultTtl, soaExpire,
+# soaNegativeTtl, soaRefresh, soaRetry, nsGroup, extAttrs, gridPrimary,
+# gridSecondaries, externalPrimaries, externalSecondaries. WAPI supports
+# PUT for these fields, so the zone is updated in place rather than
+# replaced.
+#
+# uptest.upbound.io/update-parameter is intentionally omitted — it has
+# known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+# comment field below is a safe mutable scalar for update coverage;
+# field-level update testing is wired via post-assert-hook during the E2E
+# ticket.
+apiVersion: zoneauth.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneAuth
+metadata:
+  name: example-zoneauth
+  annotations:
+    meta.upbound.io/example-id: zoneauth/v1alpha1/zoneauth
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    fqdn: example.com
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
