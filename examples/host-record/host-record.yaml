@@ -1,0 +1,45 @@
+# HostRecord is a cluster-scoped Infoblox NIOS host record (WAPI object
+# type "record:host"). See host-record-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:host/ZG5zLmhvc3Rfcm9v:test-host.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   name:      host name in FQDN format. Renaming changes the record's
+#              `_ref` (the controller re-syncs the external-name
+#              annotation when that happens).
+#   ipv4Addrs: at least one IPv4 address entry is required on create.
+#
+# Optional but notable fields:
+#   networkView: immutable after creation — the underlying SDK's update
+#                call has no networkView parameter.
+#   view:        mutable — changing it moves the record between DNS
+#                views and changes the `_ref`.
+#
+# Optional mutable fields: aliases, comment, disable, ttl, useTtl,
+# configureForDns, extAttrs.
+apiVersion: hostrecord.infobloxnios.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord
+  annotations:
+    meta.upbound.io/example-id: hostrecord/v1alpha1/hostrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via post-assert-hook during the
+    # E2E ticket.
+spec:
+  forProvider:
+    name: test-host.example.com
+    ipv4Addrs:
+      - ipv4Addr: 10.0.0.100
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

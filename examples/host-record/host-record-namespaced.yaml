@@ -1,0 +1,32 @@
+# HostRecord is the namespace-scoped variant of the Infoblox NIOS host
+# record. See host-record.yaml for the cluster-scoped variant and full
+# field documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the host name below differs from host-record.yaml's
+# so both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, name) WAPI identity.
+apiVersion: hostrecord.infobloxnios.m.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: hostrecord/v1alpha1/hostrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # host-record.yaml for the rationale.
+spec:
+  forProvider:
+    name: test-host-ns.example.com
+    ipv4Addrs:
+      - ipv4Addr: 10.0.0.101
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
