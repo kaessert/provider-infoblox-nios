@@ -493,6 +493,29 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterCreateError verifies that a WAPI 5xx response during Create
+// is propagated (wrapped, not swallowed) and the external-name is left
+// unset — a failed Create must not falsely mark the resource as
+// provisioned.
+func TestClusterCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterZoneDelegated("my-zone", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateZoneDelegated) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateZoneDelegated)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty after failed create", got)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableFields(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -584,6 +607,26 @@ func TestClusterUpdateDoesNotSendImmutableFields(t *testing.T) {
 		if _, present := raw[immutable]; present {
 			t.Errorf("Update: request body contains immutable field %q: %v", immutable, raw[immutable])
 		}
+	}
+}
+
+// TestClusterUpdateError verifies that a WAPI 5xx response during Update
+// is propagated (wrapped, not swallowed) rather than being silently
+// treated as a successful reconcile.
+func TestClusterUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterZoneDelegated("my-zone", "zone_delegated/test1:delegated.example.com/default")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateZoneDelegated) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateZoneDelegated)
 	}
 }
 
@@ -817,6 +860,28 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateError verifies that a WAPI 5xx response during
+// Create is propagated (wrapped, not swallowed) and the external-name is
+// left unset.
+func TestNamespacedCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateZoneDelegated) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateZoneDelegated)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty after failed create", got)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -842,6 +907,62 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestNamespacedUpdateError verifies that a WAPI 5xx response during
+// Update is propagated (wrapped, not swallowed).
+func TestNamespacedUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "zone_delegated/test1:delegated.example.com/default", "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateZoneDelegated) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateZoneDelegated)
+	}
+}
+
+// TestNamespacedUpdateDoesNotSendImmutableFields mirrors the cluster-scope
+// assertion: fqdn, view, and zone_format must never appear in the
+// namespaced-scope Update request body either.
+func TestNamespacedUpdateDoesNotSendImmutableFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneDelegated{
+		Fqdn:       "delegated.example.com",
+		View:       stringPtr("default"),
+		ZoneFormat: "FORWARD",
+		DelegateTo: ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+	})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", ref, "ProviderConfig")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	for _, immutable := range []string{"fqdn", "view", "zone_format"} {
+		if _, present := raw[immutable]; present {
+			t.Errorf("Update: request body contains immutable field %q: %v", immutable, raw[immutable])
+		}
 	}
 }
 
@@ -877,6 +998,25 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
+	}
+}
+
+// TestNamespacedDeleteServerError verifies that a 5xx response from the
+// WAPI delete endpoint is propagated (wrapped, not swallowed) for the
+// namespaced scope too.
+func TestNamespacedDeleteServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "zone_delegated/test1:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteZoneDelegated) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteZoneDelegated)
 	}
 }
 
