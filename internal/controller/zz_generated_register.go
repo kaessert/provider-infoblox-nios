@@ -23,6 +23,7 @@ import (
 	rangetemplate "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
 	recorda "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
 	recordaaaa "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
+	recordalias "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordalias"
 	recordcname "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
 	recordmx "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordmx"
 	recordptr "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
@@ -51,6 +52,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		rangetemplate.SetupGated,
 		recorda.SetupGated,
 		recordaaaa.SetupGated,
+		recordalias.SetupGated,
 		recordcname.SetupGated,
 		recordmx.SetupGated,
 		recordptr.SetupGated,
@@ -83,6 +85,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		rangetemplate.Setup,
 		recorda.Setup,
 		recordaaaa.Setup,
+		recordalias.Setup,
 		recordcname.Setup,
 		recordmx.Setup,
 		recordptr.Setup,
