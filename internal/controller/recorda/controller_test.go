@@ -8,6 +8,7 @@ package recorda
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1009,5 +1010,294 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 	if *comment != "user comment" || *ttl != 120 || *useTTL != false || extAttrs["env"] != "staging" {
 		t.Error("lateInitialize: overwrote already-set ForProvider fields")
+	}
+}
+
+// TestObserveDoesNotLateInitializeRequiredFields proves that name,
+// ipv4Addr, and view — the CRD's required ARecordParameters fields — are
+// never overwritten by Observe()'s late-init step. lateInitialize only
+// accepts pointers to the optional fields (comment, ttl, useTtl,
+// extAttrs), so a spec/observed mismatch on a required field can never
+// occur through the real WAPI flow (name+view compose the object's
+// _ref) — this test drives it artificially to pin the guarantee.
+func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("observed.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.99"),
+		View:     "observed-view",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterARecord("my-arecord", ref)
+	cr.Spec.ForProvider.Name = stringPtr("host.example.com")
+	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.1")
+	cr.Spec.ForProvider.View = stringPtr("default")
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	if got := *cr.Spec.ForProvider.Name; got != "host.example.com" {
+		t.Errorf("Observe: required field Name late-initialized to %q, want unchanged %q", got, "host.example.com")
+	}
+	if got := *cr.Spec.ForProvider.IPv4Addr; got != "10.0.0.1" {
+		t.Errorf("Observe: required field IPv4Addr late-initialized to %q, want unchanged %q", got, "10.0.0.1")
+	}
+	if got := *cr.Spec.ForProvider.View; got != "default" {
+		t.Errorf("Observe: required field View late-initialized to %q, want unchanged %q", got, "default")
+	}
+}
+
+// ── isUpToDate: table-driven field comparison ───────────────────────────
+
+func TestIsUpToDate(t *testing.T) {
+	observedRecord := func() *ibclient.RecordA {
+		ttl := uint32(300)
+		return &ibclient.RecordA{
+			Name:     stringPtr("host.example.com"),
+			Ipv4Addr: stringPtr("10.0.0.1"),
+			Comment:  stringPtr("hello"),
+			Ttl:      &ttl,
+			UseTtl:   boolPtr(true),
+			Ea:       ibclient.EA{"env": "prod"},
+		}
+	}
+
+	cases := map[string]struct {
+		reason   string
+		name     *string
+		ipv4Addr *string
+		comment  *string
+		ttl      *int64
+		useTTL   *bool
+		extAttrs map[string]string
+		want     bool
+	}{
+		"IdenticalFieldsAreUpToDate": {
+			reason:   "when every mutable field matches the observed record, the resource must be reported up to date",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     true,
+		},
+		"ChangedNameIsNotUpToDate": {
+			reason:   "a changed name must be detected as drift",
+			name:     stringPtr("renamed.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     false,
+		},
+		"ChangedIPv4AddrIsNotUpToDate": {
+			reason:   "a changed ipv4Addr must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.2"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     false,
+		},
+		"ChangedCommentIsNotUpToDate": {
+			reason:   "a changed comment must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("goodbye"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     false,
+		},
+		"ChangedTTLIsNotUpToDate": {
+			reason:   "a changed ttl must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(600),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     false,
+		},
+		"ChangedUseTTLIsNotUpToDate": {
+			reason:   "a changed useTtl flag must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(false),
+			extAttrs: map[string]string{"env": "prod"},
+			want:     false,
+		},
+		"ExtAttrsDifferentValueIsNotUpToDate": {
+			reason:   "an extAttrs value change on an existing key must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"env": "staging"},
+			want:     false,
+		},
+		"ExtAttrsDifferentKeyIsNotUpToDate": {
+			reason:   "an extAttrs key added/removed must be detected as drift",
+			name:     stringPtr("host.example.com"),
+			ipv4Addr: stringPtr("10.0.0.1"),
+			comment:  stringPtr("hello"),
+			ttl:      int64Ptr(300),
+			useTTL:   boolPtr(true),
+			extAttrs: map[string]string{"owner": "platform-team"},
+			want:     false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := isUpToDate(tc.name, tc.ipv4Addr, tc.comment, tc.ttl, tc.useTTL, tc.extAttrs, observedRecord())
+			if got != tc.want {
+				t.Errorf("%s: isUpToDate() = %v, want %v", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
+	rec := &ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+	}
+	// The observed record carries no extattrs (nil Ea) — a spec with an
+	// explicit empty map must still compare as up to date, since
+	// extAttrsEqual treats nil and empty as equivalent (avoids a phantom
+	// diff when the WAPI response omits an empty extattrs object).
+	got := isUpToDate(stringPtr("host.example.com"), stringPtr("10.0.0.1"), nil, nil, nil, map[string]string{}, rec)
+	if !got {
+		t.Error("isUpToDate: empty ExtAttrs spec vs nil observed Ea = false, want true")
+	}
+}
+
+// ── ExtAttrs conversion: table-driven round-trip ────────────────────────
+
+func TestExtAttrsRoundTripTable(t *testing.T) {
+	cases := map[string]struct {
+		reason string
+		in     map[string]string
+	}{
+		"NilMap": {
+			reason: "a nil ExtAttrs map must round-trip without producing a phantom entry",
+			in:     nil,
+		},
+		"EmptyMap": {
+			reason: "an empty ExtAttrs map must round-trip as empty, not as a spurious single-entry map",
+			in:     map[string]string{},
+		},
+		"SingleEntry": {
+			reason: "a single key/value pair must survive the SDK EA envelope round-trip unchanged",
+			in:     map[string]string{"env": "prod"},
+		},
+		"MultipleEntries": {
+			reason: "multiple key/value pairs must all survive the round-trip",
+			in:     map[string]string{"env": "prod", "owner": "platform-team", "team": "dns"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ea := buildEA(tc.in)
+			out := extAttrsFromEA(ea)
+			if !extAttrsEqual(tc.in, out) {
+				t.Errorf("%s: round-trip got %v, want %v", tc.reason, out, tc.in)
+			}
+		})
+	}
+}
+
+// ── ttlOrZero: uint32 conversion edge cases ─────────────────────────────
+
+func TestTtlOrZero(t *testing.T) {
+	cases := map[string]struct {
+		reason string
+		ttl    *int64
+		want   uint32
+	}{
+		"NilReturnsZero": {
+			reason: "an unset TTL pointer must map to 0 — the WAPI create/update calls take a plain uint32 with no separate unset sentinel",
+			ttl:    nil,
+			want:   0,
+		},
+		"NegativeClampsToZero": {
+			reason: "a negative TTL is invalid for a uint32 wire value and must clamp to 0 rather than wrap around",
+			ttl:    int64Ptr(-1),
+			want:   0,
+		},
+		"ValidValuePassesThrough": {
+			reason: "an in-range TTL must convert to the identical uint32 value",
+			ttl:    int64Ptr(300),
+			want:   300,
+		},
+		"OverflowClampsToZero": {
+			reason: "a TTL larger than uint32 max must clamp to 0 rather than silently truncate",
+			ttl:    int64Ptr(int64(math.MaxUint32) + 1),
+			want:   0,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := ttlOrZero(tc.ttl)
+			if got != tc.want {
+				t.Errorf("%s: ttlOrZero(%v) = %d, want %d", tc.reason, tc.ttl, got, tc.want)
+			}
+		})
+	}
+}
+
+// ── Delete: RemoveAssociatedPtr (documented SDK limitation) ────────────
+//
+// The ARecordParameters schema accepts removeAssociatedPtr for schema
+// completeness, but the infoblox-go-client SDK's DeleteARecord wrapper
+// takes only the object reference — it exposes no query-parameter or
+// request-body hook for the WAPI remove_associated_ptr delete option (see
+// deleteARecord's doc comment in controller.go). This test pins that
+// documented limitation: Delete succeeds identically regardless of the
+// field's value, because it is never forwarded to the SDK call.
+func TestClusterDeleteIgnoresRemoveAssociatedPtr(t *testing.T) {
+	cases := map[string]*bool{
+		"Unset": nil,
+		"True":  boolPtr(true),
+		"False": boolPtr(false),
+	}
+
+	for name, removeAssociatedPtr := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := newMockWapiServer()
+			srv := httptest.NewServer(m.handler())
+			defer srv.Close()
+
+			ref := m.seed(&ibclient.RecordA{Name: stringPtr("host.example.com"), View: "default"})
+
+			e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+			cr := newClusterARecord("my-arecord", ref)
+			cr.Spec.ForProvider.RemoveAssociatedPtr = removeAssociatedPtr
+
+			if _, err := e.Delete(context.Background(), cr); err != nil {
+				t.Fatalf("Delete: unexpected error: %v", err)
+			}
+
+			m.mu.Lock()
+			_, stillExists := m.records[ref]
+			m.mu.Unlock()
+			if stillExists {
+				t.Error("Delete: record still present after Delete regardless of RemoveAssociatedPtr value")
+			}
+		})
 	}
 }
