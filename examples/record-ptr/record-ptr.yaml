@@ -30,10 +30,14 @@ metadata:
     meta.upbound.io/example-id: recordptr/v1alpha1/ptrrecord
     uptest.upbound.io/timeout: "120"
     # uptest.upbound.io/update-parameter is intentionally omitted — it has
-    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
-    # comment field below is a safe mutable scalar for update coverage;
-    # field-level update testing is wired via post-assert-hook during the
-    # E2E ticket.
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ptr.sh
+    # comment is the only mutable scalar exercised here — ttl/useTtl/extAttrs
+    # are also mutable but comment alone is sufficient update coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
 spec:
   forProvider:
     ptrdname: www.example.com
