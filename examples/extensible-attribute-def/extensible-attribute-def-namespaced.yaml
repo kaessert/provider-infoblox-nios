@@ -1,0 +1,35 @@
+# ExtensibleAttributeDef is the namespace-scoped variant of the Infoblox
+# NIOS extensible attribute definition. See extensible-attribute-def.yaml
+# for the cluster-scoped variant and full field documentation — this file
+# only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the name below differs from extensible-attribute-def.yaml's
+# so both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same name.
+apiVersion: extensibleattributedef.infobloxnios.m.crossplane.io/v1alpha1
+kind: ExtensibleAttributeDef
+metadata:
+  name: example-ea-def-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: extensibleattributedef/v1alpha1/extensibleattributedef
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # extensible-attribute-def.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-extensible-attribute-def-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+spec:
+  forProvider:
+    name: example-ea-def-ns
+    type: STRING
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

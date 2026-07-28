@@ -1040,6 +1040,60 @@ kubectl apply -f examples/network/network-namespaced.yaml
 ```
 
 ### IPv4SharedNetwork
+### ExtensibleAttributeDef
+
+Manage Infoblox NIOS extensible attribute definitions (WAPI object type
+`extensibleattributedef`) — the custom metadata fields defined in the NIOS
+Grid Manager that other objects reference via their `extAttrs` map.
+
+**Cluster-scoped** (`extensibleattributedef.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: extensibleattributedef.infobloxnios.crossplane.io/v1alpha1
+kind: ExtensibleAttributeDef
+metadata:
+  name: example-ea-def
+spec:
+  forProvider:
+    name: example-ea-def
+    type: STRING
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`extensibleattributedef.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: extensibleattributedef.infobloxnios.m.crossplane.io/v1alpha1
+kind: ExtensibleAttributeDef
+metadata:
+  name: example-ea-def-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-ea-def-ns
+    type: STRING
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `type`, `min`, and `max` fields are immutable after creation: WAPI
+rejects updates to them ("cannot be modified"). `name`, `comment`,
+`defaultValue`, `flags`, `listValues`, and `allowedObjectTypes` are mutable.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/extensible-attribute-def/extensible-attribute-def.yaml
+kubectl apply -f examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+```
 
 Manage Infoblox NIOS IPv4 shared networks (WAPI object type `sharednetwork`)
 — a group of member networks that share a single DHCP address pool.
