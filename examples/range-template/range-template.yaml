@@ -1,0 +1,44 @@
+# RangeTemplate is a cluster-scoped Infoblox NIOS DHCP range template (WAPI
+# object type rangetemplate). See range-template-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string from
+# Create (e.g. "rangetemplate/ZG5zLnJhbmdl...:my-range-template"); Crossplane
+# stores it in the crossplane.io/external-name annotation. Do not set that
+# annotation manually — the controller populates it.
+#
+# Required fields:
+#   name:              name of the range template object. Mutable (unlike
+#                       server-assigned resources whose identity fields are
+#                       immutable, RangeTemplate's Update call accepts every
+#                       Create parameter, including name).
+#   numberOfAddresses: number of addresses the range should contain when a
+#                       Range is instantiated from this template.
+#   offset:             start address offset within the parent network when
+#                       instantiated.
+#
+# Optional mutable fields: comment, extattrs, options, useOptions,
+# serverAssociationType, failoverAssociation, member, cloudApiCompatible,
+# msServer. No immutable fields are known for this resource — every Create
+# parameter is also accepted by Update.
+#
+# uptest.upbound.io/update-parameter is intentionally omitted — it has
+# known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+# comment field below is a safe mutable scalar for update coverage;
+# field-level update testing is wired via post-assert-hook during the
+# E2E ticket.
+apiVersion: rangetemplate.infobloxnios.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template
+  annotations:
+    meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: example-range-template
+    numberOfAddresses: 10
+    offset: 10
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

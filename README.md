@@ -603,6 +603,24 @@ spec:
     weight: 20
     port: 5060
     view: default
+### RangeTemplate
+
+Manage Infoblox NIOS DHCP range templates (WAPI object type `rangetemplate`).
+A range template captures the address count and offset used to instantiate
+new DHCP `Range` objects consistently across networks.
+
+**Cluster-scoped** (`rangetemplate.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: rangetemplate.infobloxnios.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template
+spec:
+  forProvider:
+    name: example-range-template
+    numberOfAddresses: 10
+    offset: 10
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
@@ -624,6 +642,19 @@ spec:
     weight: 20
     port: 5060
     view: default
+**Namespace-scoped** (`rangetemplate.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: rangetemplate.infobloxnios.m.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-range-template-ns
+    numberOfAddresses: 20
+    offset: 50
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
@@ -637,6 +668,13 @@ manually.
 The `view` field is immutable after creation: WAPI ties an SRV record's
 `_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
 `view` parameter.
+(e.g. `rangetemplate/ZG5zLnJhbmdl...:my-range-template`). Crossplane stores
+this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+Unlike the DNS record types above, RangeTemplate has no known immutable
+fields: every parameter accepted by the WAPI create call is also accepted by
+the update call, including `name`.
 
 Apply the full set of example manifests:
 
@@ -752,6 +790,10 @@ kubectl apply -f examples/network/network.yaml
 kubectl apply -f examples/network/network-namespaced.yaml
 ```
 
+
+kubectl apply -f examples/range-template/range-template.yaml
+kubectl apply -f examples/range-template/range-template-namespaced.yaml
+```
 
 ## Development
 
