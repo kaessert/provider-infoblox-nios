@@ -1,0 +1,51 @@
+# ZoneDelegated is a cluster-scoped Infoblox NIOS delegated DNS zone (WAPI
+# object type zone_delegated). See zone-delegated-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default")
+# from Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   fqdn:       FQDN of the delegated zone. Immutable after creation (CEL
+#               rule enforced) — the UpdateZoneDelegated SDK call has no
+#               fqdn parameter.
+#   delegateTo: list of remote name servers the zone is delegated to
+#               (name + address pairs). The Infoblox appliance redirects
+#               queries for the delegated zone to these servers.
+#
+# Optional immutable fields: view, zoneFormat (both fixed at creation —
+# absent from the UpdateZoneDelegated SDK call; view is additionally
+# rejected by WAPI at the data level if changed).
+#
+# Optional mutable fields: comment, disable, locked, nsGroup, delegatedTtl,
+# useDelegatedTtl, extAttrs.
+apiVersion: zonedelegated.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneDelegated
+metadata:
+  name: example-zonedelegated
+  annotations:
+    meta.upbound.io/example-id: zonedelegated/v1alpha1/zonedelegated
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via the hook annotation below.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-delegated.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    fqdn: delegated.example.com
+    delegateTo:
+      - name: ns1.delegate.com
+        address: 10.0.0.1
+      - name: ns2.delegate.com
+        address: 10.0.0.2
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

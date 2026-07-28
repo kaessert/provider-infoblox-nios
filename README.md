@@ -11,6 +11,8 @@ resources declaratively using Kubernetes custom resources.
   and namespace-scoped)
 - **TXTRecord** — create and manage Infoblox NIOS DNS "TXT" records
   (cluster-scoped and namespace-scoped)
+- **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
+  (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -224,6 +226,72 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/record-txt/record-txt.yaml
 kubectl apply -f examples/record-txt/record-txt-namespaced.yaml
+```
+
+### ZoneDelegated
+
+Manage Infoblox NIOS delegated DNS zones (WAPI object type `zone_delegated`).
+A delegated zone redirects queries for a subdomain to a set of remote name
+servers rather than resolving them locally.
+
+**Cluster-scoped** (`zonedelegated.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zonedelegated.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneDelegated
+metadata:
+  name: example-zonedelegated
+spec:
+  forProvider:
+    fqdn: delegated.example.com
+    delegateTo:
+      - name: ns1.delegate.com
+        address: 10.0.0.1
+      - name: ns2.delegate.com
+        address: 10.0.0.2
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`zonedelegated.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zonedelegated.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneDelegated
+metadata:
+  name: example-zonedelegated-ns
+  namespace: default
+spec:
+  forProvider:
+    fqdn: delegated-ns.example.com
+    delegateTo:
+      - name: ns1.delegate.com
+        address: 10.0.1.1
+      - name: ns2.delegate.com
+        address: 10.0.1.2
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
+underlying SDK's update call has no parameters for them, and WAPI
+additionally rejects moving an existing zone between views at the data
+level.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/zone-delegated/zone-delegated.yaml
+kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
 ```
 
 ## Development
