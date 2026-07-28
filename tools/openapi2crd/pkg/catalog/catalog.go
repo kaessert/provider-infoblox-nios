@@ -55,6 +55,13 @@ const (
 	goTypeStringMap  = "map[string]string"
 	groupSuffixCrd   = "infobloxnios.crossplane.io"
 	groupSuffixCrdNS = "infobloxnios.m.crossplane.io"
+	// fieldNameGo/fieldNameJSON are the recurring Go/JSON names for a
+	// resource or nested type's "name" field (ARecord's Dhcpmember-derived
+	// nested types, RangeTemplate's top-level Name field and its
+	// Dhcpoption/Dhcpmember-derived nested types all carry one), factored
+	// out to satisfy the goconst linter.
+	fieldNameGo   = "Name"
+	fieldNameJSON = "name"
 )
 
 // FieldDef describes one field of a resource or nested type.
@@ -220,6 +227,7 @@ func All() []ResourceDescriptor {
 		zoneDelegated(),
 		network(),
 		networkView(),
+		rangeTemplate(),
 	}
 }
 

@@ -358,6 +358,24 @@ func TestFindResourcePTRRecord(t *testing.T) {
 	}
 }
 
+// TestFindResourceRangeTemplate verifies FindResource returns the
+// RangeTemplate descriptor with the expected API groups.
+func TestFindResourceRangeTemplate(t *testing.T) {
+	rd, ok := FindResource("rangetemplate")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "rangetemplate")
+	}
+	if rd.Kind != "RangeTemplate" {
+		t.Errorf("Kind = %q, want RangeTemplate", rd.Kind)
+	}
+	if rd.ClusterGroup != "rangetemplate.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want rangetemplate.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "rangetemplate.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want rangetemplate.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
 // TestAllContainsPTRRecord verifies the catalog's All() includes PTRRecord
 // with a non-empty field list and nested types (Discoverydata, CloudInfo,
 // etc. mirrored from the shared DNS record SDK structs).
@@ -377,6 +395,28 @@ func TestAllContainsPTRRecord(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("All() does not contain the recordptr resource")
+	}
+}
+
+// TestAllContainsRangeTemplate verifies the catalog's All() includes the
+// RangeTemplate resource with a non-empty field list and its two DHCP
+// nested types (RangeTemplateOption, RangeTemplateMember).
+func TestAllContainsRangeTemplate(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "rangetemplate" {
+			continue
+		}
+		found = true
+		if len(rd.Fields) == 0 {
+			t.Errorf("RangeTemplate descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) != 2 {
+			t.Errorf("RangeTemplate descriptor has %d nested types, want 2 (RangeTemplateOption, RangeTemplateMember)", len(rd.NestedTypes))
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the rangetemplate resource")
 	}
 }
 
@@ -661,4 +701,62 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 	if !found {
 		t.Errorf("no field with JSONName=networkView found in HostRecord")
 	}
+}
+
+// TestRangeTemplateFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### RangeTemplate" section
+// (request=1, response=1, both=11) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug.
+func TestRangeTemplateFieldCounts(t *testing.T) {
+	rd, ok := FindResource("rangetemplate")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "rangetemplate")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 1 {
+		t.Errorf("request-scope field count = %d, want 1", req)
+	}
+	if resp != 1 {
+		t.Errorf("response-scope field count = %d, want 1", resp)
+	}
+	if both != 11 {
+		t.Errorf("both-scope field count = %d, want 11", both)
+	}
+}
+
+// TestRangeTemplateMsServerOmittedFromObservation verifies the write-only
+// msServer field is excluded from the AtProvider full mirror (the SDK
+// persists it as a nested Msdhcpserver struct on the response, a different
+// shape than this flat field, so it is never echoed back).
+func TestRangeTemplateMsServerOmittedFromObservation(t *testing.T) {
+	rd, ok := FindResource("rangetemplate")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "rangetemplate")
+	}
+
+	for _, f := range rd.Fields {
+		if f.Name != "MsServer" {
+			continue
+		}
+		if !f.OmitFromObservation {
+			t.Errorf("MsServer.OmitFromObservation = false, want true")
+		}
+		if f.Scope != FieldScopeRequest {
+			t.Errorf("MsServer.Scope = %v, want FieldScopeRequest", f.Scope)
+		}
+		return
+	}
+	t.Errorf("rangetemplate descriptor has no MsServer field")
 }
