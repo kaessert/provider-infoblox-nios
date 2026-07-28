@@ -108,3 +108,41 @@ func TestFindResourceUnknownSlug(t *testing.T) {
 		t.Errorf("expected FindResource to report false for an unknown slug")
 	}
 }
+
+// TestObservationAlwaysHasIDField verifies every generated Observation
+// struct carries a generic `ID string` field (JSON tag "id,omitempty"),
+// independent of whatever fields the catalog descriptor declares. Uptest's
+// import-testing step asserts status.atProvider.id against the resource's
+// external-name annotation, so every resource — even a zero-field one —
+// must emit this field. Regression test for the generator defect where the
+// ID field was only ever supplied per-resource via the catalog rather than
+// unconditionally by the template.
+func TestObservationAlwaysHasIDField(t *testing.T) {
+	rd := catalog.ResourceDescriptor{
+		Kind:                 "EmptyThing",
+		Slug:                 "emptything",
+		ClusterGroup:         "emptything.infobloxnios.crossplane.io",
+		NamespacedGroup:      "emptything.infobloxnios.m.crossplane.io",
+		ExternalNameStrategy: catalog.StrategyServerAssigned,
+		// Fields and NestedTypes both nil — no catalog-declared response fields.
+	}
+
+	for _, isCluster := range []bool{true, false} {
+		src, err := RenderScopeTypes(BuildScopeData(rd, isCluster))
+		if err != nil {
+			t.Fatalf("RenderScopeTypes(isCluster=%v): %v", isCluster, err)
+		}
+		s := string(src)
+		if !strings.Contains(s, `ID string `+"`"+`json:"id,omitempty"`+"`") {
+			t.Errorf("expected generic ID field in EmptyThingObservation (isCluster=%v), got:\n%s", isCluster, s)
+		}
+	}
+
+	commonSrc, err := RenderCommonReference(BuildFieldSetData(rd, true))
+	if err != nil {
+		t.Fatalf("RenderCommonReference: %v", err)
+	}
+	if !strings.Contains(string(commonSrc), `ID string `+"`"+`json:"id,omitempty"`+"`") {
+		t.Errorf("expected generic ID field in common reference Observation, got:\n%s", commonSrc)
+	}
+}
