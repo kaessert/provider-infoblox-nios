@@ -21,6 +21,10 @@
 #     infobloxnios.m.crossplane.io) — used by namespaced managed resources
 #     from any namespace via a ClusterProviderConfig reference.
 #
+# Waits for the provider pod to be Ready before applying any ProviderConfig,
+# since the ProviderConfig/ClusterProviderConfig CRDs are only served once
+# the provider package has finished installing.
+#
 # There is no NIOS simulator/mock backend available for this SDK
 # (github.com/infobloxopen/infoblox-go-client/v2 talks to a real Grid
 # Manager over WAPI), so this script always uses the real credentials
@@ -56,6 +60,37 @@ fi
 echo "==> Ensuring crossplane-system and default namespaces exist..."
 ${KUBECTL} create namespace crossplane-system --dry-run=client -o yaml | ${KUBECTL} apply -f -
 ${KUBECTL} create namespace default --dry-run=client -o yaml | ${KUBECTL} apply -f - 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Wait for the provider pod to be Ready before applying ProviderConfigs.
+# The provider package is installed asynchronously by Crossplane's package
+# manager; the ProviderConfig/ClusterProviderConfig CRDs are only served
+# once the provider's controller pod is up and running.
+# ---------------------------------------------------------------------------
+echo "==> Waiting for provider-infobloxnios pod to be Ready (up to 300s)..."
+READY=""
+for i in $(seq 1 60); do
+  POD_NAME=$(${KUBECTL} -n crossplane-system get pods -o name 2>/dev/null \
+    | grep 'provider-infobloxnios' | head -n1 || true)
+  if [ -n "${POD_NAME}" ]; then
+    if ${KUBECTL} -n crossplane-system wait "${POD_NAME}" \
+        --for=condition=Ready --timeout=5s >/dev/null 2>&1; then
+      READY="1"
+      echo "==> ${POD_NAME} is Ready"
+      break
+    fi
+  fi
+  if [ "${i}" -eq 60 ]; then
+    break
+  fi
+  sleep 5
+done
+
+if [ -z "${READY}" ]; then
+  echo "ERROR: provider-infobloxnios pod not Ready after 300s" >&2
+  ${KUBECTL} -n crossplane-system get pods >&2 || true
+  exit 1
+fi
 
 echo "==> Creating infobloxnios-credentials Secret in crossplane-system..."
 

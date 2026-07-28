@@ -1,0 +1,48 @@
+# AAAARecord is a cluster-scoped Infoblox NIOS DNS "AAAA" record (WAPI object
+# type record:aaaa). See record-aaaa-namespaced.yaml for the namespace-scoped
+# variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:aaaa/ZG5zLmJpbmRfYWFhYQ:www6.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name annotation.
+# Do not set that annotation manually — the controller populates it.
+#
+# Create behavior: sync — the WAPI POST returns the new object's `_ref`
+# immediately (HTTP 201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   name:     owner name in FQDN format. WAPI ties the record's `_ref` to
+#             (view, zone, name); the controller re-syncs the annotation
+#             if a rename changes the `_ref`.
+#   ipv6Addr: the IPv6 address the record resolves to. This example uses
+#             a documentation-only address (RFC 3849, 2001:db8::/32) —
+#             replace with a real address for a live NIOS Grid Manager.
+#   view:     the DNS view the record is created in. Immutable after
+#             creation (CEL rule enforced) — the UpdateAAAARecord SDK call
+#             has no view parameter.
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recordaaaa.infobloxnios.crossplane.io/v1alpha1
+kind: AAAARecord
+metadata:
+  name: example-aaaarecord
+  annotations:
+    meta.upbound.io/example-id: recordaaaa/v1alpha1/aaaarecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-aaaa.sh
+    # comment is the only mutable scalar exercised here — ttl/useTtl/extAttrs
+    # are also mutable but comment alone is sufficient update coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: www6.example.com
+    ipv6Addr: "2001:db8::10"
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
