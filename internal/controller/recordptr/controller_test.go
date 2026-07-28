@@ -543,6 +543,28 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterCreateServerError verifies that a 5xx response from the WAPI
+// create endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unset.
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreatePTRRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreatePTRRecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty on error", got)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -679,6 +701,30 @@ func TestClusterUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
 	}
 	if newRec.PtrdName == nil || *newRec.PtrdName != "renamed.example.com" {
 		t.Errorf("Update: relocated record ptrdname = %v, want %q", newRec.PtrdName, "renamed.example.com")
+	}
+}
+
+// TestClusterUpdateServerError verifies that a 5xx response from the WAPI
+// update endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unchanged.
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	ref := "record:ptr/test1:host.example.com/default"
+	cr := newClusterPTRRecord("my-ptrrecord", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdatePTRRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdatePTRRecord)
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q on error", got, ref)
 	}
 }
 
@@ -966,6 +1012,28 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateServerError verifies that a 5xx response from the
+// WAPI create endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unset.
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedPTRRecord("default", "my-ptrrecord", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreatePTRRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreatePTRRecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty on error", got)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -990,6 +1058,30 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Ipv4Addr == nil || *stored.Ipv4Addr != "10.0.0.2" {
 		t.Errorf("Update: stored ipv4addr = %v, want 10.0.0.2", stored.Ipv4Addr)
+	}
+}
+
+// TestNamespacedUpdateServerError verifies that a 5xx response from the
+// WAPI update endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unchanged.
+func TestNamespacedUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	ref := "record:ptr/test1:host.example.com/default"
+	cr := newNamespacedPTRRecord("default", "my-ptrrecord", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdatePTRRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdatePTRRecord)
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q on error", got, ref)
 	}
 }
 
