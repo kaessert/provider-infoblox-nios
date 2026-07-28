@@ -21,6 +21,9 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # zone-delegated.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-delegated-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
 spec:
   forProvider:
     fqdn: delegated-ns.example.com
