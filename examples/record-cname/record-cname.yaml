@@ -30,8 +30,8 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — it has
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
     # comment field below is a safe mutable scalar for update coverage;
-    # field-level update testing is wired via post-assert-hook during the
-    # E2E ticket.
+    # field-level update testing runs via the post-assert-hook below.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-cname.sh
 spec:
   forProvider:
     name: alias.example.com

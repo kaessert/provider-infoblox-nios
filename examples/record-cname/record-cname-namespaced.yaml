@@ -20,6 +20,7 @@ metadata:
     uptest.upbound.io/timeout: "120"
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-cname.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-cname-namespaced.sh
 spec:
   forProvider:
     name: alias-ns.example.com
