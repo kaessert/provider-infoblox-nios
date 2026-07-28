@@ -447,3 +447,103 @@ func TestPTRRecordPtrdnameHasReference(t *testing.T) {
 	}
 	t.Errorf("PTRRecord descriptor has no Ptrdname field")
 }
+
+// TestFindResourceSRVRecord verifies FindResource returns the SRVRecord
+// descriptor for its slug with the expected API groups.
+func TestFindResourceSRVRecord(t *testing.T) {
+	rd, ok := FindResource("recordsrv")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordsrv")
+	}
+	if rd.Kind != "SRVRecord" {
+		t.Errorf("Kind = %q, want SRVRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "recordsrv.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want recordsrv.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "recordsrv.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want recordsrv.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestAllContainsSRVRecord verifies the catalog's All() includes SRVRecord
+// with a non-empty field list and its response-only nested types.
+func TestAllContainsSRVRecord(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "recordsrv" {
+			continue
+		}
+		found = true
+		if len(rd.Fields) == 0 {
+			t.Errorf("SRVRecord descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) == 0 {
+			t.Errorf("SRVRecord descriptor has zero nested types (expected awsRte53RecordInfo, cloudInfo, msAdUserData)")
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the recordsrv resource")
+	}
+}
+
+// TestSRVRecordFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### SRVRecord" section
+// (request=0, response=15, both=10) — a regression guard: drifted counts
+// would indicate a catalog authoring bug.
+func TestSRVRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordsrv")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordsrv")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 15 {
+		t.Errorf("response-scope field count = %d, want 15", resp)
+	}
+	if both != 10 {
+		t.Errorf("both-scope field count = %d, want 10", both)
+	}
+}
+
+// TestSRVRecordImmutableFields verifies only `view` and `zone` are marked
+// Immutable, matching the blueprint's per-resource immutable field table
+// (view is the only ForProvider field carrying a CEL rule; zone is
+// AtProvider-only and derived, per FieldDef.Immutable doc).
+func TestSRVRecordImmutableFields(t *testing.T) {
+	rd, ok := FindResource("recordsrv")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordsrv")
+	}
+
+	var immutable []string
+	for _, f := range rd.Fields {
+		if f.Immutable {
+			immutable = append(immutable, f.JSONName)
+		}
+	}
+
+	want := map[string]bool{"view": true, "zone": true}
+	if len(immutable) != len(want) {
+		t.Fatalf("immutable fields = %v, want exactly %v", immutable, want)
+	}
+	for _, name := range immutable {
+		if !want[name] {
+			t.Errorf("unexpected immutable field %q", name)
+		}
+	}
+}
