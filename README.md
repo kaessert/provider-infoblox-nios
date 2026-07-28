@@ -11,6 +11,8 @@ resources declaratively using Kubernetes custom resources.
   and namespace-scoped)
 - **AAAARecord** — create and manage Infoblox NIOS DNS "AAAA" records
   (cluster-scoped and namespace-scoped)
+- **PTRRecord** — create and manage Infoblox NIOS DNS "PTR" records
+  (cluster-scoped and namespace-scoped)
 - **TXTRecord** — create and manage Infoblox NIOS DNS "TXT" records
   (cluster-scoped and namespace-scoped)
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
@@ -234,9 +236,71 @@ kubectl apply -f examples/record-aaaa/record-aaaa.yaml
 kubectl apply -f examples/record-aaaa/record-aaaa-namespaced.yaml
 ```
 
+### PTRRecord
+
+Manage Infoblox NIOS DNS "PTR" records (WAPI object type `record:ptr`).
+
+**Cluster-scoped** (`recordptr.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordptr.infobloxnios.crossplane.io/v1alpha1
+kind: PTRRecord
+metadata:
+  name: example-ptrrecord
+spec:
+  forProvider:
+    ptrdname: www.example.com
+    ipv4Addr: 192.0.2.10
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordptr.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordptr.infobloxnios.m.crossplane.io/v1alpha1
+kind: PTRRecord
+metadata:
+  name: example-ptrrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    ptrdname: www-ns.example.com
+    ipv4Addr: 192.0.2.20
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:ptr/ZG5zLmJpbmRfcHRy:10.2.0.192.in-addr.arpa/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+`ptrdname` is required and identifies the FQDN the record points to. `name`
+(the in-addr.arpa/ip6.arpa owner name) is auto-derived from `ipv4Addr` or
+`ipv6Addr` when omitted. `ptrdname` also carries an optional reference to an
+ARecord managed resource (`ptrdnameRef`/`ptrdnameSelector`) so it can resolve
+the target FQDN from another managed A record instead of being hand-typed;
+WAPI itself does not require the referenced record to exist.
+
+The `view` field is immutable after creation: WAPI ties a PTR record's
+`_ref` to `(view, name)`, and the underlying SDK's update call rejects any
+attempt to change it ("Field is not allowed for update: view").
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-ptr/record-ptr.yaml
+kubectl apply -f examples/record-ptr/record-ptr-namespaced.yaml
+```
+
 ### TXTRecord
 
-Manage Infoblox NIOS DNS "TXT" records (WAPI object type `record:txt`).
+Manage Infoblox NIOS DNS "TXT" records.
 
 **Cluster-scoped** (`recordtxt.infobloxnios.crossplane.io/v1alpha1`):
 

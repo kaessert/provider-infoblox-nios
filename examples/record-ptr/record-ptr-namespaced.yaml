@@ -1,0 +1,31 @@
+# PTRRecord is the namespace-scoped variant of the Infoblox NIOS DNS "PTR"
+# record. See record-ptr.yaml for the cluster-scoped variant and full field
+# documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the ipv4Addr below differs from record-ptr.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, in-addr.arpa name) WAPI identity.
+apiVersion: recordptr.infobloxnios.m.crossplane.io/v1alpha1
+kind: PTRRecord
+metadata:
+  name: example-ptrrecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recordptr/v1alpha1/ptrrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-ptr.yaml for the rationale.
+spec:
+  forProvider:
+    ptrdname: www-ns.example.com
+    ipv4Addr: 192.0.2.20
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
