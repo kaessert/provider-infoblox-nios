@@ -138,3 +138,149 @@ func TestTXTRecordFieldCounts(t *testing.T) {
 		t.Errorf("both-scope field count = %d, want 7", both)
 	}
 }
+
+// TestFindResourceZoneDelegated verifies FindResource returns the
+// ZoneDelegated descriptor for its slug.
+func TestFindResourceZoneDelegated(t *testing.T) {
+	rd, ok := FindResource("zonedelegated")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zonedelegated")
+	}
+	if rd.Kind != "ZoneDelegated" {
+		t.Errorf("Kind = %q, want ZoneDelegated", rd.Kind)
+	}
+	if rd.ClusterGroup != "zonedelegated.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want zonedelegated.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "zonedelegated.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want zonedelegated.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestZoneDelegatedFieldCounts pins the field counts documented in
+// tools/openapi/inventory.md's "### ZoneDelegated" section (request=0,
+// response=1, both=11) — a regression guard against catalog authoring
+// drift.
+func TestZoneDelegatedFieldCounts(t *testing.T) {
+	rd, ok := FindResource("zonedelegated")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zonedelegated")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 1 {
+		t.Errorf("response-scope field count = %d, want 1", resp)
+	}
+	if both != 11 {
+		t.Errorf("both-scope field count = %d, want 11", both)
+	}
+}
+
+// TestZoneDelegatedImmutableFields verifies fqdn, view, and zoneFormat are
+// marked Immutable — the fields absent from UpdateZoneDelegated's SDK
+// signature.
+func TestZoneDelegatedImmutableFields(t *testing.T) {
+	rd, ok := FindResource("zonedelegated")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zonedelegated")
+	}
+
+	wantImmutable := map[string]bool{
+		"fqdn":       true,
+		"view":       true,
+		"zoneFormat": true,
+	}
+	for _, f := range rd.Fields {
+		if want, ok := wantImmutable[f.JSONName]; ok {
+			if f.Immutable != want {
+				t.Errorf("field %q Immutable = %v, want %v", f.JSONName, f.Immutable, want)
+			}
+			delete(wantImmutable, f.JSONName)
+		} else if f.Immutable {
+			t.Errorf("field %q unexpectedly marked Immutable", f.JSONName)
+		}
+	}
+	for name := range wantImmutable {
+		t.Errorf("expected field %q not found in ZoneDelegated descriptor", name)
+	}
+}
+
+// TestZoneDelegatedNestedTypes verifies ZoneDelegated has the expected
+// NameServer nested type (used by delegateTo) with name/address sub-fields.
+func TestZoneDelegatedNestedTypes(t *testing.T) {
+	rd, ok := FindResource("zonedelegated")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zonedelegated")
+	}
+
+	if len(rd.NestedTypes) != 1 {
+		t.Fatalf("ZoneDelegated nested type count = %d, want 1", len(rd.NestedTypes))
+	}
+
+	ns := rd.NestedTypes[0]
+	if ns.TypeName != "ZoneDelegatedNameServer" {
+		t.Errorf("NestedTypes[0].TypeName = %q, want ZoneDelegatedNameServer", ns.TypeName)
+	}
+	if len(ns.Fields) != 2 {
+		t.Fatalf("ZoneDelegatedNameServer field count = %d, want 2", len(ns.Fields))
+	}
+
+	var haveName, haveAddress bool
+	for _, f := range ns.Fields {
+		switch f.JSONName {
+		case "name":
+			haveName = true
+		case "address":
+			haveAddress = true
+		}
+	}
+	if !haveName {
+		t.Errorf("ZoneDelegatedNameServer missing name field")
+	}
+	if !haveAddress {
+		t.Errorf("ZoneDelegatedNameServer missing address field")
+	}
+}
+
+// TestZoneDelegatedDelegateToField verifies delegateTo is a required,
+// mutable slice of the ZoneDelegatedNameServer nested type.
+func TestZoneDelegatedDelegateToField(t *testing.T) {
+	rd, ok := FindResource("zonedelegated")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zonedelegated")
+	}
+
+	var found bool
+	for _, f := range rd.Fields {
+		if f.JSONName != "delegateTo" {
+			continue
+		}
+		found = true
+		if f.GoType != "[]ZoneDelegatedNameServer" {
+			t.Errorf("delegateTo GoType = %q, want []ZoneDelegatedNameServer", f.GoType)
+		}
+		if !f.Required {
+			t.Errorf("delegateTo should be Required")
+		}
+		if f.Immutable {
+			t.Errorf("delegateTo should NOT be Immutable (mutable per ticket)")
+		}
+	}
+	if !found {
+		t.Errorf("no field with JSONName=delegateTo found in ZoneDelegated")
+	}
+}

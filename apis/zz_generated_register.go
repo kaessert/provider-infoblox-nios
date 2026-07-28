@@ -12,9 +12,11 @@ import (
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	namespacedzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
 )
 
 // AddToSchemes may be used to add all resources defined in the project to a Scheme.
@@ -29,10 +31,14 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordtxt types.
 	AddToSchemes = append(AddToSchemes, clusterrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Zonedelegated types.
+	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordtxt types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Zonedelegated types.
+	AddToSchemes = append(AddToSchemes, namespacedzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 }
 
 // AddToScheme adds all Resources to the Scheme.
