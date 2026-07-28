@@ -34,6 +34,15 @@ import (
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
+// Shared literals reused across the many table-driven and seed fixtures in
+// this file, hoisted into constants to avoid goconst duplication warnings.
+const (
+	testCIDR      = "10.0.0.0/24"
+	testNamespace = "default"
+	testEAKey     = "env"
+	testEAVal     = "prod"
+)
+
 func stringPtr(s string) *string { return &s }
 
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
@@ -78,11 +87,11 @@ func newClusterNetwork(crName, externalName string) *clusterv1alpha1.Network {
 		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
 		Spec: clusterv1alpha1.NetworkSpec{
 			ResourceSpec: xpv1.ResourceSpec{
-				ProviderConfigReference: &xpv1.Reference{Name: "default"},
+				ProviderConfigReference: &xpv1.Reference{Name: testNamespace},
 			},
 			ForProvider: clusterv1alpha1.NetworkParameters{
-				NetworkView: stringPtr("default"),
-				Network:     stringPtr("10.0.0.0/24"),
+				NetworkView: stringPtr(testNamespace),
+				Network:     stringPtr(testCIDR),
 			},
 		},
 	}
@@ -98,11 +107,11 @@ func newNamespacedNetwork(ns, crName, externalName, pcKind string) *namespacedv1
 		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
 		Spec: namespacedv1alpha1.NetworkSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
-				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
+				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: testNamespace},
 			},
 			ForProvider: namespacedv1alpha1.NetworkParameters{
-				NetworkView: stringPtr("default"),
-				Network:     stringPtr("10.0.0.0/24"),
+				NetworkView: stringPtr(testNamespace),
+				Network:     stringPtr(testCIDR),
 			},
 		},
 	}
@@ -319,16 +328,16 @@ func TestClusterObserveSuccess(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 		Comment:     "hello",
-		Ea:          ibclient.EA{"env": "prod"},
+		Ea:          ibclient.EA{testEAKey: testEAVal},
 	}, false)
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetwork("my-network", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{testEAKey: testEAVal}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -343,7 +352,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	if cr.Status.AtProvider.ID != ref {
 		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
 	}
-	if cr.Status.AtProvider.Network == nil || *cr.Status.AtProvider.Network != "10.0.0.0/24" {
+	if cr.Status.AtProvider.Network == nil || *cr.Status.AtProvider.Network != testCIDR {
 		t.Errorf("AtProvider.Network = %v, want 10.0.0.0/24", cr.Status.AtProvider.Network)
 	}
 	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
@@ -424,7 +433,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 
 	ref := m.seed(&ibclient.Network{
 		NetviewName: "original-view",
-		Cidr:        "10.0.0.0/24",
+		Cidr:        testCIDR,
 	}, false)
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
@@ -449,8 +458,8 @@ func TestClusterObserveDetectsCommentDrift(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 		Comment:     "old comment",
 	}, false)
 
@@ -519,8 +528,8 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 		Comment:     "old comment",
 	}, false)
 
@@ -540,6 +549,39 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateRefStable verifies that the external-name annotation
+// (the WAPI _ref) is left untouched by Update — networkView/cidr are
+// immutable, so the _ref returned at Create time never needs to be
+// refreshed after a PUT.
+func TestClusterUpdateRefStable(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.Network{
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
+		Comment:     "old comment",
+	}, false)
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	before := meta.GetExternalName(cr)
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	after := meta.GetExternalName(cr)
+	if after != before {
+		t.Errorf("Update: external-name changed from %q to %q, want unchanged (ref is stable)", before, after)
+	}
+	if after != ref {
+		t.Errorf("Update: external-name = %q, want original ref %q", after, ref)
+	}
+}
+
 // TestClusterUpdateDoesNotSendImmutableField verifies that network_view is
 // never present in the PUT request body — the SDK's UpdateNetwork method
 // clears NetviewName to "" before issuing the request (which the
@@ -555,8 +597,8 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 	}, false)
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
@@ -586,7 +628,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.Network{NetviewName: "default", Cidr: "10.0.0.0/24"}, false)
+	ref := m.seed(&ibclient.Network{NetviewName: testNamespace, Cidr: testCIDR}, false)
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetwork("my-network", ref)
@@ -658,7 +700,7 @@ func TestClusterConnectSuccess(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&clusterpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
 				Spec: clusterpcv1alpha1.ProviderConfigSpec{
 					Credentials: clusterpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -711,12 +753,12 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 	}, false)
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", ref, "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -736,7 +778,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "network/does-not-exist:10.0.0.0/24/default", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/does-not-exist:10.0.0.0/24/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -752,7 +794,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
 	got, err := e.Observe(context.Background(), cr)
@@ -769,7 +811,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 500, got nil")
@@ -781,7 +823,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
@@ -796,7 +838,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -814,12 +856,12 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	ref := m.seed(&ibclient.Network{
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
 	}, false)
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", ref, "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("updated")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -834,15 +876,42 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedUpdateRefStable mirrors TestClusterUpdateRefStable for the
+// namespaced scope: the external-name (_ref) must not change after Update.
+func TestNamespacedUpdateRefStable(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.Network{
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
+	}, false)
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("updated")
+
+	before := meta.GetExternalName(cr)
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	after := meta.GetExternalName(cr)
+	if after != before || after != ref {
+		t.Errorf("Update: external-name = %q, want unchanged original ref %q", after, ref)
+	}
+}
+
 func TestNamespacedDeleteSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.Network{NetviewName: "default", Cidr: "10.0.0.0/24"}, false)
+	ref := m.seed(&ibclient.Network{NetviewName: testNamespace, Cidr: testCIDR}, false)
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", ref, "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: unexpected error: %v", err)
@@ -862,7 +931,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "network/does-not-exist:10.0.0.0/24/default", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/does-not-exist:10.0.0.0/24/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
@@ -874,7 +943,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedNetwork("default", "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/test1:10.0.0.0/24/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
@@ -889,7 +958,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 
 func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 	const (
-		ns     = "default"
+		ns     = testNamespace
 		secret = "infobloxnios-api-key"
 	)
 
@@ -899,7 +968,7 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace, Namespace: ns},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -939,7 +1008,7 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ClusterProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: testNamespace},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -978,7 +1047,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
 	}
 
-	cr := newNamespacedNetwork("default", "my-network", "", "SomeOtherKind")
+	cr := newNamespacedNetwork(testNamespace, "my-network", "", "SomeOtherKind")
 	if _, err := conn.Connect(context.Background(), cr); err == nil {
 		t.Fatal("Connect: expected error for unsupported provider config kind, got nil")
 	}
@@ -994,7 +1063,7 @@ func TestNamespacedDisconnectIsNoop(t *testing.T) {
 // ── shared helpers ─────────────────────────────────────────────────────
 
 func TestExtAttrsRoundTrip(t *testing.T) {
-	in := map[string]string{"env": "prod", "team": "net"}
+	in := map[string]string{testEAKey: testEAVal, "team": "net"}
 	ea := buildEA(in)
 	out := extAttrsFromEA(ea)
 	if !extAttrsEqual(in, out) {
@@ -1044,7 +1113,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 
 	nw := &ibclient.Network{
 		Comment: "server comment",
-		Ea:      ibclient.EA{"env": "prod"},
+		Ea:      ibclient.EA{testEAKey: testEAVal},
 	}
 
 	changed := lateInitialize(&comment, &extAttrs, nw)
@@ -1054,18 +1123,18 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	if comment == nil || *comment != "server comment" {
 		t.Errorf("lateInitialize: comment = %v, want %q", comment, "server comment")
 	}
-	if extAttrs["env"] != "prod" {
+	if extAttrs[testEAKey] != testEAVal {
 		t.Errorf("lateInitialize: extAttrs = %v, want env=prod", extAttrs)
 	}
 }
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
-	extAttrs := map[string]string{"env": "user-set"}
+	extAttrs := map[string]string{testEAKey: "user-set"}
 
 	nw := &ibclient.Network{
 		Comment: "server comment",
-		Ea:      ibclient.EA{"env": "server-set"},
+		Ea:      ibclient.EA{testEAKey: "server-set"},
 	}
 
 	changed := lateInitialize(&comment, &extAttrs, nw)
@@ -1075,7 +1144,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	if *comment != "user comment" {
 		t.Errorf("lateInitialize: comment overwritten, got %q, want %q", *comment, "user comment")
 	}
-	if extAttrs["env"] != "user-set" {
+	if extAttrs[testEAKey] != "user-set" {
 		t.Errorf("lateInitialize: extAttrs overwritten, got %v", extAttrs)
 	}
 }
@@ -1103,15 +1172,15 @@ func TestIsUpToDate(t *testing.T) {
 		{
 			name:     "matching extattrs",
 			comment:  stringPtr("hello"),
-			extAttrs: map[string]string{"env": "prod"},
-			nw:       &ibclient.Network{Comment: "hello", Ea: ibclient.EA{"env": "prod"}},
+			extAttrs: map[string]string{testEAKey: testEAVal},
+			nw:       &ibclient.Network{Comment: "hello", Ea: ibclient.EA{testEAKey: testEAVal}},
 			want:     true,
 		},
 		{
 			name:     "extattrs drift",
 			comment:  stringPtr("hello"),
-			extAttrs: map[string]string{"env": "prod"},
-			nw:       &ibclient.Network{Comment: "hello", Ea: ibclient.EA{"env": "staging"}},
+			extAttrs: map[string]string{testEAKey: testEAVal},
+			nw:       &ibclient.Network{Comment: "hello", Ea: ibclient.EA{testEAKey: "staging"}},
 			want:     false,
 		},
 		{
@@ -1136,7 +1205,7 @@ func TestIsIPv6CIDR(t *testing.T) {
 		cidr string
 		want bool
 	}{
-		{"10.0.0.0/24", false},
+		{testCIDR, false},
 		{"192.168.1.0/24", false},
 		{"2001:db8::/64", true},
 		{"fd00::/8", true},
@@ -1156,7 +1225,7 @@ func TestCreateNetworkMissingCIDR(t *testing.T) {
 	defer srv.Close()
 
 	objMgr := newTestObjectManager(t, srv)
-	if _, err := createNetwork(objMgr, stringPtr("default"), nil, nil, nil); err == nil {
+	if _, err := createNetwork(objMgr, stringPtr(testNamespace), nil, nil, nil); err == nil {
 		t.Fatal("createNetwork: expected error for missing CIDR, got nil")
 	}
 }
