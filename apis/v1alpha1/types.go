@@ -27,7 +27,6 @@ type ProviderConfigSpec struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
-
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
@@ -42,7 +41,6 @@ type ProviderConfig struct {
 }
 
 // +kubebuilder:object:root=true
-
 // ProviderConfigList contains a list of Provider
 type ProviderConfigList struct {
 	metav1.TypeMeta `json:",inline"`
@@ -52,7 +50,6 @@ type ProviderConfigList struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
-
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="CONFIG-NAME",type="string",JSONPath=".providerConfigRef.name"
 // +kubebuilder:printcolumn:name="RESOURCE-KIND",type="string",JSONPath=".resourceRef.kind"
@@ -67,7 +64,6 @@ type ProviderConfigUsage struct {
 }
 
 // +kubebuilder:object:root=true
-
 // ProviderConfigUsageList contains a list of ProviderConfigUsage
 type ProviderConfigUsageList struct {
 	metav1.TypeMeta `json:",inline"`
@@ -76,9 +72,7 @@ type ProviderConfigUsageList struct {
 }
 
 // +kubebuilder:object:root=true
-
 // +kubebuilder:storageversion
-
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
@@ -93,7 +87,6 @@ type ClusterProviderConfig struct {
 }
 
 // +kubebuilder:object:root=true
-
 // ClusterProviderConfigList contains a list of ProviderConfig.
 type ClusterProviderConfigList struct {
 	metav1.TypeMeta `json:",inline"`
@@ -103,7 +96,6 @@ type ClusterProviderConfigList struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
-
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="CONFIG-NAME",type="string",JSONPath=".providerConfigRef.name"
 // +kubebuilder:printcolumn:name="RESOURCE-KIND",type="string",JSONPath=".resourceRef.kind"
@@ -118,7 +110,6 @@ type ClusterProviderConfigUsage struct {
 }
 
 // +kubebuilder:object:root=true
-
 // ClusterProviderConfigUsageList contains a list of ClusterProviderConfigUsage
 type ClusterProviderConfigUsageList struct {
 	metav1.TypeMeta `json:",inline"`
