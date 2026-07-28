@@ -20,6 +20,36 @@ metadata:
     uptest.upbound.io/timeout: "120"
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # host-record.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-host-record-namespaced.sh
+    # Per-field update coverage — see host-record.yaml for the rationale
+    # behind each skip entry.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+      - field: ttl
+        value: 3600
+      - field: useTtl
+        value: true
+      - field: disable
+        value: true
+      - field: name
+        skip: "renaming changes the record's _ref; identity changes aren't exercised via per-field diff testing"
+      - field: view
+        skip: "changing view moves the record between DNS views and changes its _ref"
+      - field: configureForDns
+        skip: "toggling DNS registration can remove the record from DNS entirely, altering derived zone/dnsName atProvider fields"
+      - field: ipv4Addrs
+        skip: "list field — not a scalar update target"
+      - field: ipv6Addrs
+        skip: "list field — not a scalar update target"
+      - field: aliases
+        skip: "list field — not a scalar update target"
+      - field: extAttrs
+        skip: "map field — not a scalar update target"
+      - field: networkViewRef
+        skip: "reference field resolving to networkView, which is immutable after creation"
+      - field: networkViewSelector
+        skip: "reference field resolving to networkView, which is immutable after creation"
 spec:
   forProvider:
     name: test-host-ns.example.com

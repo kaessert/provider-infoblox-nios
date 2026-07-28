@@ -32,8 +32,39 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — it has
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
     # comment field below is a safe mutable scalar for update coverage;
-    # field-level update testing is wired via post-assert-hook during the
-    # E2E ticket.
+    # field-level update testing runs via the hook annotation just below.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-host-record.sh
+    # Per-field update coverage for the post-assert hook. Scalar mutable
+    # fields are exercised with a real value change; list/map fields and
+    # identity-changing fields are explicitly skipped with a reason so the
+    # validate subcommand still reports full coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+      - field: ttl
+        value: 3600
+      - field: useTtl
+        value: true
+      - field: disable
+        value: true
+      - field: name
+        skip: "renaming changes the record's _ref; identity changes aren't exercised via per-field diff testing"
+      - field: view
+        skip: "changing view moves the record between DNS views and changes its _ref"
+      - field: configureForDns
+        skip: "toggling DNS registration can remove the record from DNS entirely, altering derived zone/dnsName atProvider fields"
+      - field: ipv4Addrs
+        skip: "list field — not a scalar update target"
+      - field: ipv6Addrs
+        skip: "list field — not a scalar update target"
+      - field: aliases
+        skip: "list field — not a scalar update target"
+      - field: extAttrs
+        skip: "map field — not a scalar update target"
+      - field: networkViewRef
+        skip: "reference field resolving to networkView, which is immutable after creation"
+      - field: networkViewSelector
+        skip: "reference field resolving to networkView, which is immutable after creation"
 spec:
   forProvider:
     name: test-host.example.com
