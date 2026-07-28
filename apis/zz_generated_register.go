@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	clusterhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
+	clusternetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1"
 	clusternetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
@@ -21,6 +22,7 @@ import (
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
+	namespacednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
@@ -43,6 +45,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Hostrecord types.
 	AddToSchemes = append(AddToSchemes, clusterhostrecordv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Network types.
+	AddToSchemes = append(AddToSchemes, clusternetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Networkview types.
 	AddToSchemes = append(AddToSchemes, clusternetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recorda types.
@@ -63,6 +67,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Hostrecord types.
 	AddToSchemes = append(AddToSchemes, namespacedhostrecordv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Network types.
+	AddToSchemes = append(AddToSchemes, namespacednetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Networkview types.
 	AddToSchemes = append(AddToSchemes, namespacednetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.

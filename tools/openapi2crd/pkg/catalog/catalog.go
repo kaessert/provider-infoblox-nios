@@ -218,6 +218,7 @@ func All() []ResourceDescriptor {
 		srvRecord(),
 		txtRecord(),
 		zoneDelegated(),
+		network(),
 		networkView(),
 	}
 }
