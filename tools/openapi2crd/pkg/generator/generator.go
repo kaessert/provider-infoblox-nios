@@ -482,6 +482,11 @@ type {{.Kind}}Parameters struct {
 // atProvider before switching to full management
 // (managementPolicies: ["Observe"]).
 type {{.Kind}}Observation struct {
+	// Server-assigned external identifier for this resource, set by Observe()
+	// from the resource's external name. Used by import testing to confirm
+	// the controller re-discovers the resource after a restart.
+	// +optional
+	ID string {{jsonTag "id" true}} // atProvider
 {{range .AtProvider}}	// {{.Description}}
 {{- if not .OmitEmpty}}
 	// +optional

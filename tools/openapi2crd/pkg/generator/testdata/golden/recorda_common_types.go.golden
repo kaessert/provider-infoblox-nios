@@ -299,6 +299,11 @@ type ARecordParameters struct {
 // atProvider before switching to full management
 // (managementPolicies: ["Observe"]).
 type ARecordObservation struct {
+	// Server-assigned external identifier for this resource, set by Observe()
+	// from the resource's external name. Used by import testing to confirm
+	// the controller re-discovers the resource after a restart.
+	// +optional
+	ID string `json:"id,omitempty"` // atProvider
 	// Owner name in FQDN format for the A record. Renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"` // atProvider
 	// IPv4 address of the record. May be set statically or allocated dynamically from a CIDR at create time.

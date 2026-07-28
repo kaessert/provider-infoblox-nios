@@ -730,6 +730,12 @@ spec:
                     description: Whether reclamation is forbidden for the record (DNS
                       discovery feature).
                     type: boolean
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
                   ipv4Addr:
                     description: IPv4 address of the record. May be set statically
                       or allocated dynamically from a CIDR at create time.
