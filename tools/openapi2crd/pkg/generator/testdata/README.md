@@ -35,3 +35,16 @@ git diff pkg/generator/testdata/golden/
 Never hand-edit a `.golden` file — always regenerate it from the generator
 and review the diff, so the golden file always reflects what the code
 actually produces today.
+
+## CRD YAML validation
+
+`crd_yaml_test.go` (this package) does not compare against a golden file —
+it parses the checked-in, downstream-generated
+`package/crds/recorda.infobloxnios*.yaml` manifests (produced by
+`make generate` via controller-gen from the Go types this package renders)
+as `apiextensions.k8s.io/v1` `CustomResourceDefinition` objects and asserts
+on group, scope, categories, and the `view` field's
+`x-kubernetes-validations` immutability rule. This closes the loop between
+"the generator emits the right Go source" (golden tests) and "the final CRD
+manifest applied to a cluster is well-formed and carries the same
+guarantees."
