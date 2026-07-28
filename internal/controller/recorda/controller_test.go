@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -639,6 +640,25 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteServerError verifies that a 5xx response from the WAPI
+// delete endpoint is propagated (wrapped, not swallowed) rather than being
+// treated as a not-found/already-deleted success.
+func TestClusterDeleteServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterARecord("my-arecord", "record:a/test1:host.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteARecord) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteARecord)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -916,6 +936,25 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
+	}
+}
+
+// TestNamespacedDeleteServerError verifies that a 5xx response from the
+// WAPI delete endpoint is propagated (wrapped, not swallowed) rather than
+// being treated as a not-found/already-deleted success.
+func TestNamespacedDeleteServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedARecord("default", "my-arecord", "record:a/test1:host.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteARecord) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteARecord)
 	}
 }
 
