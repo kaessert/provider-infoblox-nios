@@ -540,6 +540,28 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterCreateServerError verifies that a 5xx response from the WAPI
+// create endpoint is propagated (wrapped, not swallowed) and that no
+// external-name is assigned.
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateAAAARecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateAAAARecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want unset after failed create", got)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -692,6 +714,26 @@ func TestClusterUpdateRefChangesOnAddrChange(t *testing.T) {
 	newRef := meta.GetExternalName(cr)
 	if newRef == "" || newRef == ref {
 		t.Errorf("Update: external-name annotation not refreshed after _ref change, got %q (old ref %q)", newRef, ref)
+	}
+}
+
+// TestClusterUpdateServerError verifies that a 5xx response from the WAPI
+// update endpoint is propagated (wrapped, not swallowed) rather than
+// silently accepted.
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "record:aaaa/test1:host.example.com/default")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateAAAARecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateAAAARecord)
 	}
 }
 
@@ -976,6 +1018,28 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateServerError verifies that a 5xx response from the
+// WAPI create endpoint is propagated (wrapped, not swallowed) and that no
+// external-name is assigned, in the namespaced scope.
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedAAAARecord("default", "my-aaaarecord", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateAAAARecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateAAAARecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want unset after failed create", got)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -1000,6 +1064,26 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestNamespacedUpdateServerError verifies that a 5xx response from the
+// WAPI update endpoint is propagated (wrapped, not swallowed) rather than
+// silently accepted, in the namespaced scope.
+func TestNamespacedUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedAAAARecord("default", "my-aaaarecord", "record:aaaa/test1:host.example.com/default", "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateAAAARecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateAAAARecord)
 	}
 }
 
