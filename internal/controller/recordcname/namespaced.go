@@ -27,6 +27,7 @@ const namespacedControllerName = "namespaced-recordcname.infobloxnios.m.crosspla
 
 // +kubebuilder:rbac:groups=recordcname.infobloxnios.m.crossplane.io,resources=cnamerecords,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=recordcname.infobloxnios.m.crossplane.io,resources=cnamerecords/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=recorda.infobloxnios.m.crossplane.io,resources=arecords,verbs=get;list;watch
 
 // namespacedConnector implements managed.TypedExternalConnector[*namespacedv1alpha1.CNAMERecord].
 // The Kind field on providerConfigRef selects which config type to fetch:

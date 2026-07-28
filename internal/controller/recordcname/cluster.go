@@ -28,6 +28,7 @@ const clusterControllerName = "cluster-recordcname.infobloxnios.crossplane.io"
 
 // +kubebuilder:rbac:groups=recordcname.infobloxnios.crossplane.io,resources=cnamerecords,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=recordcname.infobloxnios.crossplane.io,resources=cnamerecords/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=recorda.infobloxnios.crossplane.io,resources=arecords,verbs=get;list;watch
 
 // clusterConnector implements managed.TypedExternalConnector[*clusterv1alpha1.CNAMERecord].
 // Cluster-scoped MRs always reference the legacy cluster-scoped
