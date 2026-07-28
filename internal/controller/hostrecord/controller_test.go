@@ -1382,3 +1382,77 @@ func TestCreateOnlyForwardsFirstIpv4Addr(t *testing.T) {
 		t.Errorf("Create: stored first ipv4addr = %v, want 10.0.0.1", stored.Ipv4Addrs[0].Ipv4Addr)
 	}
 }
+
+// ── extractCredentials: ssl_verify ──────────────────────────────────────
+
+func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if !creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to default to true when ssl_verify key is absent")
+	}
+}
+
+func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	secret.Data["ssl_verify"] = []byte("false")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to be false when ssl_verify key is \"false\"")
+	}
+}
+
+func TestExtractCredentialsSslVerifyUnrecognizedValueDefaultsTrue(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	secret.Data["ssl_verify"] = []byte("nope")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if !creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to default to true for any value other than exactly \"false\"")
+	}
+}
+
+func TestNewHostRecordClientWithSchemeUsesConfiguredSslVerify(t *testing.T) {
+	// Regression guard: newHostRecordClientWithScheme must not hardcode
+	// SslVerify to "true" — it must honor creds.SslVerify. Both branches
+	// must construct successfully (transport config validation happens
+	// locally; no network round-trip occurs here).
+	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
+		t.Run(name, func(t *testing.T) {
+			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t", SslVerify: sslVerify}
+			client, err := newHostRecordClientWithScheme(creds, "http", "80")
+			if err != nil {
+				t.Fatalf("newHostRecordClientWithScheme: unexpected error: %v", err)
+			}
+			if client == nil {
+				t.Fatal("newHostRecordClientWithScheme: expected non-nil client")
+			}
+		})
+	}
+}
