@@ -1,0 +1,31 @@
+# AAAARecord is the namespace-scoped variant of the Infoblox NIOS DNS "AAAA"
+# record. See record-aaaa.yaml for the cluster-scoped variant and full field
+# documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the owner name below differs from record-aaaa.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, zone, name) WAPI identity.
+apiVersion: recordaaaa.infobloxnios.m.crossplane.io/v1alpha1
+kind: AAAARecord
+metadata:
+  name: example-aaaarecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recordaaaa/v1alpha1/aaaarecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-aaaa.yaml for the rationale.
+spec:
+  forProvider:
+    name: www6-ns.example.com
+    ipv6Addr: "2001:db8::20"
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

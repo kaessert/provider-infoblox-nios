@@ -11,8 +11,8 @@
 #   test/hooks/post-assert-<resource>-ns.sh         → examples/<resource>/<resource>-namespaced.yaml
 #
 # Usage (via symlink):
-#   test/hooks/post-assert-record-txt.sh
-#   test/hooks/post-assert-record-txt-namespaced.sh
+#   test/hooks/post-assert-<resource>.sh
+#   test/hooks/post-assert-<resource>-namespaced.sh
 #
 # Direct invocation for debugging:
 #   MANIFEST=/path/to/manifest.yaml test/hooks/run-update-tester.sh
@@ -26,8 +26,8 @@ PROVIDER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Derive resource slug and manifest path from the invocation name ($0).
 # $0 is the symlink name when called via a symlink — bash does NOT resolve
 # symlinks for $0 or BASH_SOURCE[0] before basename extraction.
-BASENAME="$(basename "$0" .sh)"      # e.g. post-assert-record-txt-namespaced
-SLUG="${BASENAME#post-assert-}"       # e.g. record-txt-namespaced
+BASENAME="$(basename "$0" .sh)"      # e.g. post-assert-<resource>-namespaced
+SLUG="${BASENAME#post-assert-}"       # e.g. <resource>-namespaced
 
 if [ -z "${MANIFEST:-}" ]; then
   # Detect namespaced variants: suffix is either "-namespaced" or "-ns".

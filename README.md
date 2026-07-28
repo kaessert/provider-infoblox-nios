@@ -9,6 +9,8 @@ resources declaratively using Kubernetes custom resources.
 
 - **ARecord** — create and manage Infoblox NIOS DNS "A" records (cluster-scoped
   and namespace-scoped)
+- **AAAARecord** — create and manage Infoblox NIOS DNS "AAAA" records
+  (cluster-scoped and namespace-scoped)
 - **TXTRecord** — create and manage Infoblox NIOS DNS "TXT" records
   (cluster-scoped and namespace-scoped)
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
@@ -171,6 +173,61 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/record-a/record-a.yaml
 kubectl apply -f examples/record-a/record-a-namespaced.yaml
+```
+
+### AAAARecord
+
+Manage Infoblox NIOS DNS "AAAA" records (WAPI object type `record:aaaa`).
+
+**Cluster-scoped** (`recordaaaa.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordaaaa.infobloxnios.crossplane.io/v1alpha1
+kind: AAAARecord
+metadata:
+  name: example-aaaarecord
+spec:
+  forProvider:
+    name: www6.example.com
+    ipv6Addr: "2001:db8::10"
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordaaaa.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordaaaa.infobloxnios.m.crossplane.io/v1alpha1
+kind: AAAARecord
+metadata:
+  name: example-aaaarecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: www6-ns.example.com
+    ipv6Addr: "2001:db8::20"
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:aaaa/ZG5zLmJpbmRfYWFhYQ:www6.example.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `view` field is immutable after creation: WAPI ties an AAAA record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-aaaa/record-aaaa.yaml
+kubectl apply -f examples/record-aaaa/record-aaaa-namespaced.yaml
 ```
 
 ### TXTRecord
