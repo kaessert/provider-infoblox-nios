@@ -209,6 +209,7 @@ func FindResource(slug string) (*ResourceDescriptor, bool) {
 func All() []ResourceDescriptor {
 	return []ResourceDescriptor{
 		aRecord(),
+		aaaaRecord(),
 		txtRecord(),
 		zoneDelegated(),
 	}
