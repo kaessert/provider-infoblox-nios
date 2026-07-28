@@ -18,8 +18,9 @@ metadata:
   annotations:
     meta.upbound.io/example-id: zonedelegated/v1alpha1/zonedelegated
     uptest.upbound.io/timeout: "300"
-    uptest.upbound.io/update-parameter: |
-      {"forProvider": {"comment": "updated by uptest"}}
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # zone-delegated.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-delegated-namespaced.sh
 spec:
   forProvider:
     fqdn: delegated-ns.example.com
