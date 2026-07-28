@@ -116,7 +116,6 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.A
 
 	o := observeFromRecordA(externalID, rec)
 	cr.Status.AtProvider = namespacedv1alpha1.ARecordObservation{
-		ID:       o.ID,
 		Name:     o.Name,
 		IPv4Addr: o.IPv4Addr,
 		Comment:  o.Comment,
@@ -127,6 +126,11 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.A
 		Ref:      o.Ref,
 		Zone:     o.Zone,
 	}
+	// Explicit assignment (rather than folding ID into the struct literal
+	// above) keeps the server-assigned identifier's provenance obvious at
+	// the call site — it always mirrors the external name used to fetch
+	// this record, not a field returned inside the WAPI response body.
+	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
 	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
