@@ -44,6 +44,12 @@
 #     example manifests deliberately target a different fqdn
 #     (zoneauth-example.com) so their own Create calls never collide with
 #     this pre-provisioned example.com/default zone.
+#   - Member Network objects (network view "default") for the CIDRs
+#     referenced by the IPv4SharedNetwork example manifests
+#     (203.0.113.0/25, 203.0.113.128/25) — WAPI validates shared-network
+#     membership against real network objects on the Grid Manager. Created
+#     directly via a WAPI POST, guarded by a GET so re-running setup.sh
+#     is a no-op once each network exists.
 #
 # Usage: test/setup.sh
 #   Requires a running kind cluster with Crossplane installed and
@@ -189,6 +195,24 @@ if [ "${ZONE_LOOKUP}" = "[]" ]; then
 else
   echo "    Zone example.com already exists in view default — skipping."
 fi
+
+echo "==> Ensuring member Network objects for IPv4SharedNetwork examples exist..."
+
+for NETWORK_CIDR in "203.0.113.0/24" "203.0.113.128/25"; do
+  NETWORK_LOOKUP=$(curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+    -G --data-urlencode "network=${NETWORK_CIDR}" --data-urlencode "network_view=default" \
+    "${WAPI_BASE}/network")
+  if [ "${NETWORK_LOOKUP}" = "[]" ]; then
+    echo "    Network ${NETWORK_CIDR} not found in view default — creating it..."
+    curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+      -X POST "${WAPI_BASE}/network" \
+      -H "Content-Type: application/json" \
+      -d "{\"network\": \"${NETWORK_CIDR}\", \"network_view\": \"default\"}" >/dev/null
+    echo "    Created network ${NETWORK_CIDR}/default."
+  else
+    echo "    Network ${NETWORK_CIDR} already exists in view default — skipping."
+  fi
+done
 
 echo "==> E2E setup complete."
 echo "    NIOS Grid Manager: ${INFOBLOX_HOST}"
