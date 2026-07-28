@@ -5,15 +5,15 @@ package catalog
 // Source: tools/openapi/inventory.md, "### HostRecord" section (fields
 // request=2, response=14, both=12) — itself derived from the pinned
 // infoblox-go-client/v2 SDK (tools/openapi/specs/infobloxopen/) and
-// corrected by live WAPI probing (ADR-IN-0004, 2026-07-28).
+// corrected by live probing against a real NIOS Grid Manager appliance.
 //
 // External-name strategy: server-assigned (the WAPI `_ref` returned by
 // CreateHostRecord).
 //
 // Immutable fields: `networkView` has `supports=rws` (no `u`): "Field is
-// not allowed for update" (live-verified ADR-IN-0004, correcting the
-// Phase 1 inventory which listed it as mutable). `zone` is response-only
-// (derived from name/view) and never settable.
+// not allowed for update" (live-verified, correcting the Phase 1 inventory
+// which listed it as mutable). `zone` is response-only (derived from
+// name/view) and never settable.
 //
 // Cross-resource references: `networkView` → NetworkView (cluster-scoped,
 // external-name extractor). This is an immutable create-time reference.
@@ -36,8 +36,8 @@ package catalog
 // Response-only fields omitted from this catalog (same precedent as
 // ARecord's discoveredData/cloudInfo — complex nested SDK objects the
 // ObjectManager wrapper never accepts as create/update parameters):
-// cloud_info, ms_ad_user_data, creation_time (does not exist in WAPI
-// v2.9.7 per ADR-IN-0004), ddns_protected, last_queried,
+// cloud_info, ms_ad_user_data, creation_time (does not exist on this WAPI
+// version's HostRecord object), ddns_protected, last_queried,
 // device_description, device_location, device_type, device_vendor,
 // rrset_order.
 func hostRecord() ResourceDescriptor {
