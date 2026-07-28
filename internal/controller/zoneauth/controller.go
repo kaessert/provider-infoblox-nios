@@ -64,11 +64,13 @@ const wapiVersion = "2.9.7"
 // ── Credential bridge ───────────────────────────────────────────────────────
 
 // nioCredentials holds the WAPI connection parameters extracted from the
-// ProviderConfig's credentials Secret (host/username/password keys).
+// ProviderConfig's credentials Secret (host/username/password keys, plus
+// the optional ssl_verify key).
 type nioCredentials struct {
-	Host     string
-	Username string
-	Password string
+	Host      string
+	Username  string
+	Password  string
+	SslVerify bool
 }
 
 // extractCredentials reads the Secret referenced by a ProviderConfig's
@@ -103,7 +105,16 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 		return nil, errors.New(errMissingCredKey)
 	}
 
-	return &nioCredentials{Host: host, Username: username, Password: password}, nil
+	// sslVerify is secure by default (true). Setting the optional
+	// "ssl_verify" Secret key to "false" disables TLS certificate
+	// verification — used when the Grid Manager presents a self-signed
+	// certificate whose SAN does not match the reachable host address.
+	sslVerify := true
+	if v := string(secret.Data["ssl_verify"]); v == "false" {
+		sslVerify = false
+	}
+
+	return &nioCredentials{Host: host, Username: username, Password: password, SslVerify: sslVerify}, nil
 }
 
 // newConnector constructs an authenticated ibclient.IBConnector from the
@@ -128,11 +139,15 @@ func newConnectorWithScheme(creds *nioCredentials, scheme, port string) (ibclien
 		Username: creds.Username,
 		Password: creds.Password,
 	}
-	// SslVerify defaults to secure (true). The ProviderConfig secret
-	// format documented for this provider (host/username/password only)
-	// has no field to disable verification; a self-signed Grid Manager
-	// certificate must be trusted at the OS/pod level.
-	transportConfig := ibclient.NewTransportConfig("true", 60, 10)
+	// SslVerify is configurable via the credentials Secret's optional
+	// "ssl_verify" key (default: "true"). Set to "false" when the Grid
+	// Manager uses a self-signed certificate whose SAN does not match
+	// the reachable host address.
+	sslVerifyStr := "true"
+	if !creds.SslVerify {
+		sslVerifyStr = "false"
+	}
+	transportConfig := ibclient.NewTransportConfig(sslVerifyStr, 60, 10)
 
 	conn, err := ibclient.NewConnector(
 		hostConfig,
