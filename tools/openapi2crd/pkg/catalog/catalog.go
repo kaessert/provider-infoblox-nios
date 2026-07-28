@@ -212,6 +212,7 @@ func All() []ResourceDescriptor {
 		aRecord(),
 		aaaaRecord(),
 		cnameRecord(),
+		hostRecord(),
 		mxRecord(),
 		ptrRecord(),
 		srvRecord(),
