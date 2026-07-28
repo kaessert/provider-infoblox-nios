@@ -1,0 +1,46 @@
+# MXRecord is a cluster-scoped Infoblox NIOS DNS "MX" record (WAPI object
+# type record:mx). See record-mx-namespaced.yaml for the namespace-scoped
+# variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:mx/ZG5zLmJpbmRfbXg:test-mx.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Create behavior: sync — the WAPI POST returns the new object's `_ref`
+# immediately (HTTP 201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   name:          owner name (FQDN) the MX record applies to. WAPI ties
+#                  the record's `_ref` to (view, zone, name); the
+#                  controller re-syncs the annotation if a rename changes
+#                  the `_ref`.
+#   mailExchanger: mail exchanger hostname in FQDN format.
+#   preference:    preference value, 0-65535 — lower values are preferred.
+#   view:          the DNS view the record is created in. Immutable after
+#                  creation (CEL rule enforced) — the UpdateMXRecord SDK
+#                  call has no view parameter.
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recordmx.infobloxnios.crossplane.io/v1alpha1
+kind: MXRecord
+metadata:
+  name: example-mxrecord
+  annotations:
+    meta.upbound.io/example-id: recordmx/v1alpha1/mxrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via post-assert-hook during the
+    # E2E ticket.
+spec:
+  forProvider:
+    name: test-mx.example.com
+    mailExchanger: mail.example.com
+    preference: 10
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

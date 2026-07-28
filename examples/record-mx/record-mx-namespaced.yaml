@@ -1,0 +1,32 @@
+# MXRecord is the namespace-scoped variant of the Infoblox NIOS DNS "MX"
+# record. See record-mx.yaml for the cluster-scoped variant and full field
+# documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the owner name below differs from record-mx.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, zone, name) WAPI identity.
+apiVersion: recordmx.infobloxnios.m.crossplane.io/v1alpha1
+kind: MXRecord
+metadata:
+  name: example-mxrecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recordmx/v1alpha1/mxrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-mx.yaml for the rationale.
+spec:
+  forProvider:
+    name: test-mx-ns.example.com
+    mailExchanger: mail-ns.example.com
+    preference: 20
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
