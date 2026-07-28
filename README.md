@@ -15,6 +15,8 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
   (cluster-scoped and namespace-scoped)
+- **CNAMERecord** — create and manage Infoblox NIOS DNS "CNAME" records
+  (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -312,6 +314,27 @@ spec:
     name: default
 ```
 
+### CNAMERecord
+
+Manage Infoblox NIOS DNS "CNAME" records (WAPI object type `record:cname`).
+
+**Cluster-scoped** (`recordcname.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
+kind: CNAMERecord
+metadata:
+  name: example-cnamerecord
+spec:
+  forProvider:
+    name: alias.example.com
+    canonical: www.example.com
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
 **Namespace-scoped** (`zonedelegated.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -334,6 +357,24 @@ spec:
     name: default
 ```
 
+**Namespace-scoped** (`recordcname.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordcname.infobloxnios.m.crossplane.io/v1alpha1
+kind: CNAMERecord
+metadata:
+  name: example-cnamerecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: alias-ns.example.com
+    canonical: www-ns.example.com
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
 External name: WAPI assigns an opaque `_ref` reference to every object
 (e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
 Crossplane stores this in the `crossplane.io/external-name` annotation — do
@@ -344,11 +385,22 @@ underlying SDK's update call has no parameters for them, and WAPI
 additionally rejects moving an existing zone between views at the data
 level.
 
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:cname/ZG5zLmJpbmRfY25hbWUk:alias.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `view` field is immutable after creation: WAPI ties a CNAME record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
+
 Apply the full set of example manifests:
 
 ```bash
 kubectl apply -f examples/zone-delegated/zone-delegated.yaml
 kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
+kubectl apply -f examples/record-cname/record-cname.yaml
+kubectl apply -f examples/record-cname/record-cname-namespaced.yaml
 ```
 
 ## Development
