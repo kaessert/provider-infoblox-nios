@@ -435,6 +435,64 @@ func TestClusterObserveForbidden(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse pins nil-safety in Observe: a WAPI
+// response carrying only the object's _ref (the resource identifier) and
+// every other field at its Go zero value (nil pointers, empty strings, a
+// nil Ea map) must not panic and must produce a valid observation with
+// nil-safe AtProvider fields. observeFromRecordA copies optional pointer
+// fields directly (never dereferences without a nil guard), so this test
+// also pins that contract for future edits.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// Seed a completely bare RecordA — only the SDK-assigned _ref (via
+	// seed()) identifies the object. Name/View are the Go zero value
+	// (nil/empty string), so zoneFromName leaves Zone at "" too.
+	ref := m.seed(&ibclient.RecordA{})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterARecord("my-arecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.IPv4Addr != nil {
+		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.TTL != nil {
+		t.Errorf("AtProvider.TTL = %v, want nil", ap.TTL)
+	}
+	if ap.UseTTL != nil {
+		t.Errorf("AtProvider.UseTTL = %v, want nil", ap.UseTTL)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.View != nil {
+		t.Errorf("AtProvider.View = %v, want nil", ap.View)
+	}
+	if ap.Zone != nil {
+		t.Errorf("AtProvider.Zone = %v, want nil", ap.Zone)
+	}
+}
+
 // ── cluster: Create ─────────────────────────────────────────────────────
 
 func TestClusterCreateSuccess(t *testing.T) {
@@ -732,6 +790,57 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse is the namespaced-scope counterpart
+// of TestClusterObserveMinimalResponse — see that test's doc comment for
+// rationale.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.IPv4Addr != nil {
+		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.TTL != nil {
+		t.Errorf("AtProvider.TTL = %v, want nil", ap.TTL)
+	}
+	if ap.UseTTL != nil {
+		t.Errorf("AtProvider.UseTTL = %v, want nil", ap.UseTTL)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.View != nil {
+		t.Errorf("AtProvider.View = %v, want nil", ap.View)
+	}
+	if ap.Zone != nil {
+		t.Errorf("AtProvider.Zone = %v, want nil", ap.Zone)
 	}
 }
 
