@@ -365,6 +365,128 @@ func aRecord() ResourceDescriptor {
 	}
 }
 
+// aliasRecord returns the AliasRecord resource descriptor.
+//
+// Source: tools/openapi/inventory.md, "### AliasRecord" section (fields
+// request=0, response=13, both=9), corrected against direct live WAPI
+// probing of a real NIOS Grid Manager appliance on 2026-07-28 (record:alias
+// WAPI object type). The live probe is authoritative where it conflicts
+// with the SDK-derived inventory notes.
+//
+// External-name strategy: server-assigned (the WAPI `_ref` returned by
+// CreateAliasRecord). The `_ref` is UNSTABLE — it changes whenever `name`
+// or another `_ref`-mutating field is updated.
+//
+// Immutable fields: `view` is soft-immutable — the WAPI schema's `supports`
+// flags claim it is updatable, but a live PUT against a real record was
+// rejected at the data level ("The action is not allowed. A parent was not
+// found."), matching the same soft-immutable pattern observed on the
+// CNAME/TXT/MX record types. `zone` is derived from name+view by WAPI, is
+// not a CreateAliasRecord parameter at all, and therefore has no
+// ForProvider representation — it is AtProvider-only, same as ARecord's
+// `zone` field.
+//
+// No cross-resource references: AliasRecord's target_name field names
+// another DNS record by FQDN, but WAPI does not require the target to
+// exist, so it is not cataloged as a reference (best-effort resolution,
+// not required for apply to succeed).
+func aliasRecord() ResourceDescriptor {
+	return ResourceDescriptor{
+		Kind:                 "AliasRecord",
+		Slug:                 "recordalias",
+		ClusterGroup:         clusterGroup("recordalias"),
+		NamespacedGroup:      namespacedGroup("recordalias"),
+		ExternalNameStrategy: StrategyServerAssigned,
+		Fields: []FieldDef{
+			{
+				Name:        "Name",
+				JSONName:    "name",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "Alias name in FQDN format. Renaming changes the record's _ref.",
+			},
+			{
+				Name:        "TargetName",
+				JSONName:    "targetName",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "Target name in FQDN format that this alias resolves to. Live-verified: updating this field does not change the record's _ref.",
+			},
+			{
+				Name:        "TargetType",
+				JSONName:    "targetType",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Enum:        []string{"A", "AAAA", "MX", "NAPTR", "PTR", "SPF", "SRV", "TXT"},
+				Description: "Record type the alias resolves to.",
+			},
+			{
+				Name:        "View",
+				JSONName:    "view",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Immutable:   true,
+				Description: "DNS view in which the record resides, e.g. \"external\". Soft-immutable: the WAPI schema advertises this field as updatable, but a live update attempt is rejected at the data level, so it is treated as fixed at creation.",
+			},
+			{
+				Name:        "Comment",
+				JSONName:    "comment",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Description: "Comment for the record; maximum 256 characters.",
+			},
+			{
+				Name:        "Disable",
+				JSONName:    "disable",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Whether the record is disabled. Unlike most other DNS record types in this catalog, Alias exposes this field via the SDK's ObjectManager wrapper.",
+			},
+			{
+				Name:        "TTL",
+				JSONName:    "ttl",
+				GoType:      goTypeUint32,
+				Scope:       FieldScopeBoth,
+				Description: "Time-to-live in seconds. Zero means the record is not cached.",
+			},
+			{
+				Name:        "UseTTL",
+				JSONName:    "useTtl",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Use flag for ttl — when false the zone/grid default TTL applies.",
+			},
+			{
+				Name:        "ExtAttrs",
+				JSONName:    "extAttrs",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeBoth,
+				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+			},
+			{
+				Name:        "Ref",
+				JSONName:    "ref",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.",
+			},
+			{
+				Name:        "Zone",
+				JSONName:    "zone",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Immutable:   true,
+				Description: "Zone in which the record resides, e.g. \"zone.com\". Derived from name/view by WAPI — not a CreateAliasRecord parameter, so it has no ForProvider counterpart.",
+			},
+		},
+	}
+}
+
+
 // cnameRecord returns the CNAMERecord resource descriptor.
 //
 // Source: tools/openapi/inventory.md, "### CNAMERecord" section (request=0,

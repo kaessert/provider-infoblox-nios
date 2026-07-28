@@ -19,6 +19,7 @@ import (
 	clusterrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
+	clusterrecordaliasv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
 	clusterrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	clusterrecordmxv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordmx/v1alpha1"
 	clusterrecordptrv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordptr/v1alpha1"
@@ -38,6 +39,7 @@ import (
 	namespacedrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
+	namespacedrecordaliasv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordalias/v1alpha1"
 	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
 	namespacedrecordmxv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordmx/v1alpha1"
 	namespacedrecordptrv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordptr/v1alpha1"
@@ -77,6 +79,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordaaaa types.
 	AddToSchemes = append(AddToSchemes, clusterrecordaaaav1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Recordalias types.
+	AddToSchemes = append(AddToSchemes, clusterrecordaliasv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordcname types.
 	AddToSchemes = append(AddToSchemes, clusterrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordmx types.
@@ -113,6 +117,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordaaaa types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordaaaav1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Recordalias types.
+	AddToSchemes = append(AddToSchemes, namespacedrecordaliasv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordcname types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordmx types.
