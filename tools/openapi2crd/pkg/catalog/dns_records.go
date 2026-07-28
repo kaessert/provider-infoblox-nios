@@ -487,6 +487,7 @@ func cnameRecord() ResourceDescriptor {
 		},
 	}
 }
+
 // mxRecord returns the MXRecord resource descriptor.
 //
 // Source: tools/openapi/inventory.md, "### MXRecord" section (fields
