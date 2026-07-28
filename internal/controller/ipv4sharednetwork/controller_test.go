@@ -1323,10 +1323,15 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 
 func TestIsUpToDate(t *testing.T) {
 	name := testSharedNetworkName
+	matchingOpts := []sharedNetworkDhcpOption{{Name: stringPtr("routers"), Num: func() *uint32 { v := uint32(3); return &v }()}}
 	cases := []struct {
-		testName string
-		sn       *ibclient.SharedNetwork
-		want     bool
+		testName   string
+		extAttrs   map[string]string
+		disable    *bool
+		useOptions *bool
+		options    []sharedNetworkDhcpOption
+		sn         *ibclient.SharedNetwork
+		want       bool
 	}{
 		{
 			testName: "matching name, networks, comment",
@@ -1348,11 +1353,61 @@ func TestIsUpToDate(t *testing.T) {
 			sn:       &ibclient.SharedNetwork{Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR2}}},
 			want:     false,
 		},
+		{
+			testName: "networkView drift is ignored (immutable)",
+			sn:       &ibclient.SharedNetwork{Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}}, NetworkView: "changed-view"},
+			want:     true,
+		},
+		{
+			testName:   "matching disable, useOptions, options, extAttrs",
+			extAttrs:   map[string]string{testEAKey: testEAVal},
+			disable:    boolPtr(true),
+			useOptions: boolPtr(true),
+			options:    matchingOpts,
+			sn: &ibclient.SharedNetwork{
+				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
+				Ea:         ibclient.EA{testEAKey: testEAVal},
+				Disable:    boolPtr(true),
+				UseOptions: boolPtr(true),
+				Options:    optionsToSDK(matchingOpts),
+			},
+			want: true,
+		},
+		{
+			testName: "disable drift",
+			disable:  boolPtr(true),
+			sn:       &ibclient.SharedNetwork{Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}}, Disable: boolPtr(false)},
+			want:     false,
+		},
+		{
+			testName:   "useOptions drift",
+			useOptions: boolPtr(true),
+			sn:         &ibclient.SharedNetwork{Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}}, UseOptions: boolPtr(false)},
+			want:       false,
+		},
+		{
+			testName: "options drift",
+			options:  matchingOpts,
+			sn: &ibclient.SharedNetwork{
+				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
+				Options: optionsToSDK([]sharedNetworkDhcpOption{{Name: stringPtr("dns-servers"), Num: func() *uint32 { v := uint32(6); return &v }()}}),
+			},
+			want: false,
+		},
+		{
+			testName: "extAttrs drift",
+			extAttrs: map[string]string{testEAKey: testEAVal},
+			sn: &ibclient.SharedNetwork{
+				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
+				Ea: ibclient.EA{testEAKey: "staging"},
+			},
+			want: false,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.testName, func(t *testing.T) {
-			got := isUpToDate(&name, []string{testCIDR1}, stringPtr("hello"), nil, nil, nil, nil, tc.sn)
+			got := isUpToDate(&name, []string{testCIDR1}, stringPtr("hello"), tc.extAttrs, tc.disable, tc.useOptions, tc.options, tc.sn)
 			if got != tc.want {
 				t.Errorf("isUpToDate() = %v, want %v", got, tc.want)
 			}
