@@ -1,0 +1,44 @@
+# ZoneForward is a cluster-scoped Infoblox NIOS forward DNS zone (WAPI
+# object type zone_forward). See zone-forward-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "zone_forward/ZG5zLnpvbmUk...:forward.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   fqdn:      FQDN of the forward zone. Immutable after creation (CEL
+#              rule enforced) — the UpdateZoneForward SDK call has no
+#              fqdn parameter.
+#   forwardTo: list of remote name servers the appliance forwards queries
+#              for this zone to (name + address pairs).
+#
+# Optional immutable fields: view, zoneFormat (both fixed at creation —
+# absent from the UpdateZoneForward SDK call; view is additionally
+# rejected by WAPI at the data level if changed).
+#
+# Optional mutable fields: comment, disable, forwardersOnly, nsGroup,
+# externalNsGroup, forwardingServers, extAttrs.
+apiVersion: zoneforward.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneForward
+metadata:
+  name: example-zoneforward
+  annotations:
+    meta.upbound.io/example-id: zoneforward/v1alpha1/zoneforward
+    uptest.upbound.io/timeout: "300"
+    uptest.upbound.io/update-parameter: |
+      {"forProvider": {"comment": "updated by uptest"}}
+spec:
+  forProvider:
+    fqdn: forward.example.com
+    forwardTo:
+      - name: ns1.forwarder.com
+        address: 10.0.0.1
+      - name: ns2.forwarder.com
+        address: 10.0.0.2
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

@@ -29,6 +29,7 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **NetworkContainer** — create and manage Infoblox NIOS network containers,
   reserving a CIDR block for later child networks and ranges
+- **ZoneForward** — create and manage Infoblox NIOS forward DNS zones
   (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
@@ -545,6 +546,37 @@ spec:
     name: default
 ```
 
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
+underlying SDK's update call has no parameters for them, and WAPI
+additionally rejects moving an existing zone between views at the data
+level.
+
+### CNAMERecord
+
+Manage Infoblox NIOS DNS "CNAME" records (WAPI object type `record:cname`).
+
+**Cluster-scoped** (`recordcname.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
+kind: CNAMERecord
+metadata:
+  name: example-cnamerecord
+spec:
+  forProvider:
+    name: alias.example.com
+    canonical: www.example.com
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
 **Namespace-scoped** (`recordcname.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -562,16 +594,6 @@ spec:
     kind: ClusterProviderConfig
     name: default
 ```
-
-External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
-Crossplane stores this in the `crossplane.io/external-name` annotation — do
-not set it manually.
-
-The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
-underlying SDK's update call has no parameters for them, and WAPI
-additionally rejects moving an existing zone between views at the data
-level.
 
 External name: WAPI assigns an opaque `_ref` reference to every object
 (e.g. `record:cname/ZG5zLmJpbmRfY25hbWUk:alias.example.com/default`).
@@ -661,6 +683,27 @@ spec:
     priority: 10
     weight: 20
     port: 5060
+### ZoneForward
+
+Manage Infoblox NIOS forward DNS zones (WAPI object type `zone_forward`). A
+forward zone directs queries for a subdomain to a set of remote name servers
+rather than resolving them locally.
+
+**Cluster-scoped** (`zoneforward.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zoneforward.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneForward
+metadata:
+  name: example-zoneforward
+spec:
+  forProvider:
+    fqdn: forward.example.com
+    forwardTo:
+      - name: ns1.forwarder.com
+        address: 10.0.0.1
+      - name: ns2.forwarder.com
+        address: 10.0.0.2
     view: default
     comment: Managed by Crossplane
   providerConfigRef:
@@ -684,6 +727,23 @@ spec:
     port: 5060
     view: default
     comment: Managed by Crossplane (namespaced)
+**Namespace-scoped** (`zoneforward.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zoneforward.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneForward
+metadata:
+  name: example-zoneforward-ns
+  namespace: default
+spec:
+  forProvider:
+    fqdn: forward-ns.example.com
+    forwardTo:
+      - name: ns1.forwarder.com
+        address: 10.0.1.1
+      - name: ns2.forwarder.com
+        address: 10.0.1.2
+    view: default
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
@@ -861,6 +921,14 @@ underlying SDK's update call has no parameters for either field. `networkView`
 references a NetworkView by name; this example uses the Grid's well-known
 "default" network view so it runs standalone without creating a NetworkView
 resource first.
+(e.g. `zone_forward/ZG5zLnpvbmUk...:forward.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
+underlying SDK's update call has no parameters for them, and WAPI
+additionally rejects moving an existing zone between views at the data
+level.
 
 Apply the full set of example manifests:
 
@@ -991,6 +1059,8 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/network-container/network-container.yaml
 kubectl apply -f examples/network-container/network-container-namespaced.yaml
+kubectl apply -f examples/zone-forward/zone-forward.yaml
+kubectl apply -f examples/zone-forward/zone-forward-namespaced.yaml
 ```
 
 ## Development
