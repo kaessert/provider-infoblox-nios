@@ -7,6 +7,13 @@
 #   username: WAPI username
 #   password: WAPI password
 #
+# Optional key:
+#   ssl_verify: (optional) "false" to disable TLS certificate verification
+#     for Grid Managers presenting a self-signed certificate whose SAN does
+#     not match the reachable host address. Defaults to "true" (verify)
+#     when the key is absent or set to any value other than exactly
+#     "false".
+#
 # To create from the E2E credential env vars (INFOBLOX_HOST, INFOBLOX_USER,
 # INFOBLOX_PASS):
 #   kubectl -n crossplane-system create secret generic infobloxnios-credentials \

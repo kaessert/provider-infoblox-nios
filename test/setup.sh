@@ -3,10 +3,13 @@
 # cluster before uptest/chainsaw assertions run.
 #
 # This script creates:
-#   - infobloxnios-credentials Secret (host/username/password) in
+#   - infobloxnios-credentials Secret (host/username/password/ssl_verify) in
 #     crossplane-system, populated from the INFOBLOX_HOST, INFOBLOX_USER,
 #     and INFOBLOX_PASS environment variables (Hive nest secrets / CI
 #     secrets — see the credentials section of the provider blueprint).
+#     ssl_verify is set to "false" because the E2E Grid Manager presents a
+#     self-signed certificate whose SAN does not match the reachable host
+#     address.
 #   - ProviderConfig (cluster-scoped, group infobloxnios.crossplane.io) —
 #     used by cluster-scoped managed resources.
 #   - ProviderConfig (namespace-scoped, group infobloxnios.m.crossplane.io)
@@ -52,6 +55,7 @@ ${KUBECTL} create secret generic infobloxnios-credentials \
   --from-literal="host=${INFOBLOX_HOST}" \
   --from-literal="username=${INFOBLOX_USER}" \
   --from-literal="password=${INFOBLOX_PASS}" \
+  --from-literal=ssl_verify="false" \
   --dry-run=client -o yaml | ${KUBECTL} apply -f -
 
 echo "==> Creating cluster-scoped ProviderConfig (default)..."
