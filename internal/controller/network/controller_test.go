@@ -423,6 +423,50 @@ func TestClusterObserveForbidden(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse verifies that Observe() does not panic
+// and correctly leaves every optional AtProvider field nil/empty when the
+// WAPI response carries only the server-assigned _ref and none of
+// network_view, network, comment, extattrs, or members — the minimal
+// shape a Network response can take.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.Network{Ref: "network/minimal:10.0.0.0/24/default"}, false)
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Network != nil {
+		t.Errorf("AtProvider.Network = %v, want nil", ap.Network)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if len(ap.Members) != 0 {
+		t.Errorf("AtProvider.Members = %v, want empty", ap.Members)
+	}
+}
+
 // TestClusterObserveIsUpToDateIgnoresImmutableField verifies that drift on
 // networkView/network (both immutable — absent from UpdateNetwork's SDK
 // signature) does not flip ResourceUpToDate to false.
@@ -827,6 +871,50 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse verifies that Observe() does not
+// panic and correctly leaves every optional AtProvider field nil/empty
+// when the WAPI response carries only the server-assigned _ref and none
+// of network_view, network, comment, extattrs, or members — the minimal
+// shape a Network response can take.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.Network{Ref: "network/minimal:10.0.0.0/24/default"}, false)
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Network != nil {
+		t.Errorf("AtProvider.Network = %v, want nil", ap.Network)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if len(ap.Members) != 0 {
+		t.Errorf("AtProvider.Members = %v, want empty", ap.Members)
 	}
 }
 
