@@ -655,6 +655,31 @@ func TestClusterUpdateRenameRefreshesExternalName(t *testing.T) {
 	}
 }
 
+func TestClusterCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterCNAMERecord("my-cname", "")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+}
+
+func TestClusterUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterCNAMERecord("my-cname", "record:cname/test1:alias.example.com/default")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+}
+
 // ── cluster: Delete ─────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {
@@ -960,6 +985,93 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Canonical == nil || *stored.Canonical != "newtarget.example.com" {
 		t.Errorf("Update: stored canonical = %v, want newtarget.example.com", stored.Canonical)
+	}
+}
+
+func TestNamespacedUpdateDoesNotSendImmutableField(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordCNAME{
+		Name:      stringPtr("alias.example.com"),
+		Canonical: stringPtr("target.example.com"),
+		View:      stringPtr("default"),
+	})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", ref, "ProviderConfig")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	if _, present := raw["view"]; present {
+		t.Errorf("Update: request body contains immutable field 'view': %v", raw["view"])
+	}
+}
+
+// TestNamespacedUpdateRenameRefreshesExternalName is the namespaced
+// counterpart of TestClusterUpdateRenameRefreshesExternalName — the
+// unstable _ref handling is scope-independent (shared Update logic).
+func TestNamespacedUpdateRenameRefreshesExternalName(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordCNAME{
+		Name:      stringPtr("alias.example.com"),
+		Canonical: stringPtr("target.example.com"),
+		View:      stringPtr("default"),
+	})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == ref {
+		t.Errorf("Update: external-name = %q, want it refreshed to the new post-rename _ref (mock server rotates the ref on name change)", got)
+	}
+	if got == "" {
+		t.Error("Update: external-name is empty after rename, want new _ref")
+	}
+}
+
+func TestNamespacedCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", "", "ProviderConfig")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+}
+
+func TestNamespacedUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", "record:cname/test1:alias.example.com/default", "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
 	}
 }
 
