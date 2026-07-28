@@ -306,13 +306,14 @@ func memberServerValuesEqual(a, b []memberServerValue) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i].Name != b[i].Name ||
-			a[i].Stealth != b[i].Stealth ||
-			a[i].GridReplicate != b[i].GridReplicate ||
-			a[i].Lead != b[i].Lead ||
-			a[i].EnablePreferredPrimaries != b[i].EnablePreferredPrimaries ||
-			!externalServerValuesEqual(a[i].PreferredPrimaries, b[i].PreferredPrimaries) {
+	for i, av := range a {
+		bv := b[i] //nolint:gosec // length-checked above, index is always in range
+		if av.Name != bv.Name ||
+			av.Stealth != bv.Stealth ||
+			av.GridReplicate != bv.GridReplicate ||
+			av.Lead != bv.Lead ||
+			av.EnablePreferredPrimaries != bv.EnablePreferredPrimaries ||
+			!externalServerValuesEqual(av.PreferredPrimaries, bv.PreferredPrimaries) {
 			return false
 		}
 	}
