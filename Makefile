@@ -67,14 +67,117 @@ fallthrough: submodules
 	@echo Initial setup complete. Running make again . . .
 	@make
 
-# integration tests
-e2e.run: test-integration
+# ====================================================================================
+# E2E Testing (uptest)
 
-# Run integration tests.
-test-integration: $(KIND) $(KUBECTL) $(CROSSPLANE_CLI) $(HELM3)
-	@$(INFO) running integration tests using kind $(KIND_VERSION)
-	@KIND_NODE_IMAGE_TAG=${KIND_NODE_IMAGE_TAG} $(ROOT_DIR)/cluster/local/integration_tests.sh || $(FAIL)
-	@$(OK) integration tests passed
+UPTEST_LOCAL_DEPLOY_TARGET = local-deploy
+
+# Helper variables for comma-separated manifest lists (uptest CLI convention).
+comma := ,
+empty :=
+space := $(empty) $(empty)
+
+# Per-resource manifest variables (comma pair of cluster + namespaced variants,
+# so `make e2e.<resource>` gates both scopes).
+UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
+
+# E2E manifest tiers
+# TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
+# INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
+# Grid Manager itself.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_TXT)
+
+# UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
+# Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
+_UPTEST_MANIFESTS_ALL_RAW := $(filter-out examples/provider/%,$(wildcard examples/*/*.yaml))
+UPTEST_MANIFESTS_ALL := $(subst $(space),$(comma),$(_UPTEST_MANIFESTS_ALL_RAW))
+
+# Default e2e input: CORE manifests
+UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
+
+UPTEST_SETUP_SCRIPT ?= test/setup.sh
+
+# Per-run uptest test-directory isolation (each concurrent E2E run gets its own
+# staging directory).
+ifdef KIND_CLUSTER_NAME
+  UPTEST_ARGS += --test-directory=/tmp/uptest-e2e-$(KIND_CLUSTER_NAME)
+endif
+
+-include build/makelib/uptest.mk
+
+# E2E preflight: validate NIOS Grid Manager credentials before running the
+# (expensive) E2E pipeline.
+e2e-preflight: ## Validate credentials before E2E
+	@MISSING=""; \
+	[ -z "$${INFOBLOX_HOST:-}" ] && MISSING="$$MISSING INFOBLOX_HOST"; \
+	[ -z "$${INFOBLOX_USER:-}" ] && MISSING="$$MISSING INFOBLOX_USER"; \
+	[ -z "$${INFOBLOX_PASS:-}" ] && MISSING="$$MISSING INFOBLOX_PASS"; \
+	if [ -n "$$MISSING" ]; then \
+	  echo "ERROR: missing required credential env var(s):$$MISSING" >&2; \
+	  echo "  Set them as env vars (Hive nest secrets) or in ../.env" >&2; \
+	  exit 1; \
+	fi
+	@echo "e2e-preflight: credentials OK"
+
+e2e: e2e-preflight
+
+# Per-resource E2E targets
+e2e.record-txt: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_TXT)
+e2e.record-txt: e2e
+
+# Full E2E: all resource examples (core + namespaced variants)
+e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
+e2e-full: e2e-preflight e2e
+
+# local-deploy: build + load provider image into kind cluster, then deploy the xpkg.
+# Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
+local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
+
+.PHONY: local-deploy e2e-preflight e2e.record-txt e2e-full
+
+# ====================================================================================
+# Update-tester standalone targets (per-field update-tester convention)
+#
+# These invoke the update-tester tool directly (converge + per-field run)
+# against both scope variants of each resource. They are separate from the
+# uptest post-assert hook integration (which also runs update-tester as part
+# of the full `make e2e.<resource>` Create→Update→Import→Delete cycle) — use
+# these for a fast, standalone check against an already-deployed resource.
+#
+# tools/update-tester does not exist yet for this provider (it is scaffolded
+# once the first per-field update-tester ticket lands); the wildcard below
+# resolves to an empty prerequisite list until then, so this target is a
+# documented no-op rather than a broken `make` rule in the meantime.
+UPDATE_TESTER := tools/update-tester/update-tester
+UPDATE_TESTER_SRC := $(wildcard tools/update-tester/*.go)
+
+$(UPDATE_TESTER): $(UPDATE_TESTER_SRC)
+	@if [ -z "$(UPDATE_TESTER_SRC)" ]; then \
+	  echo "tools/update-tester is not scaffolded yet for this provider" >&2; \
+	  exit 1; \
+	fi
+	cd tools/update-tester && go build -o update-tester .
+
+update-test.record-txt: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/record-txt/record-txt.yaml
+	$(UPDATE_TESTER) run examples/record-txt/record-txt.yaml
+	$(UPDATE_TESTER) converge examples/record-txt/record-txt-namespaced.yaml
+	$(UPDATE_TESTER) run examples/record-txt/record-txt-namespaced.yaml
+
+.PHONY: update-test.record-txt
+
+# Legacy integration tests (disabled — the provider now uses uptest/chainsaw
+# for E2E via uptest.mk, above). Removing the e2e.run: test-integration
+# override lets common.mk's no-op e2e.run apply, so `make e2e.<resource>`
+# exits 0 after uptest passes instead of re-running a second, unrelated kind
+# cluster lifecycle.
+#
+# e2e.run: test-integration
+#
+# test-integration: $(KIND) $(KUBECTL) $(CROSSPLANE_CLI) $(HELM3)
+# 	@$(INFO) running integration tests using kind $(KIND_VERSION)
+# 	@KIND_NODE_IMAGE_TAG=${KIND_NODE_IMAGE_TAG} $(ROOT_DIR)/cluster/local/integration_tests.sh || $(FAIL)
+# 	@$(OK) integration tests passed
 
 # Update the submodules, such as the common build scripts.
 submodules:

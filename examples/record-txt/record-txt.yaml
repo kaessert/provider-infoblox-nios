@@ -1,0 +1,43 @@
+# TXTRecord is a cluster-scoped Infoblox NIOS DNS "TXT" record (WAPI object
+# type record:txt). See record-txt-namespaced.yaml for the namespace-scoped
+# variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:txt/ZG5zLmJpbmRfdHh0:example.com/default") from Create;
+# Crossplane stores it in the crossplane.io/external-name annotation. Do
+# not set that annotation manually — the controller populates it.
+#
+# Create behavior: sync — the WAPI POST returns the new object's `_ref`
+# immediately (HTTP 200/201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   name: owner name in FQDN format. WAPI ties the record's `_ref` to
+#         (view, zone, name); the controller re-syncs the annotation if a
+#         rename changes the `_ref`.
+#   text: text content, up to 255 bytes per substring and 512 bytes total.
+#         Changing this value changes the record's `_ref`.
+#   view: the DNS view the record is created in. Soft-immutable — the WAPI
+#         schema reports it as updatable, but a PUT that changes view is
+#         rejected at runtime (CEL rule enforced).
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recordtxt.infobloxnios.crossplane.io/v1alpha1
+kind: TXTRecord
+metadata:
+  name: example-txtrecord
+  annotations:
+    meta.upbound.io/example-id: recordtxt/v1alpha1/txtrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via post-assert-hook during the
+    # E2E ticket.
+spec:
+  forProvider:
+    name: txt.example.com
+    text: "v=spf1 -all"
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
