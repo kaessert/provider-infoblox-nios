@@ -19,6 +19,15 @@ Copyright 2021 Upbound Inc.
 // a second async connecter built against the read endpoint, then routing each
 // managed.ExternalClient call to the appropriate underlying client.
 //
+// # Scope: DNS only
+//
+// Only DNS records (API group "dns.infoblox-nios.crossplane.io": the A, AAAA,
+// CNAME, MX, PTR, SRV and TXT record kinds) are offloaded to the read
+// candidate. IPAM resources (networks, ranges, allocations, ...) always Observe
+// against the primary. IPAM state is far more sensitive to replication lag —
+// next-available-IP allocation in particular must read the authoritative
+// primary — so it is deliberately excluded from the split. See isDNS.
+//
 // # Why this is only possible under no-fork
 //
 // In the old CLI runtime upjet's WorkspaceStore keyed an on-disk Terraform
@@ -39,40 +48,54 @@ Copyright 2021 Upbound Inc.
 // clients.TerraformReadSetupBuilder), so reads and writes hit the same
 // endpoint — again a no-op.
 //
-// # Read-after-write hazard (IMPORTANT)
+// # Read-after-write hazard and the convergence gate (IMPORTANT)
 //
 // A read routed to the candidate immediately after a write to the primary may
 // observe stale data if grid replication has not yet propagated the change.
 // That would make Observe report spurious drift or a missing resource,
 // triggering reconcile churn (repeated Update/Create against the primary).
 //
-// This package guards against that in two complementary ways:
+// This package guards against that in two complementary ways, neither of which
+// is a timer — there is no replication-lag knob to tune:
 //
 //  1. Shared OperationTrackerStore. The read and write connecters share a
 //     single upjet OperationTrackerStore, so they resolve to the *same*
 //     AsyncTracker per MR. The async runtime marks LastOperation running while
 //     an asynchronous Create/Update/Delete is in flight; because the tracker
-//     is shared, the read client's Observe sees IsRunning()==true and returns
-//     early (ResourceExists && ResourceUpToDate) instead of querying the
-//     candidate mid-flight. See the OTS decision in the package tests/notes.
+//     is shared, the read client's Observe sees IsRunning()==true and never
+//     probes the candidate mid-flight — it serves the primary instead.
 //
-//  2. Post-write grace window. Once the asynchronous write completes and the
-//     operation is no longer running, this decorator keeps routing Observe to
-//     the *write* (primary) client for GraceWindow, giving the grid time to
-//     replicate to the candidate before reads move back to it. The window is
-//     anchored to the observed completion of the async operation (detected via
-//     the shared tracker), not to the moment the async call returned, so a
-//     slow write does not consume the window prematurely.
+//  2. Candidate-observe convergence gate. After a write the decorator marks the
+//     MR "post-write" and keeps routing Observe to the *primary* while probing
+//     the candidate on each reconcile. Only once the candidate itself reports
+//     the resource Exists and UpToDate (candidateCaughtUp) does the marker
+//     clear and steady-state reads return to the candidate. The window ends
+//     when replication has demonstrably converged — observed, not timed.
+//
+// # Safe degradation
+//
+// If the candidate never catches up (e.g. a broken or lagging replica) the
+// post-write marker never clears and reads for that MR stay on the primary
+// indefinitely. This is intentional: the split degrades to no-offload rather
+// than ever serving stale data. There is deliberately no timeout and no
+// max-attempts.
+//
+// # Convergence seam
+//
+// The "has the candidate caught up?" decision is factored into candidateCaughtUp
+// so the convergence signal can be swapped without touching the routing state
+// machine. Today it uses the candidate's own Observe result; a future
+// implementation could instead compare the NIOS SOA serial watermark
+// (zone_auth.soa_serial_number) of the primary against the candidate behind
+// this same seam.
 //
 // The split is BUILT, COMPILES and is WIRED, but is UNVALIDATED against a real
-// NIOS grid. GraceWindow's default is a conservative starting point and must
-// be tuned to the customer's measured replication lag during e2e validation.
+// NIOS grid.
 package split
 
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -85,19 +108,14 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	dnsv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/dns/v1alpha1"
 )
 
-// GraceWindow is how long after an observed write completion reads continue to
-// be served from the write (primary) endpoint, to absorb grid replication lag
-// before reads move back to the candidate. It is a package-level knob so it
-// can be tuned without changing controller code; the default is conservative
-// and MUST be validated against the customer's real replication behavior.
-var GraceWindow = 30 * time.Second
-
-// now returns the current wall-clock time. It is a package-level indirection so
-// tests can drive the grace-window state machine deterministically; production
-// code leaves it as time.Now and behavior is unchanged.
-var now = time.Now
+// dnsGroup is the API group whose resources are eligible for the read/write
+// split. It mirrors apis/dns/v1alpha1.CRDGroup and is referenced by isDNS to
+// scope the candidate offload to DNS records only.
+const dnsGroup = dnsv1alpha1.CRDGroup
 
 // ManagementPolicies mirrors the provider's --enable-management-policies flag
 // onto the read connecter so the read-side Observe merges init parameters the
@@ -206,73 +224,93 @@ type external struct {
 	logger     logging.Logger
 }
 
-// writeState tracks, per MR UID, the read-after-write grace state. Access is
-// serialized by the manager's per-object reconciliation (MaxConcurrentReconciles
-// is 1 and controller-runtime serializes reconciles for a given object key), so
-// a single guarding mutex is sufficient.
-type writeState struct {
-	wasRunning bool
-	graceUntil time.Time
-}
-
+// postWrite tracks, per MR UID, whether the MR is in the post-write convergence
+// window: a write has been applied to the primary and the candidate has not yet
+// been observed to have caught up. While a UID is present here Observe is served
+// from the primary (and probes the candidate); the entry is removed once the
+// candidate converges (candidateCaughtUp) or the MR is deleted.
+//
+// Access is serialized by the manager's per-object reconciliation
+// (MaxConcurrentReconciles is 1 and controller-runtime serializes reconciles
+// for a given object key), so a single guarding mutex is sufficient.
 var (
-	wsMu    sync.Mutex
-	wsByUID = map[types.UID]*writeState{}
+	wsMu      sync.Mutex
+	postWrite = map[types.UID]struct{}{}
 )
 
-func stateFor(uid types.UID) *writeState {
+func markPostWrite(uid types.UID) {
 	wsMu.Lock()
 	defer wsMu.Unlock()
-	s, ok := wsByUID[uid]
-	if !ok {
-		s = &writeState{}
-		wsByUID[uid] = s
-	}
-	return s
+	postWrite[uid] = struct{}{}
 }
 
-// routeReadToPrimary decides whether an Observe should be served from the write
-// (primary) endpoint instead of the read (candidate) endpoint, and advances the
-// grace state machine. It returns true when either an async write is in flight
-// or the post-write grace window is still open.
-//
-// The window is anchored to the *observed completion* of the async operation:
-// while the shared tracker reports IsRunning we route to primary and remember
-// that a write was running; on the first Observe that finds it no longer
-// running we open a fresh GraceWindow from now. This is robust to the async
-// runtime clearing LastOperation (which would otherwise make an end-time-based
-// anchor panic/false-negative).
-func (e *external) routeReadToPrimary(mg xpresource.Managed) bool {
-	if e.sameClient {
-		// read == write; routing is irrelevant.
-		return false
-	}
-	tr, ok := mg.(ujresource.Terraformed)
-	if !ok {
-		return false
-	}
-	running := e.ots.Tracker(tr).LastOperation.IsRunning()
-	s := stateFor(mg.GetUID())
-
+func clearPostWrite(uid types.UID) {
 	wsMu.Lock()
 	defer wsMu.Unlock()
-	if running {
-		s.wasRunning = true
-		return true
-	}
-	if s.wasRunning {
-		// The async write just completed; start the replication grace window.
-		s.wasRunning = false
-		s.graceUntil = now().Add(GraceWindow)
-		return true
-	}
-	return now().Before(s.graceUntil)
+	delete(postWrite, uid)
+}
+
+func inPostWrite(uid types.UID) bool {
+	wsMu.Lock()
+	defer wsMu.Unlock()
+	_, ok := postWrite[uid]
+	return ok
+}
+
+// isDNS reports whether mg is a DNS record (API group
+// "dns.infoblox-nios.crossplane.io"). Only DNS resources are offloaded to the
+// read candidate; everything else (IPAM) always Observes against the primary.
+func isDNS(mg xpresource.Managed) bool {
+	return mg.GetObjectKind().GroupVersionKind().Group == dnsGroup
+}
+
+// candidateCaughtUp is the swappable convergence check for the read/write split:
+// it decides whether the read candidate has replicated the last primary write
+// and may therefore serve steady-state reads again.
+//
+// It is deliberately factored out of the routing state machine so the
+// convergence signal can be replaced without touching the state machine. Today
+// it trusts the candidate's own Observe result — the resource exists and is
+// up-to-date on the candidate. A future implementation could instead compare
+// the NIOS SOA serial watermark (zone_auth.soa_serial_number) of the primary
+// against the candidate here, and the state machine would be unchanged.
+func candidateCaughtUp(obs managed.ExternalObservation, err error) bool {
+	return err == nil && obs.ResourceExists && obs.ResourceUpToDate
 }
 
 func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.ExternalObservation, error) {
-	if e.routeReadToPrimary(mg) {
+	// read == write fallback: routing is irrelevant, serve from the write client.
+	if e.sameClient {
 		return e.write.Observe(ctx, mg)
 	}
+	tr, ok := mg.(ujresource.Terraformed)
+	if !ok {
+		return e.write.Observe(ctx, mg)
+	}
+	// GUARD #1: an async write is in flight on the shared tracker. Never probe
+	// the candidate mid-flight; serve the primary.
+	if e.ots.Tracker(tr).LastOperation.IsRunning() {
+		return e.write.Observe(ctx, mg)
+	}
+	// SCOPE: only DNS records are offloaded to the candidate; IPAM always reads
+	// the authoritative primary.
+	if !isDNS(mg) {
+		return e.write.Observe(ctx, mg)
+	}
+	// Post-write convergence gate: while the candidate has not been observed to
+	// have caught up, serve reads from the primary but probe the candidate. Once
+	// the candidate converges, clear the marker and serve from it. If it never
+	// converges the marker never clears and reads stay on the primary
+	// indefinitely (degrade to no-offload, never serve stale).
+	if inPostWrite(mg.GetUID()) {
+		obs, err := e.read.Observe(ctx, mg)
+		if candidateCaughtUp(obs, err) {
+			clearPostWrite(mg.GetUID())
+			return obs, nil
+		}
+		return e.write.Observe(ctx, mg)
+	}
+	// Steady state: read from the candidate.
 	return e.read.Observe(ctx, mg)
 }
 
@@ -280,6 +318,7 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	if err := e.primeWrite(ctx, mg); err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, "cannot prime the write client before create")
 	}
+	markPostWrite(mg.GetUID())
 	return e.write.Create(ctx, mg)
 }
 
@@ -287,6 +326,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 	if err := e.primeWrite(ctx, mg); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "cannot prime the write client before update")
 	}
+	markPostWrite(mg.GetUID())
 	return e.write.Update(ctx, mg)
 }
 
@@ -329,10 +369,8 @@ func (e *external) primeWrite(ctx context.Context, mg xpresource.Managed) error 
 }
 
 func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.ExternalDelete, error) {
-	// Clear any grace state; the resource is going away.
-	wsMu.Lock()
-	delete(wsByUID, mg.GetUID())
-	wsMu.Unlock()
+	// Clear any post-write marker; the resource is going away.
+	clearPostWrite(mg.GetUID())
 	return e.write.Delete(ctx, mg)
 }
 

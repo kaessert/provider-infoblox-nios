@@ -1,14 +1,18 @@
 # Example ProviderConfig enabling the Infoblox gridmaster read/write split.
 #
-# Read traffic (Observe) is routed to the gridmaster *candidate* (read_server)
-# and write traffic (Create/Update/Delete) to the *primary* gridmaster
-# (server), mirroring native tooling that uses read_url + write_url.
+# Read traffic (Observe) for DNS records is routed to the gridmaster *candidate*
+# (read_server) and write traffic (Create/Update/Delete) to the *primary*
+# gridmaster (server), mirroring native tooling that uses read_url + write_url.
+# Only DNS records are offloaded to the candidate; IPAM resources always read
+# the primary.
 #
 # The split is opt-in and backward compatible: omit read_server (or set it to
 # the same host as server) and behavior is identical to a single-endpoint
 # ProviderConfig.
 #
-# See docs/read-write-split.md for the replication-lag caveat and tuning notes.
+# After each write the decorator keeps reads on the primary until it observes
+# the candidate has caught up (a convergence gate, not a timer), then returns
+# reads to the candidate. See docs/read-write-split.md for details.
 apiVersion: infoblox-nios.crossplane.io/v1beta1
 kind: ProviderConfig
 metadata:

@@ -5,8 +5,6 @@ Copyright 2021 Upbound Inc.
 package split
 
 import (
-	"time"
-
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -21,8 +19,14 @@ func resetForTest() {
 	mu.Unlock()
 
 	wsMu.Lock()
-	wsByUID = map[types.UID]*writeState{}
+	postWrite = map[types.UID]struct{}{}
 	wsMu.Unlock()
-
-	now = time.Now
 }
+
+// seedPostWrite marks a UID as post-write, so tests can drive the convergence
+// gate without going through a full Create/Update.
+func seedPostWrite(uid types.UID) { markPostWrite(uid) }
+
+// isPostWrite reports whether a UID is currently in the post-write set, so tests
+// can assert the marker was set/cleared as expected.
+func isPostWrite(uid types.UID) bool { return inPostWrite(uid) }

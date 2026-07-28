@@ -70,9 +70,9 @@ func TestEnvtestSplitSmoke(t *testing.T) {
 		t.Skip("envtest assets not found; set KUBEBUILDER_ASSETS or run: setup-envtest use -p path. This validates claim #4 under the real async reconciler and needs the control-plane binaries.")
 	}
 
-	// Deterministic read routing: no replication grace window (the shared grid
-	// replicates instantly) and no management-policy init merge.
-	split.GraceWindow = 0
+	// Deterministic read routing: the shared grid replicates instantly, so the
+	// convergence gate returns reads to the candidate on the first post-write
+	// Observe; no management-policy init merge.
 	split.ManagementPolicies = false
 
 	g := newGrid()

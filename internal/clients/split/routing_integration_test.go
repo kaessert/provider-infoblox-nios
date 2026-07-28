@@ -211,15 +211,13 @@ func TestReadWriteRoutingAgainstMockWAPI(t *testing.T) {
 func buildSplitConnector(t *testing.T, primary, candidate *wapiMock, withReadServer bool) (managed.ExternalConnecter, *tjcontroller.OperationTrackerStore) {
 	t.Helper()
 
-	// Deterministic routing: disable the replication grace window so the first
-	// Observe after a write completes returns to the candidate immediately. The
-	// grace-window state machine itself is covered by TestGraceWindowStateMachine.
-	prevGrace := GraceWindow
-	GraceWindow = 0
+	// The convergence gate returns reads to the candidate as soon as the
+	// candidate reports the resource exists and is up-to-date; because both mocks
+	// share one grid, that happens on the first post-write Observe. The gate
+	// itself is unit-tested by TestConvergenceGate.
 	prevMP := ManagementPolicies
 	ManagementPolicies = false
 	t.Cleanup(func() {
-		GraceWindow = prevGrace
 		ManagementPolicies = prevMP
 	})
 
@@ -318,6 +316,9 @@ func newARecordMR(uid string) *dnsv1alpha1.ARecord {
 	mr := &dnsv1alpha1.ARecord{}
 	mr.SetName("a-" + uid)
 	mr.SetUID(types.UID("uid-" + uid))
+	// Populate the GVK so the split's DNS scope check (isDNS) recognises this as
+	// an offloadable DNS record; MRs built in-test do not carry TypeMeta.
+	mr.SetGroupVersionKind(dnsv1alpha1.ARecord_GroupVersionKind)
 	mr.Spec.ForProvider = dnsv1alpha1.ARecordParameters{
 		Fqdn:        ptr.To("test.example.com"),
 		IPAddr:      ptr.To("10.0.0.10"),
