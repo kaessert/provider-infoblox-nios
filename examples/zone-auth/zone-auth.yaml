@@ -28,8 +28,7 @@
 # uptest.upbound.io/update-parameter is intentionally omitted — it has
 # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
 # comment field below is a safe mutable scalar for update coverage;
-# field-level update testing is wired via post-assert-hook during the E2E
-# ticket.
+# field-level update testing is wired via the hook annotation below.
 apiVersion: zoneauth.infobloxnios.crossplane.io/v1alpha1
 kind: ZoneAuth
 metadata:
@@ -37,6 +36,10 @@ metadata:
   annotations:
     meta.upbound.io/example-id: zoneauth/v1alpha1/zoneauth
     uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-auth.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
 spec:
   forProvider:
     fqdn: example.com
