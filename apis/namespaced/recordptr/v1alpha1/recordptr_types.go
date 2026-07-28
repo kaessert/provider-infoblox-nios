@@ -274,7 +274,12 @@ type PTRRecordDiscoveredData struct {
 type PTRRecordParameters struct {
 	// Domain name this PTR record points to, in FQDN format. Changing it updates the record's _ref (best-effort target — WAPI does not verify that the referenced A/AAAA record exists).
 	// +kubebuilder:validation:Required
+	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1.ARecord
 	Ptrdname *string `json:"ptrdname"`
+	// +optional
+	PtrdnameRef *xpv1.NamespacedReference `json:"ptrdnameRef,omitempty"`
+	// +optional
+	PtrdnameSelector *xpv1.NamespacedSelector `json:"ptrdnameSelector,omitempty"`
 	// PTR record name in FQDN (in-addr.arpa/ip6.arpa) format. Auto-derived from ipv4Addr/ipv6Addr when omitted; renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"`
 	// IPv4 address the PTR record is keyed by (mutually exclusive with ipv6Addr).

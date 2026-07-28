@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	v1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -895,6 +896,16 @@ func (in *PTRRecordParameters) DeepCopyInto(out *PTRRecordParameters) {
 		in, out := &in.Ptrdname, &out.Ptrdname
 		*out = new(string)
 		**out = **in
+	}
+	if in.PtrdnameRef != nil {
+		in, out := &in.PtrdnameRef, &out.PtrdnameRef
+		*out = new(v1.Reference)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.PtrdnameSelector != nil {
+		in, out := &in.PtrdnameSelector, &out.PtrdnameSelector
+		*out = new(v1.Selector)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Name != nil {
 		in, out := &in.Name, &out.Name
