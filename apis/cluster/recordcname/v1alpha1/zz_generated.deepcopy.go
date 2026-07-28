@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	v1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -145,6 +146,16 @@ func (in *CNAMERecordParameters) DeepCopyInto(out *CNAMERecordParameters) {
 		in, out := &in.Canonical, &out.Canonical
 		*out = new(string)
 		**out = **in
+	}
+	if in.CanonicalRef != nil {
+		in, out := &in.CanonicalRef, &out.CanonicalRef
+		*out = new(v1.Reference)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.CanonicalSelector != nil {
+		in, out := &in.CanonicalSelector, &out.CanonicalSelector
+		*out = new(v1.Selector)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Comment != nil {
 		in, out := &in.Comment, &out.Comment

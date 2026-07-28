@@ -15,9 +15,14 @@ type CNAMERecordParameters struct {
 	// Alias name in FQDN format for the CNAME record. Renaming changes the record's _ref.
 	// +kubebuilder:validation:Required
 	Name *string `json:"name"`
-	// Canonical (target) name in FQDN format. WAPI does not require the target to exist, so this is a plain string field rather than a cross-resource reference; resolution is best-effort/optional.
+	// Canonical (target) name in FQDN format. WAPI does not require the target to exist, so canonicalRef/canonicalSelector are optional convenience for resolving an ARecord's FQDN — this field may also be set directly as a plain FQDN string.
 	// +kubebuilder:validation:Required
+	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1.ARecord
 	Canonical *string `json:"canonical"`
+	// +optional
+	CanonicalRef *xpv1.NamespacedReference `json:"canonicalRef,omitempty"`
+	// +optional
+	CanonicalSelector *xpv1.NamespacedSelector `json:"canonicalSelector,omitempty"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
 	// Time-to-live in seconds. Zero means the record is not cached.
@@ -46,7 +51,7 @@ type CNAMERecordObservation struct {
 	ID string `json:"id,omitempty"` // atProvider
 	// Alias name in FQDN format for the CNAME record. Renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"` // atProvider
-	// Canonical (target) name in FQDN format. WAPI does not require the target to exist, so this is a plain string field rather than a cross-resource reference; resolution is best-effort/optional.
+	// Canonical (target) name in FQDN format. WAPI does not require the target to exist, so canonicalRef/canonicalSelector are optional convenience for resolving an ARecord's FQDN — this field may also be set directly as a plain FQDN string.
 	Canonical *string `json:"canonical,omitempty"` // atProvider
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider

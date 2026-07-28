@@ -394,11 +394,16 @@ func aRecord() ResourceDescriptor {
 // parameter), so — like ARecord's `zone` — it is AtProvider-only with no
 // ForProvider counterpart and no CEL rule (see FieldDef.Immutable doc).
 //
-// `canonical` is a plain string field, not a cross-resource reference:
-// WAPI accepts any FQDN value for the CNAME target and does not require a
-// matching ARecord to exist in NIOS, so resolving it as a Ref/Selector-style
-// reference would be incorrect (see inventory.md's CNAMERecord
-// "Cross-Resource References" notes).
+// `canonical` carries the standard three-field cross-resource reference
+// pattern (value + Ref + Selector) targeting ARecord: WAPI accepts any FQDN
+// value for the CNAME target and does not require a matching ARecord to
+// exist in NIOS, so the Ref/Selector fields are optional convenience —
+// users may still set `canonical` directly as a plain FQDN string without
+// ever populating CanonicalRef/CanonicalSelector. TargetScope is left empty
+// so the generator mirrors the CNAMERecord variant's own scope (cluster
+// CNAMERecord references cluster ARecord; namespaced CNAMERecord references
+// namespaced ARecord) rather than pinning to a single scope, since ARecord
+// itself is dual-scope.
 func cnameRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "CNAMERecord",
@@ -421,7 +426,11 @@ func cnameRecord() ResourceDescriptor {
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
 				Required:    true,
-				Description: "Canonical (target) name in FQDN format. WAPI does not require the target to exist, so this is a plain string field rather than a cross-resource reference; resolution is best-effort/optional.",
+				Description: "Canonical (target) name in FQDN format. WAPI does not require the target to exist, so canonicalRef/canonicalSelector are optional convenience for resolving an ARecord's FQDN — this field may also be set directly as a plain FQDN string.",
+				Reference: &ReferenceDescriptor{
+					TargetKind: "ARecord",
+					TargetSlug: "recorda",
+				},
 			},
 			{
 				Name:        "Comment",
