@@ -22,6 +22,15 @@
 # derive the in-addr.arpa `name` when `name` is omitted, as in this example.
 #
 # Optional mutable fields: name, comment, ttl, useTtl, extAttrs.
+#
+# E2E fixture note: PTR record creation requires a matching reverse-mapping
+# zone (record:ptr's reverse `zone_auth`) to already exist on the Grid for
+# ipv4Addr's network in the given view — WAPI returns 400
+# IB.Data.Conflict("An invalid IP address or reverse zone was specified.")
+# otherwise. This test Grid Manager only has a reverse zone for 10.1.1.0/24
+# in DNS view "Internal" (no reverse zone exists in view "default"), so this
+# example intentionally deviates from record-a's 192.0.2.0/24 (TEST-NET-1)
+# convention and view "default".
 apiVersion: recordptr.infobloxnios.crossplane.io/v1alpha1
 kind: PTRRecord
 metadata:
@@ -41,8 +50,8 @@ metadata:
 spec:
   forProvider:
     ptrdname: www.example.com
-    ipv4Addr: 192.0.2.10
-    view: default
+    ipv4Addr: 10.1.1.10
+    view: Internal
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

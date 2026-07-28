@@ -10,6 +10,10 @@
 # Distinct identity: the ipv4Addr below differs from record-ptr.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, in-addr.arpa name) WAPI identity.
+#
+# E2E fixture note: see record-ptr.yaml's "E2E fixture note" — ipv4Addr must
+# be in 10.1.1.0/24 and view must be "Internal" to match the only reverse
+# zone configured on the test Grid Manager.
 apiVersion: recordptr.infobloxnios.m.crossplane.io/v1alpha1
 kind: PTRRecord
 metadata:
@@ -27,8 +31,8 @@ metadata:
 spec:
   forProvider:
     ptrdname: www-ns.example.com
-    ipv4Addr: 192.0.2.20
-    view: default
+    ipv4Addr: 10.1.1.20
+    view: Internal
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig
