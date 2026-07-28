@@ -1,0 +1,62 @@
+# CNAMERecord is a cluster-scoped Infoblox NIOS DNS "CNAME" record (WAPI
+# object type record:cname). See record-cname-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:cname/ZG5zLmJpbmRfY25hbWUk:alias.example.com/default")
+# from Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   name:      alias name in FQDN format. WAPI ties the record's `_ref` to
+#              (view, zone, name); the controller re-syncs the annotation
+#              if a rename changes the `_ref`.
+#   canonical: the canonical (target) name in FQDN format. WAPI does not
+#              require the target to exist, so this is a plain string
+#              field rather than a cross-resource reference.
+#   view:      the DNS view the record is created in. Immutable after
+#              creation (CEL rule enforced) — the UpdateCNAMERecord SDK
+#              call has no view parameter.
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
+kind: CNAMERecord
+metadata:
+  name: example-cnamerecord
+  annotations:
+    meta.upbound.io/example-id: recordcname/v1alpha1/cnamerecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing runs via the hook wired below, driven by
+    # the crossplane.io/update-test annotation.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-cname.sh
+    # comment and canonical are mutable scalars exercised by the update
+    # tester. name is mutable too but renaming changes the record's _ref
+    # (external identity) — that behavior is already covered by controller
+    # unit tests, so it is skipped here to keep the live update test
+    # scoped to identity-preserving field changes. ttl/useTtl/extAttrs are
+    # optional fields skipped for low update-test value. view is immutable.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by uptest"
+      - field: canonical
+        value: "updated-target.example.com"
+      - field: name
+        skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
+      - field: ttl
+        skip: "optional pointer field, low update-test value"
+      - field: useTtl
+        skip: "optional pointer field, low update-test value"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+spec:
+  forProvider:
+    name: alias.example.com
+    canonical: www.example.com
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

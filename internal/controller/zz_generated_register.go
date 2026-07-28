@@ -15,6 +15,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -29,6 +30,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		config.Setup,
 		recorda.SetupGated,
 		recordaaaa.SetupGated,
+		recordcname.SetupGated,
 		recordtxt.SetupGated,
 		zonedelegated.SetupGated,
 	} {
@@ -47,6 +49,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		config.Setup,
 		recorda.Setup,
 		recordaaaa.Setup,
+		recordcname.Setup,
 		recordtxt.Setup,
 		zonedelegated.Setup,
 	} {

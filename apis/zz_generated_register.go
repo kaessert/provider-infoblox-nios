@@ -11,11 +11,13 @@ import (
 
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
+	clusterrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	clusterrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
+	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
 	namespacedrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
@@ -33,6 +35,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordaaaa types.
 	AddToSchemes = append(AddToSchemes, clusterrecordaaaav1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Recordcname types.
+	AddToSchemes = append(AddToSchemes, clusterrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordtxt types.
 	AddToSchemes = append(AddToSchemes, clusterrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zonedelegated types.
@@ -41,6 +45,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordaaaa types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordaaaav1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Recordcname types.
+	AddToSchemes = append(AddToSchemes, namespacedrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordtxt types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Zonedelegated types.

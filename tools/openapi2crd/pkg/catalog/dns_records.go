@@ -364,3 +364,126 @@ func aRecord() ResourceDescriptor {
 		},
 	}
 }
+
+// cnameRecord returns the CNAMERecord resource descriptor.
+//
+// Source: tools/openapi/inventory.md, "### CNAMERecord" section (request=0,
+// response=15, both=7) — itself derived from the pinned
+// infoblox-go-client/v2 SDK (tools/openapi/specs/infobloxopen/). Per
+// inventory.md's notes, CNAMERecord is the "alternate pilot candidate —
+// simple alias record, fewer fields than ARecord"; this catalog entry
+// deliberately carries the curated field set that makes it useful as a
+// standalone resource (identity + record-specific fields) rather than the
+// full 22-field WAPI object mirror (cloud/AD/discovery integration fields
+// carried by ARecord's catalog entry are not repeated here — CNAME records
+// do not commonly participate in those integrations and no cataloged field
+// in the CNAME family requires them).
+//
+// External-name strategy: server-assigned (the WAPI `_ref` returned by
+// CreateCNAMERecord).
+//
+// Immutable fields: `view` is a CreateCNAMERecord parameter absent from
+// UpdateCNAMERecord's parameter list. Live WAPI probing found CNAME's
+// `view` is "soft-immutable" at the schema level (`supports=rwus`, i.e. the
+// schema technically allows update) but WAPI rejects the actual PUT at the
+// data level ("The action is not allowed. A parent was not found."). The
+// practical result is identical to ARecord's hard-immutable `view`, so it
+// carries the same CEL `self == oldSelf` treatment.
+//
+// `zone` is derived from name/view by WAPI (not a CreateCNAMERecord
+// parameter), so — like ARecord's `zone` — it is AtProvider-only with no
+// ForProvider counterpart and no CEL rule (see FieldDef.Immutable doc).
+//
+// `canonical` carries the standard three-field cross-resource reference
+// pattern (value + Ref + Selector) targeting ARecord: WAPI accepts any FQDN
+// value for the CNAME target and does not require a matching ARecord to
+// exist in NIOS, so the Ref/Selector fields are optional convenience —
+// users may still set `canonical` directly as a plain FQDN string without
+// ever populating CanonicalRef/CanonicalSelector. TargetScope is left empty
+// so the generator mirrors the CNAMERecord variant's own scope (cluster
+// CNAMERecord references cluster ARecord; namespaced CNAMERecord references
+// namespaced ARecord) rather than pinning to a single scope, since ARecord
+// itself is dual-scope.
+func cnameRecord() ResourceDescriptor {
+	return ResourceDescriptor{
+		Kind:                 "CNAMERecord",
+		Slug:                 "recordcname",
+		ClusterGroup:         clusterGroup("recordcname"),
+		NamespacedGroup:      namespacedGroup("recordcname"),
+		ExternalNameStrategy: StrategyServerAssigned,
+		Fields: []FieldDef{
+			{
+				Name:        "Name",
+				JSONName:    "name",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "Alias name in FQDN format for the CNAME record. Renaming changes the record's _ref.",
+			},
+			{
+				Name:        "Canonical",
+				JSONName:    "canonical",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "Canonical (target) name in FQDN format. WAPI does not require the target to exist, so canonicalRef/canonicalSelector are optional convenience for resolving an ARecord's FQDN — this field may also be set directly as a plain FQDN string.",
+				Reference: &ReferenceDescriptor{
+					TargetKind: "ARecord",
+					TargetSlug: "recorda",
+				},
+			},
+			{
+				Name:        "Comment",
+				JSONName:    "comment",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Description: "Comment for the record; maximum 256 characters.",
+			},
+			{
+				Name:        "TTL",
+				JSONName:    "ttl",
+				GoType:      goTypeInt64,
+				Scope:       FieldScopeBoth,
+				Description: "Time-to-live in seconds. Zero means the record is not cached.",
+			},
+			{
+				Name:        "UseTTL",
+				JSONName:    "useTtl",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Use flag for ttl — when false the zone/grid default TTL applies.",
+			},
+			{
+				Name:        "ExtAttrs",
+				JSONName:    "extAttrs",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeBoth,
+				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+			},
+			{
+				Name:        "View",
+				JSONName:    "view",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Immutable:   true,
+				Description: "DNS view in which the record resides, e.g. \"external\". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Schema-level supports=rwus (soft-mutable) but WAPI rejects the update at the data level (\"A parent was not found\"), so it is treated as immutable.",
+			},
+			{
+				Name:        "Ref",
+				JSONName:    "ref",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.",
+			},
+			{
+				Name:        "Zone",
+				JSONName:    "zone",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Immutable:   true,
+				Description: "Zone in which the record resides, e.g. \"zone.com\". Derived from name/view by WAPI — not a CreateCNAMERecord parameter, so it has no ForProvider counterpart.",
+			},
+		},
+	}
+}

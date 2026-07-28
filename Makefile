@@ -72,7 +72,9 @@ fallthrough: submodules
 
 UPTEST_LOCAL_DEPLOY_TARGET = local-deploy
 
-# Helper variables for comma-separated manifest lists (uptest CLI convention).
+# Helper variables for comma-separated manifest lists (uptest CLI convention —
+# `uptest e2e` takes a single comma-separated string; GNU Make's $(wildcard)
+# produces space-separated lists).
 comma := ,
 empty :=
 space := $(empty) $(empty)
@@ -82,12 +84,15 @@ space := $(empty) $(empty)
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml
 
 # E2E manifest tiers
-# Core tier: only needs API credentials (INFOBLOX_HOST,
+# CORE: resources that only need NIOS Grid Manager API credentials (no
+# additional external infrastructure to provision).
+# TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
 # INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
 # Grid Manager itself.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -100,7 +105,8 @@ UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
 UPTEST_SETUP_SCRIPT ?= test/setup.sh
 
 # Per-run uptest test-directory isolation (each concurrent E2E run gets its own
-# staging directory).
+# staging directory) — without this, concurrent E2E runs share /tmp/uptest-e2e
+# and corrupt each other's staged chainsaw test files.
 ifdef KIND_CLUSTER_NAME
   UPTEST_ARGS += --test-directory=/tmp/uptest-e2e-$(KIND_CLUSTER_NAME)
 endif
@@ -108,14 +114,14 @@ endif
 -include build/makelib/uptest.mk
 
 # E2E preflight: validate NIOS Grid Manager credentials before running the
-# (expensive) E2E pipeline.
+# (expensive) uptest pipeline.
 e2e-preflight: ## Validate credentials before E2E
 	@MISSING=""; \
 	[ -z "$${INFOBLOX_HOST:-}" ] && MISSING="$$MISSING INFOBLOX_HOST"; \
 	[ -z "$${INFOBLOX_USER:-}" ] && MISSING="$$MISSING INFOBLOX_USER"; \
 	[ -z "$${INFOBLOX_PASS:-}" ] && MISSING="$$MISSING INFOBLOX_PASS"; \
 	if [ -n "$$MISSING" ]; then \
-	  echo "ERROR: missing required credential env var(s):$$MISSING" >&2; \
+	  echo "ERROR: E2E requires a real NIOS Grid Manager. Missing env var(s):$$MISSING" >&2; \
 	  echo "  Set them as env vars (Hive nest secrets) or in ../.env" >&2; \
 	  exit 1; \
 	fi
@@ -133,6 +139,9 @@ e2e.record-txt: e2e
 e2e.zone-delegated: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_DELEGATED)
 e2e.zone-delegated: e2e
 
+e2e.record-cname: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_CNAME)
+e2e.record-cname: e2e
+
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
 e2e-full: e2e-preflight e2e
@@ -141,7 +150,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-txt e2e.zone-delegated e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-txt e2e.zone-delegated e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -321,3 +330,38 @@ crossplane.help:
 help-special: crossplane.help
 
 .PHONY: crossplane.help help-special
+
+# ====================================================================================
+# Update-tester standalone targets (the update-tester convergence-check convention)
+#
+# These invoke the update-tester tool directly (converge + per-field run)
+# against both scope variants of each resource. They are separate from the
+# uptest post-assert hook integration (which also runs update-tester as part
+# of the full `make e2e.<resource>` Create→Update→Import→Delete cycle) — use
+# these for a fast, standalone check against an already-deployed resource.
+#
+# Guarded: tools/update-tester has not been scaffolded for this provider yet,
+# so these targets no-op with a message rather than failing the build. Once
+# tools/update-tester/*.go exists, $(UPDATE_TESTER) builds normally and the
+# targets run the real converge/run cycle.
+
+UPDATE_TESTER := tools/update-tester/update-tester
+
+$(UPDATE_TESTER):
+	@if [ -d tools/update-tester ] && ls tools/update-tester/*.go >/dev/null 2>&1; then \
+	  cd tools/update-tester && $(GO) build -o update-tester . ; \
+	else \
+	  echo "update-tester: tools/update-tester not yet scaffolded — skipping (no-op)"; \
+	fi
+
+update-test.record-cname: $(UPDATE_TESTER) ## Update test for CNAMERecord (per-field convergence check)
+	@if [ -x $(UPDATE_TESTER) ]; then \
+	  $(UPDATE_TESTER) converge examples/record-cname/record-cname.yaml; \
+	  $(UPDATE_TESTER) run examples/record-cname/record-cname.yaml; \
+	  $(UPDATE_TESTER) converge examples/record-cname/record-cname-namespaced.yaml; \
+	  $(UPDATE_TESTER) run examples/record-cname/record-cname-namespaced.yaml; \
+	else \
+	  echo "update-test.record-cname: update-tester not available yet — no-op"; \
+	fi
+
+.PHONY: update-test.record-cname
