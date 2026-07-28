@@ -93,14 +93,15 @@ UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/h
 UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
+UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that only need NIOS Grid Manager API credentials (no
 # additional external infrastructure to provision).
 # TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
 # INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
-# Grid Manager itself. HostRecord, Network, and RangeTemplate are also tier:core.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
+# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth, and IPv4SharedNetwork are also tier:core.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -173,6 +174,9 @@ e2e.range-template: e2e
 e2e.zone-auth: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_AUTH)
 e2e.zone-auth: e2e
 
+e2e.ipv4-shared-network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK)
+e2e.ipv4-shared-network: e2e
+
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
 e2e-full: e2e-preflight e2e
@@ -181,7 +185,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -237,7 +241,13 @@ update-test.zone-auth: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/zone-auth/zone-auth-namespaced.yaml
 	$(UPDATE_TESTER) run examples/zone-auth/zone-auth-namespaced.yaml
 
-.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated
+update-test.ipv4-shared-network: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network.yaml
+	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network.yaml
+	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+
+.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network
 
 update-test.network-view: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/network-view/network-view.yaml

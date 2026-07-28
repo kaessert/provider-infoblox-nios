@@ -846,9 +846,71 @@ kubectl apply -f examples/network/network.yaml
 kubectl apply -f examples/network/network-namespaced.yaml
 ```
 
+### IPv4SharedNetwork
 
-kubectl apply -f examples/range-template/range-template.yaml
-kubectl apply -f examples/range-template/range-template-namespaced.yaml
+Manage Infoblox NIOS IPv4 shared networks (WAPI object type `sharednetwork`)
+— a group of member networks that share a single DHCP address pool.
+
+**Cluster-scoped** (`ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network
+spec:
+  forProvider:
+    name: example-shared-network
+    networks:
+      - 203.0.113.0/24
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-shared-network-ns
+    networks:
+      - 203.0.113.128/25
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation —
+do not set it manually.
+
+Each entry in `networks` must match the CIDR of an existing Network object
+on the Grid Manager — WAPI validates shared-network membership against real
+network objects, not arbitrary strings. This provider ships a Network
+managed resource; create the referenced Network objects first (or ensure
+they already exist on the target Grid Manager) before applying an
+IPv4SharedNetwork that references their CIDRs.
+
+The `networkView` field is immutable after creation: although the
+underlying SDK's update call accepts a `networkView` parameter, live WAPI
+schema probing found the Grid Manager rejects changing it once the shared
+network is created. All other fields (`name`, `comment`, `extAttrs`,
+`disable`, `useOptions`, `options`) are mutable in place via WAPI PUT.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network.yaml
+kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 ```
 
 ## Development

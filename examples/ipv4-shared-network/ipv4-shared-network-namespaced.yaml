@@ -1,0 +1,38 @@
+# IPv4SharedNetwork is the namespace-scoped variant of the Infoblox NIOS
+# shared network. See ipv4-shared-network.yaml for the cluster-scoped
+# variant and full field documentation — this file only documents what
+# differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the name and CIDR below differ from
+# ipv4-shared-network.yaml's so both examples can be applied to the same
+# NIOS Grid Manager at once without colliding on the same shared-network
+# name or member-network CIDR.
+apiVersion: ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: ipv4sharednetwork/v1alpha1/ipv4sharednetwork
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # ipv4-shared-network.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-ipv4-shared-network-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+spec:
+  forProvider:
+    name: example-shared-network-ns
+    networks:
+      - 203.0.113.128/25
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
