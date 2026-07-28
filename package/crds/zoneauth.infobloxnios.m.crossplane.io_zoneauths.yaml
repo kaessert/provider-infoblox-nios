@@ -1,0 +1,757 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: zoneauths.zoneauth.infobloxnios.m.crossplane.io
+spec:
+  group: zoneauth.infobloxnios.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - infobloxnios
+    kind: ZoneAuth
+    listKind: ZoneAuthList
+    plural: zoneauths
+    singular: zoneauth
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ZoneAuth is the Namespaced-scoped managed resource representing
+          an Infoblox NIOS ZoneAuth.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ZoneAuthSpec defines the desired state of ZoneAuth.
+            properties:
+              forProvider:
+                description: ForProvider holds the user-supplied parameters for this
+                  ZoneAuth.
+                properties:
+                  comment:
+                    description: Comment for the zone; maximum 256 characters.
+                    type: string
+                  disable:
+                    description: Determines whether the zone is disabled. When false,
+                      the zone is enabled.
+                    type: boolean
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  externalPrimaries:
+                    description: External (non-Grid) primary servers for this zone.
+                    items:
+                      description: ExternalServer identifies an external (non-Grid)
+                        DNS server acting as a primary or secondary for a zone, or
+                        a preferred-primaries entry (mirrors the SDK's NameServer
+                        struct).
+                      properties:
+                        address:
+                          description: IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: Resolvable domain name of the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether this name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Whether the NS record for this server is hidden
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: Generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: Use flag for tsigKeyName.
+                          type: boolean
+                      type: object
+                    type: array
+                  externalSecondaries:
+                    description: External (non-Grid) secondary servers for this zone.
+                    items:
+                      description: ExternalServer identifies an external (non-Grid)
+                        DNS server acting as a primary or secondary for a zone, or
+                        a preferred-primaries entry (mirrors the SDK's NameServer
+                        struct).
+                      properties:
+                        address:
+                          description: IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: Resolvable domain name of the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether this name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Whether the NS record for this server is hidden
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: Generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: Use flag for tsigKeyName.
+                          type: boolean
+                      type: object
+                    type: array
+                  fqdn:
+                    description: Fully-qualified domain name of the zone, e.g. "example.com".
+                      Immutable — WAPI rejects a PUT that changes it with "Field is
+                      not allowed for update".
+                    type: string
+                    x-kubernetes-validations:
+                    - message: fqdn is immutable after creation
+                      rule: self == oldSelf
+                  gridPrimary:
+                    description: Grid members that act as primary servers for this
+                      zone.
+                    items:
+                      description: MemberServer identifies a Grid member acting as
+                        a primary or secondary server for a zone (mirrors the SDK's
+                        Memberserver struct).
+                      properties:
+                        enablePreferredPrimaries:
+                          description: Whether preferredPrimaries is used for this
+                            member.
+                          type: boolean
+                        gridReplicate:
+                          description: Whether zone data reaches this member via DNS
+                            zone transfer (true) or Grid replication (false).
+                          type: boolean
+                        lead:
+                          description: Whether the Grid lead secondary performs zone
+                            transfers to non-lead secondaries.
+                          type: boolean
+                        name:
+                          description: Grid member name.
+                          type: string
+                        preferredPrimaries:
+                          description: Primary preference list of Grid members and/or
+                            external servers for this member.
+                          items:
+                            description: ExternalServer identifies an external (non-Grid)
+                              DNS server acting as a primary or secondary for a zone,
+                              or a preferred-primaries entry (mirrors the SDK's NameServer
+                              struct).
+                            properties:
+                              address:
+                                description: IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: Resolvable domain name of the external
+                                  DNS server.
+                                type: string
+                              sharedWithMsParentDelegation:
+                                description: Whether this name server is shared with
+                                  the parent Microsoft primary zone's delegation server.
+                                type: boolean
+                              stealth:
+                                description: Whether the NS record for this server
+                                  is hidden from DNS queries.
+                                type: boolean
+                              tsigKey:
+                                description: Generated TSIG key.
+                                type: string
+                              tsigKeyAlg:
+                                description: TSIG key algorithm.
+                                type: string
+                              tsigKeyName:
+                                description: TSIG key name.
+                                type: string
+                              useTsigKeyName:
+                                description: Use flag for tsigKeyName.
+                                type: boolean
+                            type: object
+                          type: array
+                        stealth:
+                          description: Whether this Grid member is in stealth mode
+                            (its NS record is hidden from DNS queries).
+                          type: boolean
+                      type: object
+                    type: array
+                  gridSecondaries:
+                    description: Grid members that act as secondary servers for this
+                      zone.
+                    items:
+                      description: MemberServer identifies a Grid member acting as
+                        a primary or secondary server for a zone (mirrors the SDK's
+                        Memberserver struct).
+                      properties:
+                        enablePreferredPrimaries:
+                          description: Whether preferredPrimaries is used for this
+                            member.
+                          type: boolean
+                        gridReplicate:
+                          description: Whether zone data reaches this member via DNS
+                            zone transfer (true) or Grid replication (false).
+                          type: boolean
+                        lead:
+                          description: Whether the Grid lead secondary performs zone
+                            transfers to non-lead secondaries.
+                          type: boolean
+                        name:
+                          description: Grid member name.
+                          type: string
+                        preferredPrimaries:
+                          description: Primary preference list of Grid members and/or
+                            external servers for this member.
+                          items:
+                            description: ExternalServer identifies an external (non-Grid)
+                              DNS server acting as a primary or secondary for a zone,
+                              or a preferred-primaries entry (mirrors the SDK's NameServer
+                              struct).
+                            properties:
+                              address:
+                                description: IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: Resolvable domain name of the external
+                                  DNS server.
+                                type: string
+                              sharedWithMsParentDelegation:
+                                description: Whether this name server is shared with
+                                  the parent Microsoft primary zone's delegation server.
+                                type: boolean
+                              stealth:
+                                description: Whether the NS record for this server
+                                  is hidden from DNS queries.
+                                type: boolean
+                              tsigKey:
+                                description: Generated TSIG key.
+                                type: string
+                              tsigKeyAlg:
+                                description: TSIG key algorithm.
+                                type: string
+                              tsigKeyName:
+                                description: TSIG key name.
+                                type: string
+                              useTsigKeyName:
+                                description: Use flag for tsigKeyName.
+                                type: boolean
+                            type: object
+                          type: array
+                        stealth:
+                          description: Whether this Grid member is in stealth mode
+                            (its NS record is hidden from DNS queries).
+                          type: boolean
+                      type: object
+                    type: array
+                  nsGroup:
+                    description: Name server group that serves DNS for this zone.
+                    type: string
+                  soaDefaultTtl:
+                    description: TTL (in seconds) of the SOA record of this zone —
+                      the length of time data from the zone is cached.
+                    format: int32
+                    type: integer
+                  soaExpire:
+                    description: Number of seconds after which a secondary server
+                      stops answering for the zone because its data is considered
+                      too old to be useful.
+                    format: int32
+                    type: integer
+                  soaNegativeTtl:
+                    description: Negative-caching TTL (in seconds) of the zone's SOA
+                      record — how long a secondary server caches "Does Not Respond"
+                      answers.
+                    format: int32
+                    type: integer
+                  soaRefresh:
+                    description: Interval (in seconds) at which a secondary server
+                      checks the primary server for fresh zone data.
+                    format: int32
+                    type: integer
+                  soaRetry:
+                    description: Number of seconds a secondary server waits before
+                      retrying the primary server after a failed connection.
+                    format: int32
+                    type: integer
+                  view:
+                    description: DNS view in which the zone resides, e.g. "external".
+                      Defaults to the Grid's default view if unset at creation. Immutable
+                      — WAPI rejects a PUT that changes it with "Cannot move zones
+                      between views".
+                    type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
+                  zoneFormat:
+                    description: Format of the zone. Immutable — WAPI rejects a PUT
+                      that changes it with "Field is not allowed for update".
+                    enum:
+                    - FORWARD
+                    - IPV4
+                    - IPV6
+                    type: string
+                    x-kubernetes-validations:
+                    - message: zoneFormat is immutable after creation
+                      rule: self == oldSelf
+                required:
+                - fqdn
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: ZoneAuthStatus defines the observed state of ZoneAuth.
+            properties:
+              atProvider:
+                description: AtProvider holds the observed values from the Infoblox
+                  NIOS WAPI.
+                properties:
+                  comment:
+                    description: Comment for the zone; maximum 256 characters.
+                    type: string
+                  disable:
+                    description: Determines whether the zone is disabled. When false,
+                      the zone is enabled.
+                    type: boolean
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  externalPrimaries:
+                    description: External (non-Grid) primary servers for this zone.
+                    items:
+                      description: ExternalServer identifies an external (non-Grid)
+                        DNS server acting as a primary or secondary for a zone, or
+                        a preferred-primaries entry (mirrors the SDK's NameServer
+                        struct).
+                      properties:
+                        address:
+                          description: IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: Resolvable domain name of the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether this name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Whether the NS record for this server is hidden
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: Generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: Use flag for tsigKeyName.
+                          type: boolean
+                      type: object
+                    type: array
+                  externalSecondaries:
+                    description: External (non-Grid) secondary servers for this zone.
+                    items:
+                      description: ExternalServer identifies an external (non-Grid)
+                        DNS server acting as a primary or secondary for a zone, or
+                        a preferred-primaries entry (mirrors the SDK's NameServer
+                        struct).
+                      properties:
+                        address:
+                          description: IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: Resolvable domain name of the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether this name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Whether the NS record for this server is hidden
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: Generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: Use flag for tsigKeyName.
+                          type: boolean
+                      type: object
+                    type: array
+                  fqdn:
+                    description: Fully-qualified domain name of the zone, e.g. "example.com".
+                      Immutable — WAPI rejects a PUT that changes it with "Field is
+                      not allowed for update".
+                    type: string
+                  gridPrimary:
+                    description: Grid members that act as primary servers for this
+                      zone.
+                    items:
+                      description: MemberServer identifies a Grid member acting as
+                        a primary or secondary server for a zone (mirrors the SDK's
+                        Memberserver struct).
+                      properties:
+                        enablePreferredPrimaries:
+                          description: Whether preferredPrimaries is used for this
+                            member.
+                          type: boolean
+                        gridReplicate:
+                          description: Whether zone data reaches this member via DNS
+                            zone transfer (true) or Grid replication (false).
+                          type: boolean
+                        lead:
+                          description: Whether the Grid lead secondary performs zone
+                            transfers to non-lead secondaries.
+                          type: boolean
+                        name:
+                          description: Grid member name.
+                          type: string
+                        preferredPrimaries:
+                          description: Primary preference list of Grid members and/or
+                            external servers for this member.
+                          items:
+                            description: ExternalServer identifies an external (non-Grid)
+                              DNS server acting as a primary or secondary for a zone,
+                              or a preferred-primaries entry (mirrors the SDK's NameServer
+                              struct).
+                            properties:
+                              address:
+                                description: IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: Resolvable domain name of the external
+                                  DNS server.
+                                type: string
+                              sharedWithMsParentDelegation:
+                                description: Whether this name server is shared with
+                                  the parent Microsoft primary zone's delegation server.
+                                type: boolean
+                              stealth:
+                                description: Whether the NS record for this server
+                                  is hidden from DNS queries.
+                                type: boolean
+                              tsigKey:
+                                description: Generated TSIG key.
+                                type: string
+                              tsigKeyAlg:
+                                description: TSIG key algorithm.
+                                type: string
+                              tsigKeyName:
+                                description: TSIG key name.
+                                type: string
+                              useTsigKeyName:
+                                description: Use flag for tsigKeyName.
+                                type: boolean
+                            type: object
+                          type: array
+                        stealth:
+                          description: Whether this Grid member is in stealth mode
+                            (its NS record is hidden from DNS queries).
+                          type: boolean
+                      type: object
+                    type: array
+                  gridSecondaries:
+                    description: Grid members that act as secondary servers for this
+                      zone.
+                    items:
+                      description: MemberServer identifies a Grid member acting as
+                        a primary or secondary server for a zone (mirrors the SDK's
+                        Memberserver struct).
+                      properties:
+                        enablePreferredPrimaries:
+                          description: Whether preferredPrimaries is used for this
+                            member.
+                          type: boolean
+                        gridReplicate:
+                          description: Whether zone data reaches this member via DNS
+                            zone transfer (true) or Grid replication (false).
+                          type: boolean
+                        lead:
+                          description: Whether the Grid lead secondary performs zone
+                            transfers to non-lead secondaries.
+                          type: boolean
+                        name:
+                          description: Grid member name.
+                          type: string
+                        preferredPrimaries:
+                          description: Primary preference list of Grid members and/or
+                            external servers for this member.
+                          items:
+                            description: ExternalServer identifies an external (non-Grid)
+                              DNS server acting as a primary or secondary for a zone,
+                              or a preferred-primaries entry (mirrors the SDK's NameServer
+                              struct).
+                            properties:
+                              address:
+                                description: IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: Resolvable domain name of the external
+                                  DNS server.
+                                type: string
+                              sharedWithMsParentDelegation:
+                                description: Whether this name server is shared with
+                                  the parent Microsoft primary zone's delegation server.
+                                type: boolean
+                              stealth:
+                                description: Whether the NS record for this server
+                                  is hidden from DNS queries.
+                                type: boolean
+                              tsigKey:
+                                description: Generated TSIG key.
+                                type: string
+                              tsigKeyAlg:
+                                description: TSIG key algorithm.
+                                type: string
+                              tsigKeyName:
+                                description: TSIG key name.
+                                type: string
+                              useTsigKeyName:
+                                description: Use flag for tsigKeyName.
+                                type: boolean
+                            type: object
+                          type: array
+                        stealth:
+                          description: Whether this Grid member is in stealth mode
+                            (its NS record is hidden from DNS queries).
+                          type: boolean
+                      type: object
+                    type: array
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
+                  nsGroup:
+                    description: Name server group that serves DNS for this zone.
+                    type: string
+                  ref:
+                    description: Server-assigned opaque object reference (WAPI `_ref`).
+                      Mirrors the crossplane.io/external-name annotation for observability
+                      and uptest import verification. Stable across the resource's
+                      lifetime — every field it embeds (fqdn, view, zoneFormat) is
+                      immutable.
+                    type: string
+                  soaDefaultTtl:
+                    description: TTL (in seconds) of the SOA record of this zone —
+                      the length of time data from the zone is cached.
+                    format: int32
+                    type: integer
+                  soaExpire:
+                    description: Number of seconds after which a secondary server
+                      stops answering for the zone because its data is considered
+                      too old to be useful.
+                    format: int32
+                    type: integer
+                  soaNegativeTtl:
+                    description: Negative-caching TTL (in seconds) of the zone's SOA
+                      record — how long a secondary server caches "Does Not Respond"
+                      answers.
+                    format: int32
+                    type: integer
+                  soaRefresh:
+                    description: Interval (in seconds) at which a secondary server
+                      checks the primary server for fresh zone data.
+                    format: int32
+                    type: integer
+                  soaRetry:
+                    description: Number of seconds a secondary server waits before
+                      retrying the primary server after a failed connection.
+                    format: int32
+                    type: integer
+                  view:
+                    description: DNS view in which the zone resides, e.g. "external".
+                      Defaults to the Grid's default view if unset at creation. Immutable
+                      — WAPI rejects a PUT that changes it with "Cannot move zones
+                      between views".
+                    type: string
+                  zoneFormat:
+                    description: Format of the zone. Immutable — WAPI rejects a PUT
+                      that changes it with "Field is not allowed for update".
+                    type: string
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

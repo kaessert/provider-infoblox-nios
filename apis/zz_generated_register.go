@@ -21,6 +21,7 @@ import (
 	clusterrecordsrvv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordsrv/v1alpha1"
 	clusterrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	clusterzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
@@ -34,6 +35,7 @@ import (
 	namespacedrecordsrvv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
 	namespacedrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	namespacedzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
 	namespacedzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
 )
 
@@ -67,6 +69,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordsrvv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordtxt types.
 	AddToSchemes = append(AddToSchemes, clusterrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Zoneauth types.
+	AddToSchemes = append(AddToSchemes, clusterzoneauthv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zonedelegated types.
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Hostrecord types.
@@ -91,6 +95,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedrecordsrvv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordtxt types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Zoneauth types.
+	AddToSchemes = append(AddToSchemes, namespacedzoneauthv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Zonedelegated types.
 	AddToSchemes = append(AddToSchemes, namespacedzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 }
