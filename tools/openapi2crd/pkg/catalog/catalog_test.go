@@ -196,6 +196,57 @@ func TestZoneDelegatedFieldCounts(t *testing.T) {
 	}
 }
 
+// TestFindResourceZoneForward verifies FindResource returns the ZoneForward
+// descriptor for its slug, including its cluster/namespaced API groups.
+func TestFindResourceZoneForward(t *testing.T) {
+	rd, ok := FindResource("zoneforward")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneforward")
+	}
+	if rd.Kind != "ZoneForward" {
+		t.Errorf("Kind = %q, want ZoneForward", rd.Kind)
+	}
+	if rd.ClusterGroup != "zoneforward.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want zoneforward.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "zoneforward.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want zoneforward.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestZoneForwardFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### ZoneForward" section
+// (request=0, response=1, both=11) — a regression guard against catalog
+// authoring drift.
+func TestZoneForwardFieldCounts(t *testing.T) {
+	rd, ok := FindResource("zoneforward")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneforward")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 1 {
+		t.Errorf("response-scope field count = %d, want 1", resp)
+	}
+	if both != 11 {
+		t.Errorf("both-scope field count = %d, want 11", both)
+	}
+}
+
 // TestZoneDelegatedImmutableFields verifies fqdn, view, and zoneFormat are
 // marked Immutable — the fields absent from UpdateZoneDelegated's SDK
 // signature.
@@ -830,6 +881,13 @@ func TestZoneAuthImmutableFields(t *testing.T) {
 	rd, ok := FindResource("zoneauth")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "zoneauth")
+// TestZoneForwardImmutableFields verifies the three live-verified immutable
+// fields (fqdn, view, zoneFormat) carry Immutable=true and every other
+// field does not.
+func TestZoneForwardImmutableFields(t *testing.T) {
+	rd, ok := FindResource("zoneforward")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneforward")
 	}
 
 	wantImmutable := map[string]bool{
@@ -929,5 +987,22 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("NetworkContainer descriptor has no NetworkView field")
+// TestZoneForwardNestedTypes verifies the NameServer and ForwardingServer
+// nested types are present with the fields consumed by forwardTo /
+// forwardingServers.
+func TestZoneForwardNestedTypes(t *testing.T) {
+	rd, ok := FindResource("zoneforward")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneforward")
+	}
+
+	names := map[string]bool{}
+	for _, nt := range rd.NestedTypes {
+		names[nt.TypeName] = true
+	}
+	for _, want := range []string{"NameServer", "ForwardingServer"} {
+		if !names[want] {
+			t.Errorf("NestedTypes missing %q", want)
+		}
 	}
 }

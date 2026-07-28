@@ -31,6 +31,7 @@ import (
 	namespacednetworkcontainerv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
 	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	namespacedrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
+	clusterzoneforwardv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
 	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
@@ -41,6 +42,7 @@ import (
 	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
 	namespacedzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
+	namespacedzoneforwardv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneforward/v1alpha1"
 )
 
 // AddToSchemes may be used to add all resources defined in the project to a Scheme.
@@ -93,6 +95,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacednetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Rangetemplate types.
 	AddToSchemes = append(AddToSchemes, namespacedrangetemplatev1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Zoneforward types.
+	AddToSchemes = append(AddToSchemes, clusterzoneforwardv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordaaaa types.
@@ -111,6 +115,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedzoneauthv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Zonedelegated types.
 	AddToSchemes = append(AddToSchemes, namespacedzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Zoneforward types.
+	AddToSchemes = append(AddToSchemes, namespacedzoneforwardv1alpha1.SchemeBuilder.AddToScheme)
 }
 
 // AddToScheme adds all Resources to the Scheme.
