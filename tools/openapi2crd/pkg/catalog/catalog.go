@@ -212,6 +212,7 @@ func All() []ResourceDescriptor {
 		aaaaRecord(),
 		cnameRecord(),
 		mxRecord(),
+		ptrRecord(),
 		txtRecord(),
 		zoneDelegated(),
 	}

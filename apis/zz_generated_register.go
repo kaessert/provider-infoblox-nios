@@ -13,6 +13,7 @@ import (
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	clusterrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	clusterrecordmxv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordmx/v1alpha1"
+	clusterrecordptrv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordptr/v1alpha1"
 	clusterrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
@@ -20,6 +21,7 @@ import (
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
 	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
 	namespacedrecordmxv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordmx/v1alpha1"
+	namespacedrecordptrv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordptr/v1alpha1"
 	namespacedrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
@@ -41,6 +43,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordmx types.
 	AddToSchemes = append(AddToSchemes, clusterrecordmxv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Recordptr types.
+	AddToSchemes = append(AddToSchemes, clusterrecordptrv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordtxt types.
 	AddToSchemes = append(AddToSchemes, clusterrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zonedelegated types.
@@ -53,6 +57,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedrecordcnamev1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordmx types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordmxv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Recordptr types.
+	AddToSchemes = append(AddToSchemes, namespacedrecordptrv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordtxt types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Zonedelegated types.

@@ -292,6 +292,31 @@ func TestAllContainsMXRecord(t *testing.T) {
 	found := false
 	for _, rd := range All() {
 		if rd.Slug != "recordmx" {
+// TestFindResourcePTRRecord verifies FindResource returns the PTRRecord
+// descriptor for its slug, with correctly formed cluster/namespaced groups.
+func TestFindResourcePTRRecord(t *testing.T) {
+	rd, ok := FindResource("recordptr")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordptr")
+	}
+	if rd.Kind != "PTRRecord" {
+		t.Errorf("Kind = %q, want PTRRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "recordptr.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want recordptr.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "recordptr.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want recordptr.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestAllContainsPTRRecord verifies the catalog's All() includes PTRRecord
+// with a non-empty field list and nested types (Discoverydata, CloudInfo,
+// etc. mirrored from the shared DNS record SDK structs).
+func TestAllContainsPTRRecord(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "recordptr" {
 			continue
 		}
 		found = true
@@ -315,6 +340,25 @@ func TestMXRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordmx")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "recordmx")
+			t.Errorf("PTRRecord descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) == 0 {
+			t.Errorf("PTRRecord descriptor has zero nested types (expected discoveredData, cloudInfo, etc.)")
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the recordptr resource")
+	}
+}
+
+// TestPTRRecordFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### PTRRecord" section
+// (request=0, response=16, both=9) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug.
+func TestPTRRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordptr")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordptr")
 	}
 
 	var req, resp, both int
@@ -338,4 +382,46 @@ func TestMXRecordFieldCounts(t *testing.T) {
 	if both != 8 {
 		t.Errorf("both-scope field count = %d, want 8", both)
 	}
+}
+	if resp != 16 {
+		t.Errorf("response-scope field count = %d, want 16", resp)
+	}
+	if both != 9 {
+		t.Errorf("both-scope field count = %d, want 9", both)
+	}
+}
+
+// TestPTRRecordPtrdnameHasReference verifies ptrdname is cataloged with a
+// Reference descriptor targeting the namespaced ARecord — PTRRecord's
+// ptrdname commonly names an ARecord's FQDN, so the generated type carries
+// the standard three-field reference pattern (value + Ref + Selector) even
+// though WAPI itself does not enforce that the target exists.
+func TestPTRRecordPtrdnameHasReference(t *testing.T) {
+	rd, ok := FindResource("recordptr")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordptr")
+	}
+
+	for _, f := range rd.Fields {
+		if f.Name != "Ptrdname" {
+			continue
+		}
+		if f.Reference == nil {
+			t.Fatalf("Ptrdname.Reference = nil, want a ReferenceDescriptor targeting ARecord")
+		}
+		if f.Reference.TargetKind != "ARecord" {
+			t.Errorf("Ptrdname.Reference.TargetKind = %q, want ARecord", f.Reference.TargetKind)
+		}
+		if f.Reference.TargetSlug != "recorda" {
+			t.Errorf("Ptrdname.Reference.TargetSlug = %q, want recorda", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != "namespaced" {
+			t.Errorf("Ptrdname.Reference.TargetScope = %q, want namespaced", f.Reference.TargetScope)
+		}
+		if f.Reference.Extractor != "" {
+			t.Errorf("Ptrdname.Reference.Extractor = %q, want empty (default reference.ExternalName())", f.Reference.Extractor)
+		}
+		return
+	}
+	t.Errorf("PTRRecord descriptor has no Ptrdname field")
 }

@@ -1,0 +1,829 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: ptrrecords.recordptr.infobloxnios.m.crossplane.io
+spec:
+  group: recordptr.infobloxnios.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - infobloxnios
+    kind: PTRRecord
+    listKind: PTRRecordList
+    plural: ptrrecords
+    singular: ptrrecord
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: PTRRecord is the Namespaced-scoped managed resource representing
+          an Infoblox NIOS PTRRecord.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PTRRecordSpec defines the desired state of PTRRecord.
+            properties:
+              forProvider:
+                description: ForProvider holds the user-supplied parameters for this
+                  PTRRecord.
+                properties:
+                  comment:
+                    description: Comment for the record; maximum 256 characters.
+                    type: string
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  ipv4Addr:
+                    description: IPv4 address the PTR record is keyed by (mutually
+                      exclusive with ipv6Addr).
+                    type: string
+                  ipv6Addr:
+                    description: IPv6 address the PTR record is keyed by (mutually
+                      exclusive with ipv4Addr).
+                    type: string
+                  name:
+                    description: PTR record name in FQDN (in-addr.arpa/ip6.arpa) format.
+                      Auto-derived from ipv4Addr/ipv6Addr when omitted; renaming changes
+                      the record's _ref.
+                    type: string
+                  ptrdname:
+                    description: Domain name this PTR record points to, in FQDN format.
+                      Changing it updates the record's _ref (best-effort target —
+                      WAPI does not verify that the referenced A/AAAA record exists).
+                    type: string
+                  ttl:
+                    description: Time-to-live in seconds. Zero means the record is
+                      not cached.
+                    format: int32
+                    type: integer
+                  useTtl:
+                    description: Use flag for ttl — when false the zone/grid default
+                      TTL applies.
+                    type: boolean
+                  view:
+                    description: 'DNS view in which the record resides, e.g. "external".
+                      Hard immutable for PTRRecord — WAPI rejects updates with "Field
+                      is not allowed for update: view".'
+                    type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
+                required:
+                - ptrdname
+                - view
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: PTRRecordStatus defines the observed state of PTRRecord.
+            properties:
+              atProvider:
+                description: AtProvider holds the observed values from the Infoblox
+                  NIOS WAPI.
+                properties:
+                  awsRte53RecordInfo:
+                    description: AWS Route 53 record information (cloud-managed records
+                      only).
+                    properties:
+                      aliasTargetDnsName:
+                        description: DNS name of the alias target.
+                        type: string
+                      aliasTargetEvaluateTargetHealth:
+                        description: Indicates if Amazon Route 53 evaluates the health
+                          of the alias target.
+                        type: boolean
+                      aliasTargetHostedZoneId:
+                        description: Hosted zone ID of the alias target.
+                        type: string
+                      failover:
+                        description: Indicates whether this is the primary or secondary
+                          resource record for Amazon Route 53 failover routing.
+                        type: string
+                      geolocationContinentCode:
+                        description: Continent code for Amazon Route 53 geolocation
+                          routing.
+                        type: string
+                      geolocationCountryCode:
+                        description: Country code for Amazon Route 53 geolocation
+                          routing.
+                        type: string
+                      geolocationSubdivisionCode:
+                        description: Subdivision code for Amazon Route 53 geolocation
+                          routing.
+                        type: string
+                      healthCheckId:
+                        description: ID of the health check that Amazon Route 53 performs
+                          for this resource record.
+                        type: string
+                      region:
+                        description: Amazon EC2 region where this resource record
+                          resides for latency routing.
+                        type: string
+                      setIdentifier:
+                        description: An identifier that differentiates records with
+                          the same DNS name and type for weighted, latency, geolocation,
+                          and failover routing.
+                        type: string
+                      type:
+                        description: Type of Amazon Route 53 resource record.
+                        type: string
+                      weight:
+                        description: Value that determines the portion of traffic
+                          for this record in weighted routing. The range is from 0
+                          to 255.
+                        format: int64
+                        type: integer
+                    type: object
+                  cloudInfo:
+                    description: Cloud API related information for this object (cloud-managed
+                      records only).
+                    properties:
+                      authorityType:
+                        description: Type of authority over the object.
+                        type: string
+                      delegatedMember:
+                        description: The Cloud Platform Appliance to which authority
+                          of the object is delegated.
+                        properties:
+                          ipv4addr:
+                            description: The IPv4 Address of the Grid Member.
+                            type: string
+                          ipv6addr:
+                            description: The IPv6 Address of the Grid Member.
+                            type: string
+                          name:
+                            description: The Grid member name
+                            type: string
+                        type: object
+                      delegatedRoot:
+                        description: Indicates the root of the delegation if delegated_scope
+                          is SUBTREE or RECLAIMING. This is not set otherwise.
+                        type: string
+                      delegatedScope:
+                        description: 'Indicates the scope of delegation for the object.
+                          This can be one of the following: NONE (outside any delegation),
+                          ROOT (the delegation point), SUBTREE (within the scope of
+                          a delegation), RECLAIMING (within the scope of a delegation
+                          being reclaimed, either as the delegation point or in the
+                          subtree).'
+                        type: string
+                      mgmtPlatform:
+                        description: Indicates the specified cloud management platform.
+                        type: string
+                      ownedByAdaptor:
+                        description: Determines whether the object was created by
+                          the cloud adapter or not.
+                        type: boolean
+                      tenant:
+                        description: Reference to the tenant object associated with
+                          the object, if any.
+                        type: string
+                      usage:
+                        description: Indicates the cloud origin of the object.
+                        type: string
+                    type: object
+                  comment:
+                    description: Comment for the record; maximum 256 characters.
+                    type: string
+                  creationTime:
+                    description: Record creation time (Unix epoch seconds).
+                    format: int64
+                    type: integer
+                  creator:
+                    description: Record creator. Changing to/from 'SYSTEM' is not
+                      allowed.
+                    type: string
+                  ddnsPrincipal:
+                    description: GSS-TSIG principal that owns this record (DDNS-created
+                      records only).
+                    type: string
+                  ddnsProtected:
+                    description: Whether DDNS updates for this record are protected.
+                    type: boolean
+                  discoveredData:
+                    description: Discovered data for this PTR record (DNS discovery
+                      feature).
+                    properties:
+                      apIpAddress:
+                        description: Discovered IP address of Wireless Access Point.
+                        type: string
+                      apName:
+                        description: Discovered name of Wireless Access Point.
+                        type: string
+                      apSsid:
+                        description: Service set identifier (SSID) associated with
+                          Wireless Access Point.
+                        type: string
+                      bgpAs:
+                        description: The BGP autonomous system number.
+                        format: int64
+                        type: integer
+                      bridgeDomain:
+                        description: Discovered bridge domain.
+                        type: string
+                      ciscoIseEndpointProfile:
+                        description: The Endpoint Profile created in Cisco ISE.
+                        type: string
+                      ciscoIseSecurityGroup:
+                        description: The Cisco ISE security group name.
+                        type: string
+                      ciscoIseSessionState:
+                        description: The Cisco ISE connection session state.
+                        type: string
+                      ciscoIseSsid:
+                        description: The Cisco ISE SSID.
+                        type: string
+                      cmpType:
+                        description: If the IP is coming from a Cloud environment,
+                          the Cloud Management Platform type.
+                        type: string
+                      deviceContact:
+                        description: Contact information from device on which the
+                          IP address was discovered.
+                        type: string
+                      deviceLocation:
+                        description: Location of device on which the IP address was
+                          discovered.
+                        type: string
+                      deviceModel:
+                        description: The model name of the end device in the vendor
+                          terminology.
+                        type: string
+                      devicePortName:
+                        description: The system name of the interface associated with
+                          the discovered IP address.
+                        type: string
+                      devicePortType:
+                        description: The hardware type of the interface associated
+                          with the discovered IP address.
+                        type: string
+                      deviceType:
+                        description: The type of end host in vendor terminology.
+                        type: string
+                      deviceVendor:
+                        description: The vendor name of the end host.
+                        type: string
+                      discoveredName:
+                        description: The name of the network device associated with
+                          the discovered IP address.
+                        type: string
+                      discoverer:
+                        description: Specifies whether the IP address was discovered
+                          by a NetMRI or NIOS discovery process.
+                        type: string
+                      duid:
+                        description: For IPv6 address only. The DHCP unique identifier
+                          of the discovered host. This is an optional field, and data
+                          might not be included.
+                        type: string
+                      endpointGroups:
+                        description: A comma-separated list of the discovered endpoint
+                          groups.
+                        type: string
+                      firstDiscovered:
+                        description: The date and time the IP address was first discovered
+                          in Epoch seconds format.
+                        format: int64
+                        type: integer
+                      iprgNo:
+                        description: The port redundant group number.
+                        format: int64
+                        type: integer
+                      iprgState:
+                        description: The status for the IP address within port redundant
+                          group.
+                        type: string
+                      iprgType:
+                        description: The port redundant group type.
+                        type: string
+                      lastDiscovered:
+                        description: The date and time the IP address was last discovered
+                          in Epoch seconds format.
+                        format: int64
+                        type: integer
+                      macAddress:
+                        description: The discovered MAC address for the host. This
+                          is the unique identifier of a network device. The discovery
+                          acquires the MAC address for hosts that are located on the
+                          same network as the Grid member that is running the discovery.
+                          This can also be the MAC address of a virtual entity on
+                          a specified vSphere server.
+                        type: string
+                      mgmtIpAddress:
+                        description: The management IP address of the end host that
+                          has more than one IP.
+                        type: string
+                      netbiosName:
+                        description: The name returned in the NetBIOS reply or the
+                          name you manually register for the discovered host.
+                        type: string
+                      networkComponentContact:
+                        description: Contact information from the network component
+                          on which the IP address was discovered.
+                        type: string
+                      networkComponentDescription:
+                        description: A textual description of the switch that is connected
+                          to the end device.
+                        type: string
+                      networkComponentIp:
+                        description: The IPv4 Address or IPv6 Address of the switch
+                          that is connected to the end device.
+                        type: string
+                      networkComponentLocation:
+                        description: Location of the network component on which the
+                          IP address was discovered.
+                        type: string
+                      networkComponentModel:
+                        description: Model name of the switch port connected to the
+                          end host in vendor terminology.
+                        type: string
+                      networkComponentName:
+                        description: If a reverse lookup was successful for the IP
+                          address associated with this switch, the host name is displayed
+                          in this field.
+                        type: string
+                      networkComponentPortDescription:
+                        description: A textual description of the switch port that
+                          is connected to the end device.
+                        type: string
+                      networkComponentPortName:
+                        description: The name of the switch port connected to the
+                          end device.
+                        type: string
+                      networkComponentPortNumber:
+                        description: The number of the switch port connected to the
+                          end device.
+                        type: string
+                      networkComponentType:
+                        description: Identifies the switch that is connected to the
+                          end device.
+                        type: string
+                      networkComponentVendor:
+                        description: The vendor name of the switch port connected
+                          to the end host.
+                        type: string
+                      openPorts:
+                        description: 'The list of opened ports on the IP address,
+                          represented as: "TCP: 21,22,23 UDP: 137,139". Limited to
+                          max total 1000 ports.'
+                        type: string
+                      os:
+                        description: 'The operating system of the detected host or
+                          virtual entity. The OS can be one of the following: * Microsoft
+                          for all discovered hosts that have a non-null value in the
+                          MAC addresses using the NetBIOS discovery method. * A value
+                          that a TCP discovery returns. * The OS of a virtual entity
+                          on a vSphere server.'
+                        type: string
+                      portDuplex:
+                        description: The negotiated or operational duplex setting
+                          of the switch port connected to the end device.
+                        type: string
+                      portLinkStatus:
+                        description: The link status of the switch port connected
+                          to the end device. Indicates whether it is connected.
+                        type: string
+                      portSpeed:
+                        description: The interface speed, in Mbps, of the switch port.
+                        type: string
+                      portStatus:
+                        description: The operational status of the switch port. Indicates
+                          whether the port is up or down.
+                        type: string
+                      portType:
+                        description: The type of switch port.
+                        type: string
+                      portVlanDescription:
+                        description: The description of the VLAN of the switch port
+                          that is connected to the end device.
+                        type: string
+                      portVlanName:
+                        description: The name of the VLAN of the switch port.
+                        type: string
+                      portVlanNumber:
+                        description: The ID of the VLAN of the switch port.
+                        type: string
+                      taskName:
+                        description: The name of the discovery task.
+                        type: string
+                      tenant:
+                        description: Discovered tenant.
+                        type: string
+                      vAdapter:
+                        description: The name of the physical network adapter through
+                          which the virtual entity is connected to the appliance.
+                        type: string
+                      vCluster:
+                        description: The name of the VMware cluster to which the virtual
+                          entity belongs.
+                        type: string
+                      vDatacenter:
+                        description: The name of the vSphere datacenter or container
+                          to which the virtual entity belongs.
+                        type: string
+                      vEntityName:
+                        description: The name of the virtual entity.
+                        type: string
+                      vEntityType:
+                        description: 'The virtual entity type. This can be blank or
+                          one of the following: Virtual Machine, Virtual Host, or
+                          Virtual Center. Virtual Center represents a VMware vCenter
+                          server.'
+                        type: string
+                      vHost:
+                        description: The name of the VMware server on which the virtual
+                          entity was discovered.
+                        type: string
+                      vSwitch:
+                        description: The name of the switch to which the virtual entity
+                          is connected.
+                        type: string
+                      vlanPortGroup:
+                        description: Port group which the virtual machine belongs
+                          to.
+                        type: string
+                      vmhostIpAddress:
+                        description: IP address of the physical node on which the
+                          virtual machine is hosted.
+                        type: string
+                      vmhostMacAddress:
+                        description: MAC address of the physical node on which the
+                          virtual machine is hosted.
+                        type: string
+                      vmhostName:
+                        description: Name of the physical node on which the virtual
+                          machine is hosted.
+                        type: string
+                      vmhostNicNames:
+                        description: 'List of all physical port names used by the
+                          virtual switch on the physical node on which the virtual
+                          machine is hosted. Represented as: "eth1,eth2,eth3".'
+                        type: string
+                      vmhostSubnetCidr:
+                        description: CIDR subnet of the physical node on which the
+                          virtual machine is hosted.
+                        format: int64
+                        type: integer
+                      vmiId:
+                        description: ID of the virtual machine.
+                        type: string
+                      vmiIpType:
+                        description: Discovered IP address type.
+                        type: string
+                      vmiIsPublicAddress:
+                        description: Indicates whether the IP address is a public
+                          address.
+                        type: boolean
+                      vmiName:
+                        description: Name of the virtual machine.
+                        type: string
+                      vmiPrivateAddress:
+                        description: Private IP address of the virtual machine.
+                        type: string
+                      vmiTenantId:
+                        description: ID of the tenant which virtual machine belongs
+                          to.
+                        type: string
+                      vportConfMode:
+                        description: Configured mode of the network adapter on the
+                          virtual switch where the virtual machine connected to.
+                        type: string
+                      vportConfSpeed:
+                        description: Configured speed of the network adapter on the
+                          virtual switch where the virtual machine connected to. Unit
+                          is kb.
+                        type: string
+                      vportLinkStatus:
+                        description: Link status of the network adapter on the virtual
+                          switch where the virtual machine connected to.
+                        type: string
+                      vportMacAddress:
+                        description: MAC address of the network adapter on the virtual
+                          switch where the virtual machine connected to.
+                        type: string
+                      vportMode:
+                        description: Actual mode of the network adapter on the virtual
+                          switch where the virtual machine connected to.
+                        type: string
+                      vportName:
+                        description: Name of the network adapter on the virtual switch
+                          connected with the virtual machine.
+                        type: string
+                      vportSpeed:
+                        description: Actual speed of the network adapter on the virtual
+                          switch where the virtual machine connected to. Unit is kb.
+                        type: string
+                      vrfDescription:
+                        description: Description of the VRF.
+                        type: string
+                      vrfName:
+                        description: The name of the VRF.
+                        type: string
+                      vrfRd:
+                        description: Route distinguisher of the VRF.
+                        type: string
+                      vswitchAvailablePortsCount:
+                        description: Numer of available ports reported by the virtual
+                          switch on which the virtual machine/vport connected to.
+                        format: int64
+                        type: integer
+                      vswitchId:
+                        description: ID of the virtual switch.
+                        type: string
+                      vswitchIpv6Enabled:
+                        description: Indicates the virtual switch has IPV6 enabled.
+                        type: boolean
+                      vswitchName:
+                        description: Name of the virtual switch.
+                        type: string
+                      vswitchSegmentId:
+                        description: ID of the network segment on which the current
+                          virtual machine/vport connected to.
+                        type: string
+                      vswitchSegmentName:
+                        description: Name of the network segment on which the current
+                          virtual machine/vport connected to.
+                        type: string
+                      vswitchSegmentPortGroup:
+                        description: Port group of the network segment on which the
+                          current virtual machine/vport connected to.
+                        type: string
+                      vswitchSegmentType:
+                        description: Type of the network segment on which the current
+                          virtual machine/vport connected to.
+                        type: string
+                      vswitchTepDhcpServer:
+                        description: DHCP server of the virtual tunnel endpoint (VTEP)
+                          in the virtual switch.
+                        type: string
+                      vswitchTepIp:
+                        description: IP address of the virtual tunnel endpoint (VTEP)
+                          in the virtual switch.
+                        type: string
+                      vswitchTepMulticast:
+                        description: Muticast address of the virtual tunnel endpoint
+                          (VTEP) in the virtual swtich.
+                        type: string
+                      vswitchTepPortGroup:
+                        description: Port group of the virtual tunnel endpoint (VTEP)
+                          in the virtual switch.
+                        type: string
+                      vswitchTepType:
+                        description: Type of virtual tunnel endpoint (VTEP) in the
+                          virtual switch.
+                        type: string
+                      vswitchTepVlan:
+                        description: VLAN of the virtual tunnel endpoint (VTEP) in
+                          the virtual switch.
+                        type: string
+                      vswitchType:
+                        description: 'Type of the virtual switch: standard or distributed.'
+                        type: string
+                    type: object
+                  dnsName:
+                    description: Record name in punycode format (derived from name).
+                    type: string
+                  dnsPtrdname:
+                    description: Target domain name in punycode format.
+                    type: string
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  forbidReclamation:
+                    description: Whether reclamation is forbidden for the record (DNS
+                      discovery feature).
+                    type: boolean
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
+                  ipv4Addr:
+                    description: IPv4 address the PTR record is keyed by (mutually
+                      exclusive with ipv6Addr).
+                    type: string
+                  ipv6Addr:
+                    description: IPv6 address the PTR record is keyed by (mutually
+                      exclusive with ipv4Addr).
+                    type: string
+                  lastQueried:
+                    description: Time of the last DNS query for this record (Unix
+                      epoch seconds).
+                    format: int64
+                    type: integer
+                  msAdUserData:
+                    description: Microsoft Active Directory user information (MS-managed
+                      records only).
+                    properties:
+                      activeUsersCount:
+                        description: The number of active users.
+                        format: int64
+                        type: integer
+                    type: object
+                  name:
+                    description: PTR record name in FQDN (in-addr.arpa/ip6.arpa) format.
+                      Auto-derived from ipv4Addr/ipv6Addr when omitted; renaming changes
+                      the record's _ref.
+                    type: string
+                  ptrdname:
+                    description: Domain name this PTR record points to, in FQDN format.
+                      Changing it updates the record's _ref (best-effort target —
+                      WAPI does not verify that the referenced A/AAAA record exists).
+                    type: string
+                  reclaimable:
+                    description: Whether the record is reclaimable (DNS discovery
+                      feature).
+                    type: boolean
+                  ref:
+                    description: Server-assigned opaque object reference (WAPI `_ref`).
+                      Mirrors the crossplane.io/external-name annotation for observability
+                      and uptest import verification.
+                    type: string
+                  sharedRecordGroup:
+                    description: Name of the shared record group, if this is a shared
+                      record.
+                    type: string
+                  ttl:
+                    description: Time-to-live in seconds. Zero means the record is
+                      not cached.
+                    format: int32
+                    type: integer
+                  useTtl:
+                    description: Use flag for ttl — when false the zone/grid default
+                      TTL applies.
+                    type: boolean
+                  view:
+                    description: 'DNS view in which the record resides, e.g. "external".
+                      Hard immutable for PTRRecord — WAPI rejects updates with "Field
+                      is not allowed for update: view".'
+                    type: string
+                  zone:
+                    description: Zone in which the record resides, e.g. "zone.com".
+                      Derived from name/view by WAPI — not a CreatePTRRecord parameter,
+                      so it has no ForProvider counterpart.
+                    type: string
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
