@@ -111,6 +111,40 @@ func TestAliasRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordalias")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "recordalias")
+
+// TestAllContainsNSRecord verifies the catalog's All() includes the
+// NSRecord resource with a non-empty field list and its supporting nested
+// types.
+func TestAllContainsNSRecord(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "recordns" {
+			continue
+		}
+		found = true
+		if len(rd.Fields) == 0 {
+			t.Errorf("NSRecord descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) == 0 {
+			t.Errorf("NSRecord descriptor has zero nested types (expected NSRecordAddress, NSRecordCloudInfo, etc.)")
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the recordns resource")
+	}
+}
+
+// TestNSRecordFieldCounts pins the request/response/both field counts for
+// the ground-truth RecordNS SDK struct (request=0, response=7, both=5) — a
+// regression guard against catalog authoring drift. This intentionally
+// differs from inventory.md's stale request=0/response=8/both=5 count: the
+// inventory table lists creation_time/ms_ad_user_data (not real RecordNS
+// fields) and omits creator (a real field); see the nsRecord() doc comment
+// and ADR-IN-0004 for the correction.
+func TestNSRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordns")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordns")
 	}
 
 	var req, resp, both int
@@ -149,6 +183,41 @@ func TestAliasRecordImmutableFields(t *testing.T) {
 		wantImmutable := f.Name == "View" || f.Name == "Zone"
 		if f.Immutable != wantImmutable {
 			t.Errorf("field %s: Immutable = %v, want %v", f.Name, f.Immutable, wantImmutable)
+
+	if resp != 7 {
+		t.Errorf("response-scope field count = %d, want 7", resp)
+	}
+	if both != 5 {
+		t.Errorf("both-scope field count = %d, want 5", both)
+	}
+}
+
+// TestNSRecordImmutableFields verifies the live-verified immutable fields
+// (ADR-IN-0004) carry Immutable=true: name and view. addresses must be
+// Required but NOT Immutable.
+func TestNSRecordImmutableFields(t *testing.T) {
+	rd, ok := FindResource("recordns")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordns")
+	}
+
+	wantImmutable := map[string]bool{
+		jsonNameName: true,
+		"view":       true,
+	}
+	wantRequired := map[string]bool{
+		jsonNameName: true,
+		"nameserver": true,
+		"view":       true,
+		"addresses":  true,
+	}
+
+	for _, f := range rd.Fields {
+		if wantImmutable[f.JSONName] && !f.Immutable {
+			t.Errorf("field %q: Immutable = false, want true", f.JSONName)
+		}
+		if wantRequired[f.JSONName] && !f.Required {
+			t.Errorf("field %q: Required = false, want true", f.JSONName)
 		}
 	}
 }

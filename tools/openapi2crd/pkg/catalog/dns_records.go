@@ -861,6 +861,177 @@ func mxRecord() ResourceDescriptor {
 	}
 }
 
+// nsRecord returns the NSRecord resource descriptor.
+//
+// Source: tools/openapi/inventory.md, "### NSRecord" section, corrected
+// against the pinned infoblox-go-client/v2 SDK's RecordNS struct
+// (tools/openapi/specs/infobloxopen/) and live-verified 2026-07-28 against a
+// real NIOS Grid Manager appliance (see
+// manifests/infobloxnios/decisions/ADR-IN-0004, authoritative over
+// inventory.md wherever they conflict).
+//
+// RecordNS's actual field set (read directly from objects_generated.go)
+// does not include `creation_time` or `ms_ad_user_data` — inventory.md's
+// static field table listed both in error (most likely carried over from
+// the ARecord section); this catalog entry uses the real struct instead.
+// `creator` IS a real RecordNS field that the static inventory table
+// omitted entirely; ADR-IN-0004 confirms it live-verified read-only
+// (`supports=rs`) rather than the scope=both the ADR's correction note
+// implies the inventory would otherwise have guessed.
+//
+// Immutable fields (live-verified, ADR-IN-0004):
+//   - `name`: `supports=rws` (no `u`) — absent from UpdateNSRecord's
+//     mutable-field set at the data level even though the Go SDK method
+//     signature still accepts it as a parameter (the SDK issues a PUT that
+//     WAPI rejects for a changed name).
+//   - `view`: `supports=rws` (no `u`) — same hard-immutable pattern as
+//     AAAARecord/PTRRecord/SRVRecord.
+//   - `zone`: derived from name+view, not a CreateNSRecord parameter, so it
+//     has no ForProvider representation and no CEL rule is emitted (see
+//     FieldDef.Immutable doc) — AtProvider-only.
+//
+// `addresses` is REQUIRED on create per live WAPI probing
+// (`field for create missing: addresses`), correcting inventory.md's
+// "optional" classification.
+//
+// No cross-resource references: NSRecord is not listed as a source
+// resource in the blueprint's cross-resource reference map.
+func nsRecord() ResourceDescriptor {
+	return ResourceDescriptor{
+		Kind:                 "NSRecord",
+		Slug:                 "recordns",
+		ClusterGroup:         clusterGroup("recordns"),
+		NamespacedGroup:      namespacedGroup("recordns"),
+		ExternalNameStrategy: StrategyServerAssigned,
+		Fields: []FieldDef{
+			{
+				Name:        "Name",
+				JSONName:    jsonNameName,
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Immutable:   true,
+				Description: "Name of the NS record in FQDN format (the delegated zone/subdomain). Live-verified immutable (`supports=rws`, no `u`) — WAPI rejects a PUT that changes this field even though the Go SDK's UpdateNSRecord signature still accepts a name parameter.",
+			},
+			{
+				Name:        "Nameserver",
+				JSONName:    "nameserver",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "FQDN of the authoritative server for the redirected zone.",
+			},
+			{
+				Name:        "View",
+				JSONName:    "view",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Immutable:   true,
+				Description: "DNS view in which the record resides, e.g. \"external\". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Live-verified hard immutable (`supports=rws`, no `u`); the Go SDK already drops view from UpdateNSRecord's request body.",
+			},
+			{
+				Name:        "Addresses",
+				JSONName:    "addresses",
+				GoType:      "[]NSRecordAddress",
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "Glue address records for the name server. Live-verified REQUIRED on create (`field for create missing: addresses`) — corrects inventory.md's \"optional\" classification.",
+			},
+			{
+				Name:        "MsDelegationName",
+				JSONName:    "msDelegationName",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Description: "MS delegation point name.",
+			},
+			{
+				Name:        "Ref",
+				JSONName:    "ref",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.",
+			},
+			{
+				Name:        "Zone",
+				JSONName:    "zone",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Immutable:   true,
+				Description: "Zone in which the record resides, e.g. \"zone.com\". Derived from name/view by WAPI — not a CreateNSRecord parameter, so it has no ForProvider counterpart.",
+			},
+			{
+				Name:        "Creator",
+				JSONName:    "creator",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Record creator. Live-verified read-only (`supports=rs`) — present on the RecordNS struct but omitted from inventory.md's static field table.",
+			},
+			{
+				Name:        "DNSName",
+				JSONName:    "dnsName",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Record name in punycode format (derived from name).",
+			},
+			{
+				Name:        "LastQueried",
+				JSONName:    "lastQueried",
+				GoType:      goTypeInt64,
+				Scope:       FieldScopeResponse,
+				Description: "Time of the last DNS query for this record (Unix epoch seconds).",
+			},
+			{
+				Name:        "CloudInfo",
+				JSONName:    "cloudInfo",
+				GoType:      "*NSRecordCloudInfo",
+				Scope:       FieldScopeResponse,
+				Description: "Cloud API related information for this object (cloud-managed records only).",
+			},
+			{
+				Name:        "Policy",
+				JSONName:    "policy",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Host name policy for the record.",
+			},
+		},
+		NestedTypes: []NestedTypeDef{
+			{
+				TypeName:    "NSRecordAddress",
+				Description: "identifies one glue name server address for an NSRecord (mirrors the SDK's ZoneNameServer struct).",
+				Fields: []FieldDef{
+					{Name: "Address", JSONName: "address", GoType: goTypeString, Description: "The address of the Zone Name Server."},
+					{Name: "AutoCreatePtr", JSONName: "autoCreatePtr", GoType: goTypeBool, Description: "Flag to indicate if PTR records need to be auto created."},
+				},
+			},
+			{
+				TypeName:    "NSRecordCloudInfo",
+				Description: "carries Cloud API delegation/ownership information for a cloud-managed NSRecord (mirrors the SDK's GridCloudapiInfo struct).",
+				Fields: []FieldDef{
+					{Name: "DelegatedMember", JSONName: "delegatedMember", GoType: "*NSRecordCloudInfoDelegatedMember", Description: "The Cloud Platform Appliance to which authority of the object is delegated."},
+					{Name: "DelegatedScope", JSONName: "delegatedScope", GoType: goTypeString, Description: "Indicates the scope of delegation for the object. This can be one of the following: NONE (outside any delegation), ROOT (the delegation point), SUBTREE (within the scope of a delegation), RECLAIMING (within the scope of a delegation being reclaimed, either as the delegation point or in the subtree)."},
+					{Name: "DelegatedRoot", JSONName: "delegatedRoot", GoType: goTypeString, Description: "Indicates the root of the delegation if delegated_scope is SUBTREE or RECLAIMING. This is not set otherwise."},
+					{Name: "OwnedByAdaptor", JSONName: "ownedByAdaptor", GoType: goTypeBool, Description: "Determines whether the object was created by the cloud adapter or not."},
+					{Name: "Usage", JSONName: "usage", GoType: goTypeString, Description: "Indicates the cloud origin of the object."},
+					{Name: "Tenant", JSONName: "tenant", GoType: goTypeString, Description: "Reference to the tenant object associated with the object, if any."},
+					{Name: "MgmtPlatform", JSONName: "mgmtPlatform", GoType: goTypeString, Description: "Indicates the specified cloud management platform."},
+					{Name: "AuthorityType", JSONName: "authorityType", GoType: goTypeString, Description: "Type of authority over the object."},
+				},
+			},
+			{
+				TypeName:    "NSRecordCloudInfoDelegatedMember",
+				Description: "identifies the Grid member an NSRecord's authority is delegated to (mirrors the SDK's Dhcpmember struct).",
+				Fields: []FieldDef{
+					{Name: "Ipv4Addr", JSONName: "ipv4addr", GoType: goTypeString, Description: "The IPv4 Address of the Grid Member."},
+					{Name: "Ipv6Addr", JSONName: "ipv6addr", GoType: goTypeString, Description: "The IPv6 Address of the Grid Member."},
+					{Name: "Name", JSONName: jsonNameName, GoType: goTypeString, Description: "The Grid member name"},
+				},
+			},
+		},
+	}
+}
+
 func ptrRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "PTRRecord",
