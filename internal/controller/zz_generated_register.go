@@ -14,6 +14,7 @@ package controller
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
@@ -34,6 +35,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		hostrecord.SetupGated,
+		network.SetupGated,
 		networkview.SetupGated,
 		recorda.SetupGated,
 		recordaaaa.SetupGated,
@@ -58,6 +60,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		hostrecord.Setup,
+		network.Setup,
 		networkview.Setup,
 		recorda.Setup,
 		recordaaaa.Setup,
