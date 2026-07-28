@@ -122,6 +122,30 @@ dev-clean: $(KIND) $(KUBECTL)
 .PHONY: submodules fallthrough test-integration run dev dev-clean
 
 # ====================================================================================
+# Registration generation (the auto-generated registration convention)
+
+# Generate scheme and controller registration files from directory structure.
+# Run this after adding a new resource API or controller package.
+generate-registration:
+	go run hack/generate-registration.go $(PROJECT_REPO)
+
+# Verify that generated registration files match what the generator would produce.
+# Fails if hack/generate-registration.go has not been run after a directory change.
+check-diff: generate-registration
+	@git diff --exit-code apis/zz_generated_register.go internal/controller/zz_generated_register.go || \
+	  (echo "ERROR: generated registration files are out of date — run 'make generate-registration'" && exit 1)
+
+# generate.done is the post-generation hook in the common.mk chain:
+#   generate.init → generate.run (go.generate → go generate ./...) → generate.done
+# By overriding generate.done here (instead of adding a prerequisite to `generate`),
+# we guarantee goimports runs AFTER controller-gen deepcopy generation, eliminating
+# the empty `import ()` blocks that controller-gen emits for types with no imported deps.
+generate.done: generate-registration
+	go tool goimports -w .
+
+.PHONY: generate-registration generate.done check-diff
+
+# ====================================================================================
 # Special Targets
 
 # Install gomplate
