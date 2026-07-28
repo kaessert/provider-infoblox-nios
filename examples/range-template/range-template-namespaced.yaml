@@ -19,6 +19,11 @@ metadata:
     meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
     uptest.upbound.io/timeout: "120"
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template-namespaced.sh
+    # comment is the only mutable scalar exercised here — see range-template.yaml
+    # for full field documentation.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
 spec:
   forProvider:
     name: example-range-template-ns
