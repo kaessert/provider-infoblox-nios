@@ -30,8 +30,8 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — it has
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
     # comment field below is a safe mutable scalar for update coverage;
-    # field-level update testing runs via the post-assert-hook below,
-    # driven by the crossplane.io/update-test annotation.
+    # field-level update testing runs via the hook wired below, driven by
+    # the crossplane.io/update-test annotation.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-cname.sh
     # comment and canonical are mutable scalars exercised by the update
     # tester. name is mutable too but renaming changes the record's _ref
