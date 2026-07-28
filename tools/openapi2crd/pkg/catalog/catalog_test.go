@@ -79,3 +79,62 @@ func TestARecordFieldCounts(t *testing.T) {
 		t.Errorf("both-scope field count = %d, want 7", both)
 	}
 }
+
+// TestAllContainsTXTRecord verifies the catalog's All() includes TXTRecord
+// with a non-empty field list and nested types (AwsRte53RecordInfo,
+// CloudInfo, MsAdUserData — a zero-field or zero-nested-type descriptor
+// would indicate a wiring bug).
+func TestAllContainsTXTRecord(t *testing.T) {
+	rd, ok := FindResource("recordtxt")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordtxt")
+	}
+	if rd.Kind != "TXTRecord" {
+		t.Errorf("Kind = %q, want TXTRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "recordtxt.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want recordtxt.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "recordtxt.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want recordtxt.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+	if len(rd.Fields) == 0 {
+		t.Errorf("TXTRecord descriptor has zero fields")
+	}
+	if len(rd.NestedTypes) == 0 {
+		t.Errorf("TXTRecord descriptor has zero nested types (expected awsRte53RecordInfo, cloudInfo, msAdUserData)")
+	}
+}
+
+// TestTXTRecordFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### TXTRecord" section
+// (request=0, response=14, both=7) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug.
+func TestTXTRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordtxt")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordtxt")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 14 {
+		t.Errorf("response-scope field count = %d, want 14", resp)
+	}
+	if both != 7 {
+		t.Errorf("both-scope field count = %d, want 7", both)
+	}
+}

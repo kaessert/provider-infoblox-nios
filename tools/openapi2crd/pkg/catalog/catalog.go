@@ -51,6 +51,7 @@ const (
 	goTypeString     = "*string"
 	goTypeBool       = "*bool"
 	goTypeInt64      = "*int64"
+	goTypeUint32     = "*uint32"
 	goTypeStringMap  = "map[string]string"
 	groupSuffixCrd   = "infobloxnios.crossplane.io"
 	groupSuffixCrdNS = "infobloxnios.m.crossplane.io"
@@ -208,6 +209,7 @@ func FindResource(slug string) (*ResourceDescriptor, bool) {
 func All() []ResourceDescriptor {
 	return []ResourceDescriptor{
 		aRecord(),
+		txtRecord(),
 	}
 }
 
