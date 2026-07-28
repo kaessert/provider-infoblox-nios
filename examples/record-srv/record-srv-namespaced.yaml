@@ -1,0 +1,34 @@
+# SRVRecord is the namespace-scoped variant of the Infoblox NIOS DNS "SRV"
+# record. See record-srv.yaml for the cluster-scoped variant and full field
+# documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the owner name below differs from record-srv.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, zone, name) WAPI identity.
+apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recordsrv/v1alpha1/srvrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-srv.yaml for the rationale.
+spec:
+  forProvider:
+    name: _sip._tcp.ns.example.com
+    target: sipserver-ns.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

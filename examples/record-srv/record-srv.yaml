@@ -1,0 +1,49 @@
+# SRVRecord is a cluster-scoped Infoblox NIOS DNS "SRV" record (WAPI object
+# type record:srv). See record-srv-namespaced.yaml for the namespace-scoped
+# variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name annotation.
+# Do not set that annotation manually — the controller populates it.
+#
+# Create behavior: sync — the WAPI POST returns the new object's `_ref`
+# immediately (HTTP 201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   name:     owner name in FQDN format, following the standard SRV naming
+#             convention "_service._proto.name" (e.g. "_sip._tcp.example.com").
+#             WAPI ties the record's `_ref` to (view, zone, name); the
+#             controller re-syncs the annotation if a rename changes the `_ref`.
+#   target:   target host in FQDN format that answers the service.
+#   priority: priority of the record (0-65535) — lower values are preferred.
+#   weight:   relative weight (0-65535) for records with the same priority.
+#   port:     TCP/UDP port (0-65535) on the target host.
+#   view:     the DNS view the record is created in. Immutable after
+#             creation (CEL rule enforced) — the UpdateSRVRecord SDK call
+#             has no view parameter.
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recordsrv.infobloxnios.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord
+  annotations:
+    meta.upbound.io/example-id: recordsrv/v1alpha1/srvrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via post-assert-hook during the
+    # E2E ticket.
+spec:
+  forProvider:
+    name: _sip._tcp.example.com
+    target: sipserver.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
