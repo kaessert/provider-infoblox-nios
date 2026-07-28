@@ -28,6 +28,15 @@
 # e2e-preflight` validates those env vars are present before this script
 # ever runs.
 #
+#   - Auth DNS zone (example.com) in the "default" WAPI view — the shared
+#     Grid Manager only has example.com pre-provisioned under the
+#     "External" and "Internal" views, not "default". Every example
+#     manifest that creates a DNS record uses view: default, so record
+#     creates fail with IB.Data.Conflict ("A parent was not found") unless
+#     this zone exists first. Created directly via a WAPI POST (there is
+#     no zone_auth managed resource/CRD in this provider), guarded by a
+#     GET so re-running setup.sh is a no-op once the zone exists.
+#
 # Usage: test/setup.sh
 #   Requires a running kind cluster with Crossplane installed and
 #   INFOBLOX_HOST/INFOBLOX_USER/INFOBLOX_PASS set in the environment.
@@ -123,6 +132,24 @@ spec:
       name: infobloxnios-credentials
       key: password
 EOF
+
+echo "==> Ensuring the example.com auth zone exists in the default WAPI view..."
+
+WAPI_VERSION="${INFOBLOX_WAPI_VERSION:-v2.13.1}"
+WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
+ZONE_LOOKUP=$(curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+  "${WAPI_BASE}/zone_auth?view=default&fqdn=example.com")
+
+if [ "${ZONE_LOOKUP}" = "[]" ]; then
+  echo "    Zone example.com not found in view default — creating it..."
+  curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+    -X POST "${WAPI_BASE}/zone_auth" \
+    -H "Content-Type: application/json" \
+    -d '{"fqdn": "example.com", "view": "default"}' >/dev/null
+  echo "    Created zone_auth example.com/default."
+else
+  echo "    Zone example.com already exists in view default — skipping."
+fi
 
 echo "==> E2E setup complete."
 echo "    NIOS Grid Manager: ${INFOBLOX_HOST}"
