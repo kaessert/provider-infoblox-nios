@@ -14,8 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha1 contains the core resources of the Infobloxnios provider.
+// Package v1alpha1 contains the namespaced ProviderConfig family for the
+// Infobloxnios provider: the namespaced ProviderConfig, the cluster-scoped
+// ClusterProviderConfig, and the shared ProviderConfigUsage that tracks
+// usage of both by namespaced (ModernManaged) managed resources.
 // +kubebuilder:object:generate=true
-// +groupName=infobloxnios.crossplane.io
+// +groupName=infobloxnios.m.crossplane.io
 // +versionName=v1alpha1
 package v1alpha1

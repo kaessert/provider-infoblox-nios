@@ -10,16 +10,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
+	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
-	infobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/v1alpha1"
+	namespacedinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
 
 // AddToSchemes may be used to add all resources defined in the project to a Scheme.
 var AddToSchemes runtime.SchemeBuilder
 
 func init() {
-	// Register ProviderConfig types.
-	AddToSchemes = append(AddToSchemes, infobloxniosv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scope ProviderConfig types.
+	AddToSchemes = append(AddToSchemes, clusterinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced-scope ProviderConfig types.
+	AddToSchemes = append(AddToSchemes, namespacedinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recorda types.
 	AddToSchemes = append(AddToSchemes, clusterrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.
