@@ -366,7 +366,10 @@ func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetDa
 				GoType:      f.GoType,
 				JSONName:    f.JSONName,
 				Description: f.Description,
-				// No omitempty on slice/map, even in nested types.
+				// No omitempty on slice/map, even in nested types. Nested
+				// types can carry genuinely required fields (e.g. a list
+				// entry's identifying value) — honor Required the same way
+				// top-level fields do.
 				OmitEmpty: isOmitEmpty(f.GoType, f.Required),
 				Required:  f.Required,
 				Reference: buildReferenceData(f.Reference, f.Name, f.GoType, isCluster),

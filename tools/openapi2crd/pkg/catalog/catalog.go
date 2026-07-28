@@ -252,6 +252,7 @@ func All() []ResourceDescriptor {
 		zoneAuth(),
 		zoneDelegated(),
 		network(),
+		extensibleAttributeDef(),
 		networkView(),
 		fixedAddress(),
 		rangeResource(),
