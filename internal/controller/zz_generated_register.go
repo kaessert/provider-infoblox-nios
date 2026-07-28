@@ -31,6 +31,7 @@ import (
 	recordalias "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordalias"
 	recordcname "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
 	recordmx "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordmx"
+	recordns "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordns"
 	recordptr "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
 	recordsrv "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordsrv"
 	recordtxt "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
@@ -65,6 +66,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		recordalias.SetupGated,
 		recordcname.SetupGated,
 		recordmx.SetupGated,
+		recordns.SetupGated,
 		recordptr.SetupGated,
 		recordsrv.SetupGated,
 		recordtxt.SetupGated,
@@ -103,6 +105,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		recordalias.Setup,
 		recordcname.Setup,
 		recordmx.Setup,
+		recordns.Setup,
 		recordptr.Setup,
 		recordsrv.Setup,
 		recordtxt.Setup,
