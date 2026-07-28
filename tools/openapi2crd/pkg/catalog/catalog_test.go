@@ -284,3 +284,58 @@ func TestZoneDelegatedDelegateToField(t *testing.T) {
 		t.Errorf("no field with JSONName=delegateTo found in ZoneDelegated")
 	}
 }
+
+// TestAllContainsMXRecord verifies the catalog's All() includes MXRecord
+// with a non-empty field list and nested types (mirrors
+// TestAllContainsARecord).
+func TestAllContainsMXRecord(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "recordmx" {
+			continue
+		}
+		found = true
+		if len(rd.Fields) == 0 {
+			t.Errorf("MXRecord descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) == 0 {
+			t.Errorf("MXRecord descriptor has zero nested types (expected cloudInfo, msAdUserData, etc.)")
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the recordmx resource")
+	}
+}
+
+// TestMXRecordFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### MXRecord" section
+// (request=0, response=15, both=8) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug.
+func TestMXRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordmx")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordmx")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 15 {
+		t.Errorf("response-scope field count = %d, want 15", resp)
+	}
+	if both != 8 {
+		t.Errorf("both-scope field count = %d, want 8", both)
+	}
+}

@@ -16,6 +16,8 @@ resources declaratively using Kubernetes custom resources.
 - **ZoneDelegated** — create and manage Infoblox NIOS delegated DNS zones
   (cluster-scoped and namespace-scoped)
 - **CNAMERecord** — create and manage Infoblox NIOS DNS "CNAME" records
+- **MXRecord** — create and manage Infoblox NIOS DNS "MX" records
+  (cluster-scoped and namespace-scoped)
   (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
@@ -401,7 +403,59 @@ kubectl apply -f examples/zone-delegated/zone-delegated.yaml
 kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
 kubectl apply -f examples/record-cname/record-cname.yaml
 kubectl apply -f examples/record-cname/record-cname-namespaced.yaml
+kubectl apply -f examples/record-mx/record-mx.yaml
+kubectl apply -f examples/record-mx/record-mx-namespaced.yaml
 ```
+
+### MXRecord
+
+Manage Infoblox NIOS DNS "MX" records (WAPI object type `record:mx`).
+
+**Cluster-scoped** (`recordmx.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordmx.infobloxnios.crossplane.io/v1alpha1
+kind: MXRecord
+metadata:
+  name: example-mxrecord
+spec:
+  forProvider:
+    name: test-mx.example.com
+    mailExchanger: mail.example.com
+    preference: 10
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordmx.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordmx.infobloxnios.m.crossplane.io/v1alpha1
+kind: MXRecord
+metadata:
+  name: example-mxrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: test-mx-ns.example.com
+    mailExchanger: mail-ns.example.com
+    preference: 20
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:mx/ZG5zLmJpbmRfbXg:test-mx.example.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `view` field is immutable after creation: WAPI ties an MX record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
 
 ## Development
 
