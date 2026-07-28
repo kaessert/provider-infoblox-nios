@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	clusterhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
+	clusteripv4sharednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
 	clusternetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1"
 	clusternetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	clusterrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
@@ -24,6 +25,7 @@ import (
 	clusterzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
+	namespacedipv4sharednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
 	namespacednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	namespacedrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
@@ -49,6 +51,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacedinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Hostrecord types.
 	AddToSchemes = append(AddToSchemes, clusterhostrecordv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Ipv4sharednetwork types.
+	AddToSchemes = append(AddToSchemes, clusteripv4sharednetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Network types.
 	AddToSchemes = append(AddToSchemes, clusternetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Networkview types.
@@ -75,6 +79,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Hostrecord types.
 	AddToSchemes = append(AddToSchemes, namespacedhostrecordv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Ipv4sharednetwork types.
+	AddToSchemes = append(AddToSchemes, namespacedipv4sharednetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Network types.
 	AddToSchemes = append(AddToSchemes, namespacednetworkv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Networkview types.
