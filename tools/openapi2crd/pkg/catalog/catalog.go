@@ -113,10 +113,10 @@ type FieldDef struct {
 	// emitted on the ForProvider (spec) field. For a field that is
 	// Immutable but Scope=Response — derived server-side, never
 	// user-settable, e.g. ARecord's `zone` (derived from name+view) or
-	// NetworkView's `is_default` (Grid-assigned) — there is no
-	// ForProvider field to attach the rule to, so the generator instead
-	// emits it on the AtProvider (status) mirror field, guarding against
-	// the observed value ever appearing to change.
+	// NetworkView's or DNSView's `is_default` (Grid-assigned) — there is
+	// no ForProvider field to attach the rule to, so the generator
+	// instead emits it on the AtProvider (status) mirror field, guarding
+	// against the observed value ever appearing to change.
 	Immutable bool
 	// Enum lists the valid string values for this field, taken from the
 	// SDK struct field's doc comment ("Valid values are ..."). When
@@ -259,8 +259,9 @@ func All() []ResourceDescriptor {
 		rangeTemplate(),
 		ipv4SharedNetwork(),
 		networkContainer(),
-		zoneForward(),
+zoneForward(),
 		dtcServer(),
+dnsView(),
 	}
 }
 
