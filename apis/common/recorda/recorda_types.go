@@ -318,10 +318,12 @@ type ARecordObservation struct {
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
 	// DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Confirmed absent from the UpdateARecord SDK method signature.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides, e.g. "zone.com". Derived from name/view by WAPI — not a CreateARecord parameter, so it has no ForProvider counterpart.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable after creation"
 	Zone *string `json:"zone,omitempty"` // atProvider
 	// Record name in punycode format (derived from name).
 	DNSName *string `json:"dnsName,omitempty"` // atProvider

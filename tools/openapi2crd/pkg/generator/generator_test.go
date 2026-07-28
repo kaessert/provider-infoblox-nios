@@ -94,9 +94,11 @@ func checkNoOmitEmpty(t *testing.T, label string, fields []FieldData) {
 }
 
 // TestImmutableFieldCarriesCELRule verifies that ARecord's "view" field
-// (the only ForProvider field marked Immutable in the catalog) renders the
-// CEL self==oldSelf XValidation rule, and that mutable fields (e.g.
-// "comment") do not.
+// (a ForProvider field marked Immutable in the catalog) renders the CEL
+// self==oldSelf XValidation rule, that mutable fields (e.g. "comment") do
+// not, and that a response-only Immutable field with no ForProvider
+// representation ("zone") still carries the rule on its AtProvider
+// (status) mirror.
 func TestImmutableFieldCarriesCELRule(t *testing.T) {
 	rd := aRecordDescriptor(t)
 	src, err := RenderScopeTypes(BuildScopeData(rd, true))
@@ -113,9 +115,10 @@ func TestImmutableFieldCarriesCELRule(t *testing.T) {
 	}
 	// zone is Immutable=true in the catalog but FieldScopeResponse (no
 	// ForProvider representation — confirmed absent from the
-	// CreateARecord SDK signature) — no CEL rule should be emitted for it.
-	if strings.Contains(s, `message="zone is immutable after creation"`) {
-		t.Errorf("zone has no ForProvider field and must not carry a CEL immutability rule")
+	// CreateARecord SDK signature) — the CEL rule is still expected, just
+	// on the AtProvider mirror field instead of a ForProvider field.
+	if !strings.Contains(s, `message="zone is immutable after creation"`) {
+		t.Errorf("zone has no ForProvider field but must still carry a CEL immutability rule on its AtProvider mirror, got:\n%s", s)
 	}
 }
 

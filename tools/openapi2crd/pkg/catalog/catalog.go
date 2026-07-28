@@ -77,14 +77,15 @@ type FieldDef struct {
 	Required bool
 	// Immutable is true if the field cannot change after creation via
 	// the SDK's ObjectManager wrapper; the generator emits a CEL
-	// `self == oldSelf` XValidation rule for it. Only meaningful for
-	// fields that also have a ForProvider representation (Scope
-	// Request or Both) — a field that is Immutable but Scope=Response
-	// has no ForProvider field to attach the rule to (it is derived,
-	// never user-settable) and the generator does not emit a rule for
-	// it; this happens for ARecord's `zone` field (derived from
-	// name+view, confirmed absent from the CreateARecord/UpdateARecord
-	// SDK signatures).
+	// `self == oldSelf` XValidation rule for it. For fields with a
+	// ForProvider representation (Scope Request or Both), the rule is
+	// emitted on the ForProvider (spec) field. For a field that is
+	// Immutable but Scope=Response — derived server-side, never
+	// user-settable, e.g. ARecord's `zone` (derived from name+view) or
+	// NetworkView's `is_default` (Grid-assigned) — there is no
+	// ForProvider field to attach the rule to, so the generator instead
+	// emits it on the AtProvider (status) mirror field, guarding against
+	// the observed value ever appearing to change.
 	Immutable bool
 	// Enum lists the valid string values for this field, taken from the
 	// SDK struct field's doc comment ("Valid values are ..."). When
@@ -216,6 +217,7 @@ func All() []ResourceDescriptor {
 		srvRecord(),
 		txtRecord(),
 		zoneDelegated(),
+		networkView(),
 	}
 }
 

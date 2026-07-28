@@ -785,11 +785,17 @@ spec:
                       Fixed at creation — WAPI ties the record's _ref to (view, zone,
                       name). Confirmed absent from the UpdateARecord SDK method signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zone:
                     description: Zone in which the record resides, e.g. "zone.com".
                       Derived from name/view by WAPI — not a CreateARecord parameter,
                       so it has no ForProvider counterpart.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zone is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

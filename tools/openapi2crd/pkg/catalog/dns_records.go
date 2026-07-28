@@ -21,8 +21,8 @@ package catalog
 // `zone` is documented in inventory.md as immutable too, but it is NOT a
 // CreateARecord parameter at all (confirmed against the signature above) —
 // WAPI derives it from name+view. It therefore has no ForProvider
-// representation and no CEL rule is emitted for it; it is AtProvider-only
-// (see FieldDef.Immutable doc).
+// representation; the CEL `self == oldSelf` rule is instead emitted on its
+// AtProvider (status) mirror field (see FieldDef.Immutable doc).
 //
 // `disable` appears on the underlying WAPI object (objects_generated.go)
 // but is NOT a parameter of CreateARecord/UpdateARecord (see

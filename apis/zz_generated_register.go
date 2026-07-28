@@ -9,6 +9,7 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
+	clusternetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	clusterrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
@@ -18,6 +19,7 @@ import (
 	clusterrecordtxtv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
+	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
 	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
@@ -37,6 +39,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced-scope ProviderConfig types.
 	AddToSchemes = append(AddToSchemes, namespacedinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Networkview types.
+	AddToSchemes = append(AddToSchemes, clusternetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recorda types.
 	AddToSchemes = append(AddToSchemes, clusterrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recordaaaa types.
@@ -53,6 +57,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterrecordtxtv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zonedelegated types.
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Networkview types.
+	AddToSchemes = append(AddToSchemes, namespacednetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordaaaa types.
