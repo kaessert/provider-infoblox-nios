@@ -13,6 +13,7 @@ package controller
 
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -23,6 +24,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
+		recorda.SetupGated,
 	} {
 		if err := setup(mgr, o); err != nil {
 			return err
@@ -37,6 +39,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
+		recorda.Setup,
 	} {
 		if err := setup(mgr, o); err != nil {
 			return err
