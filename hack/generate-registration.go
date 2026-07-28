@@ -50,8 +50,10 @@ func titleCase(s string) string {
 }
 
 // discoverAPIPackages scans apis/cluster/ and apis/namespaced/ for resource
-// packages that contain a groupversion_info.go file (the indicator of a
-// registered API group version).
+// packages that contain a register.go file (the indicator of a registered
+// API group version — register.go declares the package's Group/Version
+// metadata and SchemeBuilder, the same role groupversion_info.go plays in
+// other providers).
 //
 // Explicitly excluded:
 //   - apis/common/  (shared types, no scheme registration)
@@ -91,9 +93,9 @@ func discoverAPIPackages(modulePath string) []apiEntry {
 				version := vd.Name()
 				pkgDir := filepath.Join(resourceDir, version)
 
-				// Check for groupversion_info.go as the indicator of a valid API package.
-				gvi := filepath.Join(pkgDir, "groupversion_info.go")
-				if _, err := os.Stat(gvi); os.IsNotExist(err) {
+				// Check for register.go as the indicator of a valid API package.
+				registerFile := filepath.Join(pkgDir, "register.go")
+				if _, err := os.Stat(registerFile); os.IsNotExist(err) {
 					continue
 				}
 
