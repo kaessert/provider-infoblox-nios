@@ -1,38 +1,70 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: default
----
+# Secret containing Infoblox NIOS Grid Manager credentials.
+#
+# Required keys (read directly from the Secret's data by the provider's
+# credential bridge — the "key" field below is required by the
+# ProviderConfig CRD schema but is NOT used to select a single value):
+#   host:     Grid Manager hostname or IP, e.g. "gm.example.com"
+#   username: WAPI username
+#   password: WAPI password
+#
+# To create from the E2E credential env vars (INFOBLOX_HOST, INFOBLOX_USER,
+# INFOBLOX_PASS):
+#   kubectl -n crossplane-system create secret generic infobloxnios-credentials \
+#     --from-literal=host="${INFOBLOX_HOST}" \
+#     --from-literal=username="${INFOBLOX_USER}" \
+#     --from-literal=password="${INFOBLOX_PASS}"
 apiVersion: v1
 kind: Secret
 metadata:
-  namespace: default
-  name: example-provider-secret
+  namespace: crossplane-system
+  name: infobloxnios-credentials
 type: Opaque
-data:
-  credentials: QkFTRTY0RU5DT0RFRF9QUk9WSURFUl9DUkVEUwo=
+stringData:
+  host: "gm.example.com"
+  username: "admin"
+  password: "change-me"
 ---
+# ProviderConfig — cluster-scoped. Used by cluster-scoped managed resources,
+# e.g. examples/record-a/record-a.yaml.
 apiVersion: infobloxnios.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
-  name: example
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: infobloxnios-credentials
+      # Unused by the credential bridge (which reads host/username/password
+      # directly from the Secret's data) but required by the CRD schema.
+      key: password
+---
+# ProviderConfig — namespace-scoped. Used by namespaced managed resources in
+# the same namespace as this ProviderConfig.
+apiVersion: infobloxnios.m.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
   namespace: default
 spec:
   credentials:
     source: Secret
     secretRef:
-      namespace: default
-      name: example-provider-secret
-      key: credentials
+      namespace: crossplane-system
+      name: infobloxnios-credentials
+      key: password
 ---
-apiVersion: infobloxnios.crossplane.io/v1alpha1
+# ClusterProviderConfig — cluster-scoped. Used by namespaced managed
+# resources from any namespace, e.g. examples/record-a/record-a-namespaced.yaml.
+apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ClusterProviderConfig
 metadata:
-  name: example
+  name: default
 spec:
   credentials:
     source: Secret
     secretRef:
-      namespace: default
-      name: example-provider-secret
-      key: credentials
+      namespace: crossplane-system
+      name: infobloxnios-credentials
+      key: password

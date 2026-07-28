@@ -1,0 +1,41 @@
+# ARecord is a cluster-scoped Infoblox NIOS DNS "A" record (WAPI object
+# type record:a). See record-a-namespaced.yaml for the namespace-scoped
+# variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:a/ZG5zLmJpbmRfYQ:www.example.com/default") from Create;
+# Crossplane stores it in the crossplane.io/external-name annotation. Do
+# not set that annotation manually — the controller populates it.
+#
+# Required fields:
+#   name:     owner name in FQDN format. WAPI ties the record's `_ref` to
+#             (view, zone, name); the controller re-syncs the annotation
+#             if a rename changes the `_ref`.
+#   ipv4Addr: the IPv4 address the record resolves to. This example uses
+#             a TEST-NET-1 address (RFC 5737) — replace with a real
+#             address for a live NIOS Grid Manager.
+#   view:     the DNS view the record is created in. Immutable after
+#             creation (CEL rule enforced) — the UpdateARecord SDK call
+#             has no view parameter.
+#
+# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+apiVersion: recorda.infobloxnios.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing is wired via post-assert-hook during the
+    # E2E ticket.
+spec:
+  forProvider:
+    name: www.example.com
+    ipv4Addr: 192.0.2.10
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
