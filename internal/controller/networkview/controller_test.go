@@ -520,6 +520,69 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	}
 }
 
+// TestClusterObserveLateInitializesFields verifies that Observe
+// back-fills server-defaulted optional fields (comment, extattrs) into
+// spec.forProvider when they were not user-supplied, and reports
+// ResourceLateInitialized=true so the reconciler persists the patch.
+func TestClusterObserveLateInitializesFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkView{
+		Name:    stringPtr("my-networkview"),
+		Comment: stringPtr("server-set comment"),
+		Ea:      ibclient.EA{"env": "prod"},
+	})
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterNetworkView("my-nv", ref)
+	// Comment and ExtAttrs are left unset on the spec to exercise
+	// late-init.
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true, got false")
+	}
+	if cr.Spec.ForProvider.Comment == nil || *cr.Spec.ForProvider.Comment != "server-set comment" {
+		t.Errorf("Observe: ForProvider.Comment = %v, want late-initialized %q", cr.Spec.ForProvider.Comment, "server-set comment")
+	}
+	if !extAttrsEqual(cr.Spec.ForProvider.ExtAttrs, map[string]string{"env": "prod"}) {
+		t.Errorf("Observe: ForProvider.ExtAttrs = %v, want late-initialized %v", cr.Spec.ForProvider.ExtAttrs, map[string]string{"env": "prod"})
+	}
+}
+
+// TestClusterObserveNeedsUpdate verifies that Observe reports
+// ResourceUpToDate=false when a mutable field (comment) differs between
+// spec and the observed WAPI object.
+func TestClusterObserveNeedsUpdate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkView{
+		Name:    stringPtr("my-networkview"),
+		Comment: stringPtr("old comment"),
+	})
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterNetworkView("my-nv", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false when comment differs, got true")
+	}
+}
+
 // ── cluster: Create ─────────────────────────────────────────────────────
 
 func TestClusterCreateSuccess(t *testing.T) {
@@ -539,6 +602,25 @@ func TestClusterCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+// TestClusterCreateError verifies that a WAPI error from the create call
+// is wrapped (not swallowed) and returned to the reconciler.
+func TestClusterCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterNetworkView("my-nv", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateNetworkView) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateNetworkView)
 	}
 }
 
@@ -595,6 +677,26 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestClusterUpdateError verifies that a WAPI error from the update call
+// is wrapped (not swallowed) and returned to the reconciler.
+func TestClusterUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterNetworkView("my-nv", "networkview/test1:my-networkview/false")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateNetworkView) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateNetworkView)
 	}
 }
 
@@ -884,6 +986,64 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveLateInitializesFields is the namespaced-scope
+// counterpart of TestClusterObserveLateInitializesFields.
+func TestNamespacedObserveLateInitializesFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkView{
+		Name:    stringPtr("my-networkview"),
+		Comment: stringPtr("server-set comment"),
+		Ea:      ibclient.EA{"env": "prod"},
+	})
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	cr := newNamespacedNetworkView("default", "my-nv", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true, got false")
+	}
+	if cr.Spec.ForProvider.Comment == nil || *cr.Spec.ForProvider.Comment != "server-set comment" {
+		t.Errorf("Observe: ForProvider.Comment = %v, want late-initialized %q", cr.Spec.ForProvider.Comment, "server-set comment")
+	}
+	if !extAttrsEqual(cr.Spec.ForProvider.ExtAttrs, map[string]string{"env": "prod"}) {
+		t.Errorf("Observe: ForProvider.ExtAttrs = %v, want late-initialized %v", cr.Spec.ForProvider.ExtAttrs, map[string]string{"env": "prod"})
+	}
+}
+
+// TestNamespacedObserveNeedsUpdate is the namespaced-scope counterpart of
+// TestClusterObserveNeedsUpdate.
+func TestNamespacedObserveNeedsUpdate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkView{
+		Name:    stringPtr("my-networkview"),
+		Comment: stringPtr("old comment"),
+	})
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	cr := newNamespacedNetworkView("default", "my-nv", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false when comment differs, got true")
+	}
+}
+
 // ── namespaced: Create/Update/Delete ─────────────────────────────────────
 
 func TestNamespacedCreateSuccess(t *testing.T) {
@@ -902,6 +1062,25 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+// TestNamespacedCreateError is the namespaced-scope counterpart of
+// TestClusterCreateError.
+func TestNamespacedCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	cr := newNamespacedNetworkView("default", "my-nv", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateNetworkView) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateNetworkView)
 	}
 }
 
@@ -928,6 +1107,61 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestNamespacedUpdateError is the namespaced-scope counterpart of
+// TestClusterUpdateError.
+func TestNamespacedUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	cr := newNamespacedNetworkView("default", "my-nv", "networkview/test1:my-networkview/false", "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateNetworkView) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateNetworkView)
+	}
+}
+
+// TestNamespacedUpdateDoesNotSendImmutableField is the namespaced-scope
+// counterpart of TestClusterUpdateDoesNotSendImmutableField.
+func TestNamespacedUpdateDoesNotSendImmutableField(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkView{
+		Name:      stringPtr("default"),
+		IsDefault: true,
+	})
+
+	objMgr, conn := newTestClient(t, srv)
+	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	cr := newNamespacedNetworkView("default", "my-nv", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Name = stringPtr("default")
+	cr.Spec.ForProvider.Comment = stringPtr("updated")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	if _, present := raw["is_default"]; present {
+		t.Errorf("Update: request body contains immutable field 'is_default': %v", raw["is_default"])
 	}
 }
 
