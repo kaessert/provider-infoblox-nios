@@ -142,6 +142,12 @@ type mockWapiServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
+
+	// renameRefOnUpdate, when non-empty, simulates NIOS returning a
+	// different _ref from the one addressed by PUT (e.g. a DNS-view or
+	// name change on a live Grid Manager) — used to exercise the
+	// controller's _ref instability handling on Update.
+	renameRefOnUpdate string
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -270,9 +276,22 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.UseTtl = incoming.UseTtl
 		existing.Ea = incoming.Ea
 		existing.Zone = zoneFromName(existing.Name)
+
+		// Simulate a live Grid Manager assigning a new _ref on update
+		// (e.g. DNS-view or name change) rather than echoing the ref
+		// the request addressed.
+		newRef := ref
+		if m.renameRefOnUpdate != "" {
+			newRef = m.renameRefOnUpdate
+		}
+		if newRef != ref {
+			existing.Ref = newRef
+			delete(m.records, ref)
+			m.records[newRef] = existing
+		}
 		m.mu.Unlock()
 
-		writeJSON(w, http.StatusOK, ref)
+		writeJSON(w, http.StatusOK, newRef)
 	})
 
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +541,24 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterCreateServerError verifies that a 5xx response from the WAPI
+// create endpoint is propagated (wrapped, not swallowed).
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -610,6 +647,57 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	}
 	if v, present := raw["network_view"]; present && v != "" {
 		t.Errorf("Update: request body contains immutable field 'network_view': %v", v)
+	}
+}
+
+// TestClusterUpdateServerError verifies that a 5xx response from the WAPI
+// update endpoint is propagated (wrapped, not swallowed).
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "record:host/test1:host.example.com/default")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateHostRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateHostRecord)
+	}
+}
+
+// TestClusterUpdateRefChange pins the _ref instability handling documented
+// on clusterExternal.Update: live verification against a real NIOS Grid
+// Manager showed that renaming a host record (or changing its DNS view)
+// changes its _ref, so the controller must refresh the external-name
+// annotation from the server-returned ref rather than assuming it is
+// stable across Update calls.
+func TestClusterUpdateRefChange(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	oldRef := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+	})
+	newRef := "record:host/test999:host.example.com/other"
+	m.renameRefOnUpdate = newRef
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", oldRef)
+	cr.Spec.ForProvider.View = stringPtr("other")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	if got := meta.GetExternalName(cr); got != newRef {
+		t.Errorf("Update: external-name annotation = %q, want %q (refreshed from server-returned _ref)", got, newRef)
 	}
 }
 
@@ -844,6 +932,24 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateServerError verifies that a 5xx response from the
+// WAPI create endpoint is propagated (wrapped, not swallowed).
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{client: newTestClient(t, srv)}
+	cr := newNamespacedHostRecord("default", "my-hostrecord", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -869,6 +975,54 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if len(stored.Ipv4Addrs) != 1 || stored.Ipv4Addrs[0].Ipv4Addr == nil || *stored.Ipv4Addrs[0].Ipv4Addr != "10.0.0.2" {
 		t.Errorf("Update: stored ipv4addrs = %v, want [10.0.0.2]", stored.Ipv4Addrs)
+	}
+}
+
+// TestNamespacedUpdateServerError verifies that a 5xx response from the
+// WAPI update endpoint is propagated (wrapped, not swallowed).
+func TestNamespacedUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{client: newTestClient(t, srv)}
+	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/test1:host.example.com/default", "ProviderConfig")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateHostRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateHostRecord)
+	}
+}
+
+// TestNamespacedUpdateRefChange mirrors TestClusterUpdateRefChange for the
+// namespaced scope — the server-returned _ref must be re-adopted as the
+// external-name annotation when it differs from the ref addressed.
+func TestNamespacedUpdateRefChange(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	oldRef := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+	})
+	newRef := "record:host/test999:host.example.com/other"
+	m.renameRefOnUpdate = newRef
+
+	e := &namespacedExternal{client: newTestClient(t, srv)}
+	cr := newNamespacedHostRecord("default", "my-hostrecord", oldRef, "ProviderConfig")
+	cr.Spec.ForProvider.View = stringPtr("other")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	if got := meta.GetExternalName(cr); got != newRef {
+		t.Errorf("Update: external-name annotation = %q, want %q (refreshed from server-returned _ref)", got, newRef)
 	}
 }
 
