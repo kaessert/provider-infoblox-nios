@@ -33,7 +33,8 @@ import (
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
-// package (never fmt.Errorf or the stdlib "errors" package).
+// package (never fmt.Errorf or the standard library error-construction
+// package).
 const (
 	errTrackPCUsage     = "cannot track ProviderConfig usage"
 	errGetPC            = "cannot get ProviderConfig"
