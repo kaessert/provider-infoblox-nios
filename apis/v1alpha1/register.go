@@ -1,7 +1,3 @@
-/*
-Copyright 2021 Upbound Inc.
-*/
-
 package v1alpha1
 
 import (
@@ -13,7 +9,7 @@ import (
 
 // Package type metadata.
 const (
-	Group   = "infoblox-nios.crossplane.io"
+	Group   = "infobloxnios.crossplane.io"
 	Version = "v1alpha1"
 )
 
@@ -25,14 +21,41 @@ var (
 	SchemeBuilder = &scheme.Builder{GroupVersion: SchemeGroupVersion}
 )
 
-// StoreConfig type metadata.
+// ProviderConfig type metadata.
 var (
-	StoreConfigKind             = reflect.TypeOf(StoreConfig{}).Name()
-	StoreConfigGroupKind        = schema.GroupKind{Group: Group, Kind: StoreConfigKind}.String()
-	StoreConfigKindAPIVersion   = StoreConfigKind + "." + SchemeGroupVersion.String()
-	StoreConfigGroupVersionKind = SchemeGroupVersion.WithKind(StoreConfigKind)
+	ProviderConfigKind             = reflect.TypeOf(ProviderConfig{}).Name()
+	ProviderConfigGroupKind        = schema.GroupKind{Group: Group, Kind: ProviderConfigKind}.String()
+	ProviderConfigGroupVersionKind = SchemeGroupVersion.WithKind(ProviderConfigKind)
+)
+
+// ProviderConfigUsage type metadata.
+var (
+	ProviderConfigUsageKind             = reflect.TypeOf(ProviderConfigUsage{}).Name()
+	ProviderConfigUsageGroupVersionKind = SchemeGroupVersion.WithKind(ProviderConfigUsageKind)
+
+	ProviderConfigUsageListKind             = reflect.TypeOf(ProviderConfigUsageList{}).Name()
+	ProviderConfigUsageListGroupVersionKind = SchemeGroupVersion.WithKind(ProviderConfigUsageListKind)
+)
+
+// ClusterProviderConfig type metadata
+var (
+	ClusterProviderConfigKind             = reflect.TypeOf(ClusterProviderConfig{}).Name()
+	ClusterProviderConfigGroupKind        = schema.GroupKind{Group: Group, Kind: ClusterProviderConfigKind}.String()
+	ClusterProviderConfigGroupVersionKind = SchemeGroupVersion.WithKind(ClusterProviderConfigKind)
+)
+
+// ClusterProviderConfigUsage type metadata.
+var (
+	ClusterProviderConfigUsageKind             = reflect.TypeOf(ClusterProviderConfigUsage{}).Name()
+	ClusterProviderConfigUsageGroupVersionKind = SchemeGroupVersion.WithKind(ClusterProviderConfigUsageKind)
+
+	ClusterProviderConfigUsageListKind             = reflect.TypeOf(ClusterProviderConfigUsageList{}).Name()
+	ClusterProviderConfigUsageListGroupVersionKind = SchemeGroupVersion.WithKind(ClusterProviderConfigUsageListKind)
 )
 
 func init() {
-	SchemeBuilder.Register(&StoreConfig{}, &StoreConfigList{})
+	SchemeBuilder.Register(&ProviderConfig{}, &ProviderConfigList{})
+	SchemeBuilder.Register(&ProviderConfigUsage{}, &ProviderConfigUsageList{})
+	SchemeBuilder.Register(&ClusterProviderConfig{}, &ClusterProviderConfigList{})
+	SchemeBuilder.Register(&ClusterProviderConfigUsage{}, &ClusterProviderConfigUsageList{})
 }

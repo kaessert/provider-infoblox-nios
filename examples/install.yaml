@@ -1,6 +1,0 @@
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: crossplane-contrib-provider-infoblox-nios
-spec:
-  package: xpkg.upbound.io/crossplane-contrib/provider-infoblox-nios:v0.3.0

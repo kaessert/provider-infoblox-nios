@@ -1,65 +1,39 @@
-# Infoblox NIOS Crossplane Provider
+# provider-infobloxnios
 
-`provider-infoblox-nios` is a [Crossplane](https://crossplane.io/) provider that
-is built using [Upjet](https://github.com/crossplane/upjet) code
-generation tools and exposes XRM-conformant managed resources for
-Infoblox IPAM.
+`provider-infobloxnios` is a minimal [Crossplane](https://crossplane.io/) Provider
+that is meant to be used as a infobloxnios for implementing new Providers. It comes
+with the following features that are meant to be refactored:
 
-Please note this provider is in early development and is looking for maintainers.
-
-## Getting Started
-
-Install the provider by using the following command after changing the image tag
-to the [latest release](https://marketplace.upbound.io/providers/crossplane-contrib/provider-infoblox-nios):
-
-```shell
-up ctp provider install crossplane-contrib/provider-infoblox-nios:v0.3.0
-```
-
-Alternatively, you can use declarative installation:
-
-```shell
-cat <<EOF | kubectl apply -f -
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: crossplane-contrib-provider-infoblox-nios
-spec:
-  package: xpkg.upbound.io/crossplane-contrib/provider-infoblox-nios:v0.3.0
-EOF
-```
-
-Notice that in this example Provider resource is referencing ControllerConfig with debug enabled.
-
-You can see the API reference [here](https://doc.crds.dev/github.com/crossplane-contrib/provider-infoblox-nios).
+- A `ProviderConfig` type that only points to a credentials `Secret`.
+- A `MyType` resource type that serves as an example managed resource.
+- A managed resource controller that reconciles `MyType` objects and simply
+  prints their configuration in its `Observe` method.
 
 ## Developing
 
-Run code-generation pipeline:
-
-```console
-go run cmd/generator/main.go "$PWD"
+1. Use this repository as a infobloxnios to create a new one.
+1. Run `make submodules` to initialize the "build" Make submodule we use for CI/CD.
+1. Rename the provider by running the following command:
+```shell
+  export provider_name=MyProvider # Camel case, e.g. GitHub
+  make provider.prepare provider=${provider_name}
 ```
-
-Run against a Kubernetes cluster:
-
-```console
-make run
+4. Add your new type by running the following command:
+```shell
+  export group=sample # lower case e.g. core, cache, database, storage, etc.
+  export type=MyType # Camel casee.g. Bucket, Database, CacheCluster, etc.
+  make provider.addtype provider=${provider_name} group=${group} kind=${type}
 ```
+5. Replace the *sample* group with your new group in apis/{provider}.go
+5. Replace the *mytype* type with your new type in internal/controller/{provider}.go
+5. Replace the default controller and ProviderConfig implementations with your own
+5. Register your new type into `SetupGated` function in `internal/controller/register.go`
+5. Run `make reviewable` to run code generation, linters, and tests.
+5. Run `make build` to build the provider.
 
-Build, push, and install:
+Refer to Crossplane's [CONTRIBUTING.md] file for more information on how the
+Crossplane community prefers to work. The [Provider Development][provider-dev]
+guide may also be of use.
 
-```console
-make all
-```
-
-Build binary:
-
-```console
-make build
-```
-
-## Report a Bug
-
-For filing bugs, suggesting improvements, or requesting new features, please
-open an [issue](https://github.com/crossplane-contrib/provider-infoblox-nios/issues).
+[CONTRIBUTING.md]: https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md
+[provider-dev]: https://github.com/crossplane/crossplane/blob/master/contributing/guide-provider-development.md
