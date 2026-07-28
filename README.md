@@ -38,6 +38,8 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **DTCServer** — create and manage Infoblox NIOS DTC (DNS Traffic Control)
   servers (cluster-scoped and namespace-scoped)
+- **DNSView** — create and manage Infoblox NIOS DNS views (cluster-scoped
+  and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -1037,6 +1039,61 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/network/network.yaml
 kubectl apply -f examples/network/network-namespaced.yaml
+```
+
+### DNSView
+
+Manage Infoblox NIOS DNS views (WAPI object type `view`).
+
+**Cluster-scoped** (`dnsview.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dnsview.infobloxnios.crossplane.io/v1alpha1
+kind: DNSView
+metadata:
+  name: example-dnsview
+spec:
+  forProvider:
+    name: crossplane-test-view
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`dnsview.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dnsview.infobloxnios.m.crossplane.io/v1alpha1
+kind: DNSView
+metadata:
+  name: example-dnsview-ns
+  namespace: default
+spec:
+  forProvider:
+    name: crossplane-test-view-ns
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `view/ZG5zLnZpZXckY3Jvc3NwbGFuZS10ZXN0LXZpZXcvZmFsc2U:crossplane-test-view/false`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The NIOS Grid Manager always ships three pre-existing views (`default`,
+`External`, `Internal`); these examples create a distinct custom view
+instead of trying to re-create one of the built-in views, so they never
+collide with a fresh Grid Manager. The `isDefault` field is response-only
+(WAPI `supports=sr`) and immutable once set — it has no `forProvider`
+representation.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/dns-view/dns-view.yaml
+kubectl apply -f examples/dns-view/dns-view-namespaced.yaml
 ```
 
 ### IPv4SharedNetwork
