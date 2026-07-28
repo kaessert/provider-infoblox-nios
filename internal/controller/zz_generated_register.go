@@ -14,6 +14,7 @@ package controller
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/ipv4sharednetwork"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
@@ -37,6 +38,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		hostrecord.SetupGated,
+		ipv4sharednetwork.SetupGated,
 		network.SetupGated,
 		networkview.SetupGated,
 		rangetemplate.SetupGated,
@@ -64,6 +66,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		hostrecord.Setup,
+		ipv4sharednetwork.Setup,
 		network.Setup,
 		networkview.Setup,
 		rangetemplate.Setup,
