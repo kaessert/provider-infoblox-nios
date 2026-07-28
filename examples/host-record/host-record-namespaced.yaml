@@ -56,6 +56,11 @@ spec:
     ipv4Addrs:
       - ipv4Addr: 10.0.0.101
     view: default
+    # configureForDns must be true — see host-record.yaml for the
+    # rationale (WAPI rejects Create with enable_dns=false unless the
+    # host address belongs to an existing IPAM Network, which this E2E
+    # environment does not provision).
+    configureForDns: true
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig

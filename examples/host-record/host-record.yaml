@@ -71,6 +71,16 @@ spec:
     ipv4Addrs:
       - ipv4Addr: 10.0.0.100
     view: default
+    # configureForDns must be true: the WAPI Grid Manager rejects Create
+    # when DNS is not configured (enable_dns=false) unless the host
+    # address already belongs to an existing IPAM Network object, which
+    # the E2E environment does not provision. test/setup.sh creates the
+    # example.com auth zone specifically so this record can register as
+    # a DNS host under it — omitting this field defaults to false (see
+    # controller.go's boolOrFalse helper) and fails Create with
+    # IB.Data.Conflict: "At least one host address must belong to an
+    # existing network if DNS is not configured for this host."
+    configureForDns: true
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
