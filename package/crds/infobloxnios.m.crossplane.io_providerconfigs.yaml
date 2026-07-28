@@ -4,19 +4,19 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: clusterproviderconfigs.infobloxnios.crossplane.io
+  name: providerconfigs.infobloxnios.m.crossplane.io
 spec:
-  group: infobloxnios.crossplane.io
+  group: infobloxnios.m.crossplane.io
   names:
     categories:
     - crossplane
     - provider
     - infobloxnios
-    kind: ClusterProviderConfig
-    listKind: ClusterProviderConfigList
-    plural: clusterproviderconfigs
-    singular: clusterproviderconfig
-  scope: Cluster
+    kind: ProviderConfig
+    listKind: ProviderConfigList
+    plural: providerconfigs
+    singular: providerconfig
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .metadata.creationTimestamp
@@ -29,7 +29,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A ClusterProviderConfig configures an Infoblox NIOS provider.
+        description: |-
+          A ProviderConfig configures an Infoblox NIOS provider. It is
+          namespace-scoped and referenced by namespaced (ModernManaged) managed
+          resources in the same namespace.
         properties:
           apiVersion:
             description: |-
@@ -49,6 +52,7 @@ spec:
           metadata:
             type: object
           spec:
+            description: A ProviderConfigSpec defines the desired state of a ProviderConfig.
             properties:
               credentials:
                 description: Credentials required to authenticate to this provider.

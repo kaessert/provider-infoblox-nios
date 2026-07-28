@@ -4,19 +4,19 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: clusterproviderconfigusages.infobloxnios.crossplane.io
+  name: providerconfigusages.infobloxnios.m.crossplane.io
 spec:
-  group: infobloxnios.crossplane.io
+  group: infobloxnios.m.crossplane.io
   names:
     categories:
     - crossplane
     - provider
     - infobloxnios
-    kind: ClusterProviderConfigUsage
-    listKind: ClusterProviderConfigUsageList
-    plural: clusterproviderconfigusages
-    singular: clusterproviderconfigusage
-  scope: Cluster
+    kind: ProviderConfigUsage
+    listKind: ProviderConfigUsageList
+    plural: providerconfigusages
+    singular: providerconfigusage
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .metadata.creationTimestamp
@@ -34,8 +34,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A ClusterProviderConfigUsage indicates that a resource is using
-          a ClusterProviderConfig.
+        description: |-
+          A ProviderConfigUsage indicates that a namespaced resource is using a
+          ProviderConfig or a ClusterProviderConfig. The usage record's resourceRef
+          carries the referenced Kind, so this single type tracks usage for both.
         properties:
           apiVersion:
             description: |-
