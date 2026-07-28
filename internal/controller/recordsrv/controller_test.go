@@ -587,6 +587,25 @@ func TestClusterCreateCapturesServerAssignedRef(t *testing.T) {
 	}
 }
 
+// TestClusterCreateServerError verifies Create() surfaces a wrapped error
+// (rather than a panic or silent success) when the WAPI backend rejects
+// the POST /record:srv request.
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterSRVRecord("my-srvrecord", "")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want error for a 500 WAPI response, got nil")
+	}
+
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q after a failed create, want unset", got)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -1024,6 +1043,24 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+// TestNamespacedCreateServerError is the namespaced-scope counterpart of
+// TestClusterCreateServerError.
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedSRVRecord("default", "my-srvrecord", "", "ProviderConfig")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want error for a 500 WAPI response, got nil")
+	}
+
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q after a failed create, want unset", got)
 	}
 }
 
