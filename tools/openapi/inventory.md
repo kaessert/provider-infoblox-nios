@@ -49,7 +49,7 @@ Live-verified 2026-07-28 against a real NIOS Grid Manager: created a throwaway A
 | CNAMERecord | `record_cname` | `record:cname` | CRUD | 0/15/7 | UpdateCNAMERecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior (identical WAPI record family) | no |
 | HTTPSRecord | `record_https` | `record:https` | CRUD | 0/10/14 | UpdateHTTPSRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
 | MXRecord | `record_mx` | `record:mx` | CRUD | 0/15/8 | UpdateMXRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
-| NSRecord | `record_ns` | `record:ns` | CRUD | 0/8/5 | UpdateNSRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
+| NSRecord | `record_ns` | `record:ns` | CRUD | 0/7/5 | UpdateNSRecord | hard-delete (404 on subsequent GET) — live-verified | yes |
 | PTRRecord | `record_ptr` | `record:ptr` | CRUD | 0/16/9 | UpdatePTRRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
 | SRVRecord | `record_srv` | `record:srv` | CRUD | 0/15/10 | UpdateSRVRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
 | SVCBRecord | `record_svcb` | `record:svcb` | CRUD | 0/10/14 | UpdateSVCBRecord | hard-delete (404 on subsequent GET) — inferred from RecordA behavior | no |
@@ -1119,7 +1119,7 @@ disable is on the WAPI object but not exposed by CreateMXRecord/UpdateMXRecord.
 **Rationale:** WAPI assigns an opaque `_ref` on POST; no user-controlled key survives a rename.  
 **Delete behavior:** hard-delete (404 on subsequent GET) — inferred from RecordA behavior  
 **Update method:** UpdateNSRecord  
-**Live-verified:** no  
+**Live-verified:** yes (2026-07-28, see ADR-IN-0004)  
 **Notes:** Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord.  
 
 #### CRUD Methods
@@ -1132,23 +1132,36 @@ disable is on the WAPI object but not exposed by CreateMXRecord/UpdateMXRecord.
 | Update | `UpdateNSRecord` | ObjectManager | — |
 | Delete | `DeleteNSRecord` | ObjectManager | — |
 
-#### Fields (request=0, response=8, both=5)
+#### Fields (request=0, response=7, both=5)
+
+Corrected against the RecordNS struct in the pinned SDK's
+`objects_generated.go` and live-verified per ADR-IN-0004: the field table
+below drops `creation_time` and `ms_ad_user_data` (neither is a real
+RecordNS field — RecordNS has no creation-time tracking or MS AD user data,
+unlike ARecord) and adds `creator` (a real RecordNS field the original
+static scan omitted).
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
 | `_ref` | `string` | response | no | no | — | Server-assigned opaque object reference. This is the Crossplane external-name. |
 | `cloud_info` | `*GridCloudapiInfo` | response | no | no | — | Cloud API related information for this object (cloud-managed records only). |
-| `creation_time` | `*UnixTime` | response | no | no | — | Record creation time (Epoch seconds). |
+| `creator` | `string` | response | no | no | — | Record creator. Live-verified read-only (`supports=rs`). |
 | `dns_name` | `string` | response | no | no | — | Record name in punycode format (derived from name). |
 | `last_queried` | `*UnixTime` | response | no | no | — | Time of the last DNS query for this record (Epoch seconds). |
-| `ms_ad_user_data` | `*MsserverAduserData` | response | no | no | — | Microsoft Active Directory user information (MS-managed records only). |
-| `view` | `string` | both | yes | yes | — | DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). |
+| `view` | `string` | both | yes | yes | — | DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Live-verified hard immutable (`supports=rws`, no `u`). |
 | `zone` | `string` | response | no | yes | — | Zone in which the record resides, e.g. "zone.com". Derived from name/view; immutable. |
-| `name` | `string` | both | yes | no | — | Name of the NS record in FQDN format (the delegated zone/subdomain). |
+| `name` | `string` | both | yes | **yes** | — | Name of the NS record in FQDN format (the delegated zone/subdomain). Live-verified immutable (`supports=rws`, no `u`) — corrects the original "mutable" classification. |
 | `nameserver` | `*string` | both | yes | no | — | FQDN of the authoritative server for the redirected zone. |
-| `addresses` | `[]*ZoneNameServer` | both | no | no | — | Glue address records for the name server. |
+| `addresses` | `[]*ZoneNameServer` | both | **yes** | no | — | Glue address records for the name server. Live-verified REQUIRED on create (`field for create missing: addresses`) — corrects the original "optional" classification. |
 | `ms_delegation_name` | `*string` | both | no | no | — | MS delegation point name. |
 | `policy` | `string` | response | no | no | — | Host name policy for the record. |
+
+##### API Behavior (live-verified)
+
+- Delete behavior: hard-delete (404 on subsequent GET)
+- Mutation method: PUT (partial/merge — only included fields change)
+- Undocumented fields: none beyond the `creator` correction above
+- Create-only response fields: none (no secret/credential-shaped fields)
 
 ---
 

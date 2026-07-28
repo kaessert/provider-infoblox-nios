@@ -55,6 +55,10 @@ const (
 	goTypeStringMap  = "map[string]string"
 	groupSuffixCrd   = "infobloxnios.crossplane.io"
 	groupSuffixCrdNS = "infobloxnios.m.crossplane.io"
+	// jsonNameName is the recurring "name" JSON field key shared by
+	// several top-level and nested-type fields across the catalog (e.g.
+	// NSRecord.Name, the Dhcpmember-derived DelegatedMember.Name).
+	jsonNameName = "name"
 )
 
 // FieldDef describes one field of a resource or nested type.
@@ -212,6 +216,7 @@ func All() []ResourceDescriptor {
 		aaaaRecord(),
 		cnameRecord(),
 		mxRecord(),
+		nsRecord(),
 		ptrRecord(),
 		srvRecord(),
 		txtRecord(),
