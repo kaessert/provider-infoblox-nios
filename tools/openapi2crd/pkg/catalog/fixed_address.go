@@ -91,7 +91,7 @@ func fixedAddress() ResourceDescriptor {
 				Description: "Network view the fixed address belongs to. Defaults to \"default\" when unset. Identifies a NetworkView by name.",
 				Reference: &ReferenceDescriptor{
 					TargetKind:  "NetworkView",
-					TargetSlug:  "networkview",
+					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
 				},
 			},

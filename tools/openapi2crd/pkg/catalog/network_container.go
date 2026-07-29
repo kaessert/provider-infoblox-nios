@@ -39,7 +39,7 @@ func networkContainer() ResourceDescriptor {
 				Description: "Network view the container belongs to. Immutable — absent from UpdateNetworkContainer. Identifies a NetworkView by name.",
 				Reference: &ReferenceDescriptor{
 					TargetKind:  "NetworkView",
-					TargetSlug:  "networkview",
+					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
 				},
 			},

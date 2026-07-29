@@ -49,7 +49,7 @@ func network() ResourceDescriptor {
 		ExternalNameStrategy: StrategyServerAssigned,
 		Fields: []FieldDef{
 			{
-				Name:        "NetworkView",
+				Name:        kindNetworkView,
 				JSONName:    "networkView",
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
@@ -57,8 +57,8 @@ func network() ResourceDescriptor {
 				Immutable:   true,
 				Description: "Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.",
 				Reference: &ReferenceDescriptor{
-					TargetKind:  "NetworkView",
-					TargetSlug:  "networkview",
+					TargetKind:  kindNetworkView,
+					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
 				},
 			},

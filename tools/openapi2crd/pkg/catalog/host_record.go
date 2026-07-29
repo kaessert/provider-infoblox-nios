@@ -72,7 +72,7 @@ func hostRecord() ResourceDescriptor {
 				Description: "List of IPv6 addresses for the host.",
 			},
 			{
-				Name:      "NetworkView",
+				Name:      kindNetworkView,
 				JSONName:  "networkView",
 				GoType:    goTypeString,
 				Scope:     FieldScopeBoth,
@@ -80,8 +80,8 @@ func hostRecord() ResourceDescriptor {
 				Description: "Network view the host record resides in. Immutable after creation " +
 					"(live-verified: supports=rws, no u — corrects Phase 1 inventory).",
 				Reference: &ReferenceDescriptor{
-					TargetKind:  "NetworkView",
-					TargetSlug:  "networkview",
+					TargetKind:  kindNetworkView,
+					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
 				},
 			},

@@ -5,11 +5,11 @@ import "testing"
 // TestFindResourceNetworkView verifies FindResource returns the NetworkView
 // descriptor for its slug, with the expected cluster/namespaced API groups.
 func TestFindResourceNetworkView(t *testing.T) {
-	rd, ok := FindResource("networkview")
+	rd, ok := FindResource(slugNetworkView)
 	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "networkview")
+		t.Fatalf("FindResource(%q): expected found", slugNetworkView)
 	}
-	if rd.Kind != testKindNetworkView {
+	if rd.Kind != kindNetworkView {
 		t.Errorf("Kind = %q, want NetworkView", rd.Kind)
 	}
 	if rd.ClusterGroup != "networkview.infobloxnios.crossplane.io" {
@@ -25,9 +25,9 @@ func TestFindResourceNetworkView(t *testing.T) {
 // isDefault -> response) — a regression guard against accidental catalog
 // drift.
 func TestNetworkViewFieldCounts(t *testing.T) {
-	rd, ok := FindResource("networkview")
+	rd, ok := FindResource(slugNetworkView)
 	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "networkview")
+		t.Fatalf("FindResource(%q): expected found", slugNetworkView)
 	}
 
 	var req, resp, both int
@@ -57,9 +57,9 @@ func TestNetworkViewFieldCounts(t *testing.T) {
 // Immutable and FieldScopeResponse (no ForProvider representation — WAPI
 // assigns it, it is never a create/update parameter).
 func TestNetworkViewIsDefaultImmutable(t *testing.T) {
-	rd, ok := FindResource("networkview")
+	rd, ok := FindResource(slugNetworkView)
 	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "networkview")
+		t.Fatalf("FindResource(%q): expected found", slugNetworkView)
 	}
 
 	found := false

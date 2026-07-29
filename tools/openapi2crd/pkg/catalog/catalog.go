@@ -78,6 +78,14 @@ const (
 	// FixedAddressCloudInfoDelegatedMember.Name).
 	fieldNameName = "Name"
 	jsonNameName  = "name"
+	// kindNetworkView recurs across the HostRecord, Network, and Range
+	// networkView cross-resource reference fields (Name, TargetKind) plus
+	// the NetworkView resource's own Kind, and their table-driven tests.
+	kindNetworkView = "NetworkView"
+	// slugNetworkView is the recurring slug literal for the NetworkView
+	// resource, used both by production catalog entries (TargetSlug) and
+	// by table-driven tests across the catalog package.
+	slugNetworkView = "networkview"
 )
 
 // FieldDef describes one field of a resource or nested type.
@@ -245,6 +253,7 @@ func All() []ResourceDescriptor {
 		network(),
 		networkView(),
 		fixedAddress(),
+		rangeResource(),
 		rangeTemplate(),
 		ipv4SharedNetwork(),
 		networkContainer(),
