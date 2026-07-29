@@ -1490,6 +1490,73 @@ kubectl apply -f examples/dtc-pool/dtc-pool.yaml
 kubectl apply -f examples/dtc-pool/dtc-pool-namespaced.yaml
 ```
 
+### DTCLBDN
+
+Manage Infoblox NIOS DTC (DNS Traffic Control) Load Balanced Domain Names
+(WAPI object type `dtc:lbdn`). A DTCLBDN matches incoming DNS queries
+against a set of FQDN wildcard patterns and answers them by distributing
+traffic across one or more DTCPool members.
+
+**Cluster-scoped** (`dtclbdn.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtclbdn.infobloxnios.crossplane.io/v1alpha1
+kind: DTCLBDN
+metadata:
+  name: example-dtclbdn
+spec:
+  forProvider:
+    name: test-dtc-lbdn
+    lbMethod: ROUND_ROBIN
+    patterns:
+      - "*.example.com"
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`dtclbdn.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtclbdn.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCLBDN
+metadata:
+  name: example-dtclbdn-ns
+  namespace: default
+spec:
+  forProvider:
+    name: test-dtc-lbdn-ns
+    lbMethod: ROUND_ROBIN
+    patterns:
+      - "*.namespaced.example.com"
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually. Create is synchronous: WAPI's POST returns the `_ref`
+immediately, so no special create-pending handling is required.
+
+`pools` (the DTCPool members of the LBDN, each with a per-pool match
+priority `ratio`) and `authZones` (the ZoneAuth zones the LBDN's patterns
+are matched against, identified by each zone's WAPI `_ref`) are optional
+and reference DTCPool/ZoneAuth resources by external name; these examples
+omit both so they run standalone without requiring pre-existing DTCPool or
+ZoneAuth resources. `name` is mutable. All other fields (`types`,
+`priority`, `persistence`, `topology`, `ttl`, `useTtl`, `comment`,
+`disable`, `extattrs`, `pools`, `authZones`) are mutable in place via WAPI
+PUT — no immutable fields are known for this resource.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/dtc-lbdn/dtc-lbdn.yaml
+kubectl apply -f examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
+```
+
 ## Development
 
 ```bash
