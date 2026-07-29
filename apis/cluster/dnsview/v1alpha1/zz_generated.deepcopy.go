@@ -592,16 +592,6 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EdnsUDPSize != nil {
-		in, out := &in.EdnsUDPSize, &out.EdnsUDPSize
-		*out = new(int64)
-		**out = **in
-	}
-	if in.UseEdnsUDPSize != nil {
-		in, out := &in.UseEdnsUDPSize, &out.UseEdnsUDPSize
-		*out = new(bool)
-		**out = **in
-	}
 	if in.EnableFixedRrsetOrderFqdns != nil {
 		in, out := &in.EnableFixedRrsetOrderFqdns, &out.EnableFixedRrsetOrderFqdns
 		*out = new(bool)
@@ -1075,16 +1065,6 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.UseDnssec != nil {
 		in, out := &in.UseDnssec, &out.UseDnssec
-		*out = new(bool)
-		**out = **in
-	}
-	if in.EdnsUDPSize != nil {
-		in, out := &in.EdnsUDPSize, &out.EdnsUDPSize
-		*out = new(int64)
-		**out = **in
-	}
-	if in.UseEdnsUDPSize != nil {
-		in, out := &in.UseEdnsUDPSize, &out.UseEdnsUDPSize
 		*out = new(bool)
 		**out = **in
 	}

@@ -224,12 +224,6 @@ spec:
                     description: Determines if the DNS security validation is enabled
                       or not.
                     type: boolean
-                  ednsUdpSize:
-                    description: Advertises the EDNS0 buffer size to the upstream
-                      server. The value should be between 512 and 4096 bytes. The
-                      recommended value is between 512 and 1220 bytes.
-                    format: int64
-                    type: integer
                   enableBlacklist:
                     description: Determines if the blacklist in a DNS view is enabled
                       or not.
@@ -701,9 +695,6 @@ spec:
                     description: 'Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled,
                       dnssec_validation_enabled, dnssec_trusted_keys.'
                     type: boolean
-                  useEdnsUdpSize:
-                    description: 'Use flag for: edns_udp_size.'
-                    type: boolean
                   useFilterAaaa:
                     description: 'Use flag for: filter_aaaa, filter_aaaa_list.'
                     type: boolean
@@ -1026,12 +1017,6 @@ spec:
                     description: Determines if the DNS security validation is enabled
                       or not.
                     type: boolean
-                  ednsUdpSize:
-                    description: Advertises the EDNS0 buffer size to the upstream
-                      server. The value should be between 512 and 4096 bytes. The
-                      recommended value is between 512 and 1220 bytes.
-                    format: int64
-                    type: integer
                   enableBlacklist:
                     description: Determines if the blacklist in a DNS view is enabled
                       or not.
@@ -1529,9 +1514,6 @@ spec:
                   useDnssec:
                     description: 'Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled,
                       dnssec_validation_enabled, dnssec_trusted_keys.'
-                    type: boolean
-                  useEdnsUdpSize:
-                    description: 'Use flag for: edns_udp_size.'
                     type: boolean
                   useFilterAaaa:
                     description: 'Use flag for: filter_aaaa, filter_aaaa_list.'

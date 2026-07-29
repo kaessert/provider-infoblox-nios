@@ -48,6 +48,14 @@ package catalog
 // field pointing at DNSView, is explicitly deferred by the phase-6
 // live-verification decision record to avoid retroactive changes during
 // wave expansion.
+//
+// Excluded fields: edns_udp_size and use_edns_udp_size are NOT part of this
+// descriptor. They are documented in newer WAPI schema versions but do not
+// exist at all on the pinned WAPI 2.9.7 baseline — requesting either field
+// returns a live 400 from a real Grid Manager appliance. They first appear
+// starting WAPI 2.13.1. Re-add them (as FieldScopeBoth, matching the rest
+// of the View object) only after the pinned WAPI baseline is upgraded past
+// 2.13.1.
 func dnsView() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "DNSView",
@@ -310,20 +318,13 @@ func dnsView() ResourceDescriptor {
 				Scope:       FieldScopeBoth,
 				Description: "Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled, dnssec_validation_enabled, dnssec_trusted_keys.",
 			},
-			{
-				Name:        "EdnsUDPSize",
-				JSONName:    "ednsUdpSize",
-				GoType:      goTypeInt64,
-				Scope:       FieldScopeBoth,
-				Description: "Advertises the EDNS0 buffer size to the upstream server. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.",
-			},
-			{
-				Name:        "UseEdnsUDPSize",
-				JSONName:    "useEdnsUdpSize",
-				GoType:      goTypeBool,
-				Scope:       FieldScopeBoth,
-				Description: "Use flag for: edns_udp_size.",
-			},
+			// EdnsUDPSize and UseEdnsUDPSize (WAPI edns_udp_size /
+			// use_edns_udp_size) are intentionally excluded from this
+			// descriptor: they don't exist at all on the pinned WAPI 2.9.7
+			// baseline (confirmed by a live 400 response against a real
+			// Grid Manager appliance) and first appear starting WAPI
+			// 2.13.1. Advertising them in the CRD schema would let a user
+			// set a field the controller can never read back or persist.
 			{
 				Name:        "EnableFixedRrsetOrderFqdns",
 				JSONName:    "enableFixedRrsetOrderFqdns",

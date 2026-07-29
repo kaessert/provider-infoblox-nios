@@ -284,10 +284,6 @@ type DNSViewParameters struct {
 	DnssecValidationEnabled *bool `json:"dnssecValidationEnabled,omitempty"`
 	// Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled, dnssec_validation_enabled, dnssec_trusted_keys.
 	UseDnssec *bool `json:"useDnssec,omitempty"`
-	// Advertises the EDNS0 buffer size to the upstream server. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.
-	EdnsUDPSize *int64 `json:"ednsUdpSize,omitempty"`
-	// Use flag for: edns_udp_size.
-	UseEdnsUDPSize *bool `json:"useEdnsUdpSize,omitempty"`
 	// Determines if the fixed RRset order FQDN is enabled or not.
 	EnableFixedRrsetOrderFqdns *bool `json:"enableFixedRrsetOrderFqdns,omitempty"`
 	// The fixed RRset order FQDN list. If this field is non-empty, the appliance automatically sets enable_fixed_rrset_order_fqdns to true, unless the same request also sets it to false.
@@ -479,10 +475,6 @@ type DNSViewObservation struct {
 	DnssecValidationEnabled *bool `json:"dnssecValidationEnabled,omitempty"` // atProvider
 	// Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled, dnssec_validation_enabled, dnssec_trusted_keys.
 	UseDnssec *bool `json:"useDnssec,omitempty"` // atProvider
-	// Advertises the EDNS0 buffer size to the upstream server. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.
-	EdnsUDPSize *int64 `json:"ednsUdpSize,omitempty"` // atProvider
-	// Use flag for: edns_udp_size.
-	UseEdnsUDPSize *bool `json:"useEdnsUdpSize,omitempty"` // atProvider
 	// Determines if the fixed RRset order FQDN is enabled or not.
 	EnableFixedRrsetOrderFqdns *bool `json:"enableFixedRrsetOrderFqdns,omitempty"` // atProvider
 	// The fixed RRset order FQDN list. If this field is non-empty, the appliance automatically sets enable_fixed_rrset_order_fqdns to true, unless the same request also sets it to false.
