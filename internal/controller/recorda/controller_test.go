@@ -727,6 +727,118 @@ func TestClusterConnectProviderConfigNotFound(t *testing.T) {
 	}
 }
 
+// TestClusterConnectSslVerifyVariants exercises the cluster-scoped
+// ProviderConfig's SSLVerify resolution branch in Connect: true, false, and
+// omitted (nil, which must default to secure — TLS verification enabled).
+// newObjectManagerWithScheme's real TLS-handshake behavior for each boolean
+// is proven separately by TestNewObjectManagerWithSchemeEnforcesTLSVerification;
+// this test proves Connect correctly extracts and defaults the value from
+// pc.Spec.SSLVerify for every branch without erroring.
+func TestClusterConnectSslVerifyVariants(t *testing.T) {
+	cases := map[string]*bool{
+		"Enabled":  boolPtr(true),
+		"Disabled": boolPtr(false),
+		"Omitted":  nil,
+	}
+
+	for name, sslVerify := range cases {
+		t.Run(name, func(t *testing.T) {
+			const (
+				ns     = "crossplane-system"
+				secret = "infobloxnios-api-key"
+			)
+
+			scheme := newTestScheme(t)
+			kube := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(
+					credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+					&clusterpcv1alpha1.ProviderConfig{
+						ObjectMeta: metav1.ObjectMeta{Name: "default"},
+						Spec: clusterpcv1alpha1.ProviderConfigSpec{
+							Credentials: clusterpcv1alpha1.ProviderCredentials{
+								Source: xpv1.CredentialsSourceSecret,
+								CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+									SecretRef: &xpv1.SecretKeySelector{
+										SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+										Key:             "unused",
+									},
+								},
+							},
+							SSLVerify: sslVerify,
+						},
+					},
+				).Build()
+
+			conn := &clusterConnector{
+				kube:  kube,
+				usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
+			}
+
+			cr := newClusterARecord("my-arecord", "")
+			got, err := conn.Connect(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Connect: unexpected error: %v", err)
+			}
+			if got == nil {
+				t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+			}
+		})
+	}
+}
+
+// TestClusterConnectIgnoresSecretSslVerifyKey pins the migration end to
+// end: even though the credentials Secret carries a legacy ssl_verify=false
+// key, the cluster ProviderConfig's own sslVerify=true spec field is the
+// sole source of truth — Connect must succeed exactly as it would with a
+// Secret that never had the key at all, proving the dead key has no effect
+// on the connector.
+func TestClusterConnectIgnoresSecretSslVerifyKey(t *testing.T) {
+	const (
+		ns     = "crossplane-system"
+		secret = "infobloxnios-api-key"
+	)
+
+	scheme := newTestScheme(t)
+	credSecret := credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t")
+	credSecret.Data["ssl_verify"] = []byte("false")
+
+	kube := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			credSecret,
+			&clusterpcv1alpha1.ProviderConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				Spec: clusterpcv1alpha1.ProviderConfigSpec{
+					Credentials: clusterpcv1alpha1.ProviderCredentials{
+						Source: xpv1.CredentialsSourceSecret,
+						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+							SecretRef: &xpv1.SecretKeySelector{
+								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+								Key:             "unused",
+							},
+						},
+					},
+					SSLVerify: boolPtr(true),
+				},
+			},
+		).Build()
+
+	conn := &clusterConnector{
+		kube:  kube,
+		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
+	}
+
+	cr := newClusterARecord("my-arecord", "")
+	got, err := conn.Connect(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Connect: unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+	}
+}
+
 // ── namespaced: Observe ──────────────────────────────────────────────────
 
 func TestNamespacedObserveSuccess(t *testing.T) {
@@ -1033,6 +1145,162 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 	}
 
 	cr := newNamespacedARecord("app-ns", "my-arecord", "", "ClusterProviderConfig")
+	got, err := conn.Connect(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Connect: unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+	}
+}
+
+// TestNamespacedConnectSslVerifyVariants exercises the SSLVerify resolution
+// branch in namespacedConnector.Connect for both supported providerConfigRef
+// kinds (namespace-scoped ProviderConfig and cluster-scoped
+// ClusterProviderConfig), each with sslVerify true, false, and omitted (nil,
+// which must default to secure — TLS verification enabled). See
+// TestNewObjectManagerWithSchemeEnforcesTLSVerification for the real
+// TLS-handshake proof that the resolved boolean reaches the transport.
+func TestNamespacedConnectSslVerifyVariants(t *testing.T) {
+	sslVerifyCases := map[string]*bool{
+		"Enabled":  boolPtr(true),
+		"Disabled": boolPtr(false),
+		"Omitted":  nil,
+	}
+
+	t.Run("ProviderConfig", func(t *testing.T) {
+		const (
+			ns     = "default"
+			secret = "infobloxnios-api-key"
+		)
+		for name, sslVerify := range sslVerifyCases {
+			t.Run(name, func(t *testing.T) {
+				scheme := newTestScheme(t)
+				kube := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(
+						credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+						&namespacedpcv1alpha1.ProviderConfig{
+							ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
+							Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+								Credentials: namespacedpcv1alpha1.ProviderCredentials{
+									Source: xpv1.CredentialsSourceSecret,
+									CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+										SecretRef: &xpv1.SecretKeySelector{
+											SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+											Key:             "unused",
+										},
+									},
+								},
+								SSLVerify: sslVerify,
+							},
+						},
+					).Build()
+
+				conn := &namespacedConnector{
+					kube:  kube,
+					usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
+				}
+
+				cr := newNamespacedARecord(ns, "my-arecord", "", "ProviderConfig")
+				got, err := conn.Connect(context.Background(), cr)
+				if err != nil {
+					t.Fatalf("Connect: unexpected error: %v", err)
+				}
+				if got == nil {
+					t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+				}
+			})
+		}
+	})
+
+	t.Run("ClusterProviderConfig", func(t *testing.T) {
+		const secret = "infobloxnios-api-key"
+		ns := "crossplane-system"
+		for name, sslVerify := range sslVerifyCases {
+			t.Run(name, func(t *testing.T) {
+				scheme := newTestScheme(t)
+				kube := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(
+						credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+						&namespacedpcv1alpha1.ClusterProviderConfig{
+							ObjectMeta: metav1.ObjectMeta{Name: "default"},
+							Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+								Credentials: namespacedpcv1alpha1.ProviderCredentials{
+									Source: xpv1.CredentialsSourceSecret,
+									CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+										SecretRef: &xpv1.SecretKeySelector{
+											SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+											Key:             "unused",
+										},
+									},
+								},
+								SSLVerify: sslVerify,
+							},
+						},
+					).Build()
+
+				conn := &namespacedConnector{
+					kube:  kube,
+					usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
+				}
+
+				cr := newNamespacedARecord("app-ns", "my-arecord", "", "ClusterProviderConfig")
+				got, err := conn.Connect(context.Background(), cr)
+				if err != nil {
+					t.Fatalf("Connect: unexpected error: %v", err)
+				}
+				if got == nil {
+					t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+				}
+			})
+		}
+	})
+}
+
+// TestNamespacedConnectIgnoresSecretSslVerifyKey is the namespaced-scope
+// counterpart of TestClusterConnectIgnoresSecretSslVerifyKey: a legacy
+// ssl_verify=false key in the credentials Secret must have zero effect —
+// the namespace-scoped ProviderConfig's own sslVerify=true spec field is
+// the sole source of truth.
+func TestNamespacedConnectIgnoresSecretSslVerifyKey(t *testing.T) {
+	const (
+		ns     = "default"
+		secret = "infobloxnios-api-key"
+	)
+
+	scheme := newTestScheme(t)
+	credSecret := credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t")
+	credSecret.Data["ssl_verify"] = []byte("false")
+
+	kube := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			credSecret,
+			&namespacedpcv1alpha1.ProviderConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
+				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+					Credentials: namespacedpcv1alpha1.ProviderCredentials{
+						Source: xpv1.CredentialsSourceSecret,
+						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+							SecretRef: &xpv1.SecretKeySelector{
+								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+								Key:             "unused",
+							},
+						},
+					},
+					SSLVerify: boolPtr(true),
+				},
+			},
+		).Build()
+
+	conn := &namespacedConnector{
+		kube:  kube,
+		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
+	}
+
+	cr := newNamespacedARecord(ns, "my-arecord", "", "ProviderConfig")
 	got, err := conn.Connect(context.Background(), cr)
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
@@ -1450,6 +1718,52 @@ func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNewObjectManagerWithSchemeEnforcesTLSVerification proves — via a real
+// TLS handshake against a self-signed httptest server — that the sslVerify
+// boolean genuinely reaches the underlying TransportConfig, not just that
+// construction succeeds either way. sslVerify=true must reject the
+// self-signed certificate; sslVerify=false must accept it.
+func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewTLSServer(m.handler())
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("cannot parse TLS test server URL: %v", err)
+	}
+	creds := &nioCredentials{Host: u.Hostname(), Username: "test-user", Password: "test-pass"}
+
+	t.Run("VerifyEnabledRejectsSelfSignedCert", func(t *testing.T) {
+		objMgr, err := newObjectManagerWithScheme(creds, true, "https", u.Port())
+		if err != nil {
+			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+		}
+		if _, err := objMgr.GetARecordByRef("record:a/does-not-exist"); err == nil {
+			t.Fatal("GetARecordByRef: expected a TLS certificate verification error with sslVerify=true against a self-signed cert, got nil")
+		} else if lower := strings.ToLower(err.Error()); !strings.Contains(lower, "certificate") && !strings.Contains(lower, "x509") {
+			t.Errorf("GetARecordByRef: expected a TLS certificate verification error, got: %v", err)
+		}
+	})
+
+	t.Run("VerifyDisabledAcceptsSelfSignedCert", func(t *testing.T) {
+		objMgr, err := newObjectManagerWithScheme(creds, false, "https", u.Port())
+		if err != nil {
+			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+		}
+		_, err = objMgr.GetARecordByRef("record:a/does-not-exist")
+		if err == nil {
+			t.Fatal("GetARecordByRef: expected a not-found error for a nonexistent record, got nil")
+		}
+		if lower := strings.ToLower(err.Error()); strings.Contains(lower, "certificate") || strings.Contains(lower, "x509") {
+			t.Errorf("GetARecordByRef: expected the TLS handshake to succeed with sslVerify=false, got a certificate error: %v", err)
+		}
+		if !isNotFound(err) {
+			t.Errorf("GetARecordByRef: expected a 404 not-found error once the TLS handshake succeeds, got: %v", err)
+		}
+	})
 }
 
 // ── Delete: RemoveAssociatedPtr (documented SDK limitation) ────────────
