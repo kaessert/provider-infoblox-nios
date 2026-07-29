@@ -288,8 +288,6 @@ func fieldsFromClusterParams(p *clusterv1alpha1.DNSViewParameters) dnsViewFields
 		UseMaxCacheTTL:                      p.UseMaxCacheTTL,
 		MaxNcacheTTL:                        p.MaxNcacheTTL,
 		UseMaxNcacheTTL:                     p.UseMaxNcacheTTL,
-		MaxUDPSize:                          p.MaxUDPSize,
-		UseMaxUDPSize:                       p.UseMaxUDPSize,
 		NotifyDelay:                         p.NotifyDelay,
 		NxdomainLogQuery:                    p.NxdomainLogQuery,
 		NxdomainRedirect:                    p.NxdomainRedirect,
@@ -372,8 +370,6 @@ func applyFieldsToClusterParams(f dnsViewFields, p *clusterv1alpha1.DNSViewParam
 	p.UseMaxCacheTTL = f.UseMaxCacheTTL
 	p.MaxNcacheTTL = f.MaxNcacheTTL
 	p.UseMaxNcacheTTL = f.UseMaxNcacheTTL
-	p.MaxUDPSize = f.MaxUDPSize
-	p.UseMaxUDPSize = f.UseMaxUDPSize
 	p.NotifyDelay = f.NotifyDelay
 	p.NxdomainLogQuery = f.NxdomainLogQuery
 	p.NxdomainRedirect = f.NxdomainRedirect
@@ -457,8 +453,6 @@ func clusterObservationFromFields(f dnsViewFields, id string, ref *string, isDef
 		UseMaxCacheTTL:                      f.UseMaxCacheTTL,
 		MaxNcacheTTL:                        f.MaxNcacheTTL,
 		UseMaxNcacheTTL:                     f.UseMaxNcacheTTL,
-		MaxUDPSize:                          f.MaxUDPSize,
-		UseMaxUDPSize:                       f.UseMaxUDPSize,
 		NotifyDelay:                         f.NotifyDelay,
 		NxdomainLogQuery:                    f.NxdomainLogQuery,
 		NxdomainRedirect:                    f.NxdomainRedirect,

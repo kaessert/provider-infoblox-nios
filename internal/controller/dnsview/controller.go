@@ -1094,8 +1094,6 @@ type dnsViewFields struct {
 	UseMaxCacheTTL                      *bool
 	MaxNcacheTTL                        *int64
 	UseMaxNcacheTTL                     *bool
-	MaxUDPSize                          *int64
-	UseMaxUDPSize                       *bool
 	NotifyDelay                         *int64
 	NxdomainLogQuery                    *bool
 	NxdomainRedirect                    *bool
@@ -1180,8 +1178,6 @@ func buildView(f dnsViewFields) *ibclient.View {
 		UseMaxCacheTtl:                      f.UseMaxCacheTTL,
 		MaxNcacheTtl:                        int64PtrToUint32Ptr(f.MaxNcacheTTL),
 		UseMaxNcacheTtl:                     f.UseMaxNcacheTTL,
-		MaxUdpSize:                          int64PtrToUint32Ptr(f.MaxUDPSize),
-		UseMaxUdpSize:                       f.UseMaxUDPSize,
 		NotifyDelay:                         int64PtrToUint32Ptr(f.NotifyDelay),
 		NxdomainLogQuery:                    f.NxdomainLogQuery,
 		NxdomainRedirect:                    f.NxdomainRedirect,
@@ -1264,8 +1260,6 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 		UseMaxCacheTTL:                      v.UseMaxCacheTtl,
 		MaxNcacheTTL:                        uint32PtrToInt64Ptr(v.MaxNcacheTtl),
 		UseMaxNcacheTTL:                     v.UseMaxNcacheTtl,
-		MaxUDPSize:                          uint32PtrToInt64Ptr(v.MaxUdpSize),
-		UseMaxUDPSize:                       v.UseMaxUdpSize,
 		NotifyDelay:                         uint32PtrToInt64Ptr(v.NotifyDelay),
 		NxdomainLogQuery:                    v.NxdomainLogQuery,
 		NxdomainRedirect:                    v.NxdomainRedirect,
@@ -1452,12 +1446,6 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseMaxNcacheTTL) == boolOrFalse(observed.UseMaxNcacheTTL)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.MaxUDPSize) == int64OrZero(observed.MaxUDPSize)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.UseMaxUDPSize) == boolOrFalse(observed.UseMaxUDPSize)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return int64OrZero(desired.NotifyDelay) == int64OrZero(observed.NotifyDelay)
@@ -1709,12 +1697,6 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitPtr(&desired.UseMaxNcacheTTL, observed.UseMaxNcacheTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.MaxUDPSize, observed.MaxUDPSize)
-	},
-	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.UseMaxUDPSize, observed.UseMaxUDPSize)
-	},
-	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.NotifyDelay, observed.NotifyDelay)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
@@ -1824,13 +1806,13 @@ func lateInitializeFields(desired, observed dnsViewFields) (dnsViewFields, bool)
 // network_view, comment) — i.e. every field mirrored by DNSViewObservation
 // (full-mirror AtProvider convention).
 //
-// edns_udp_size/use_edns_udp_size/last_queried_acl are deliberately
-// excluded: the provider is pinned to WAPI 2.9.7, whose `view` object
-// schema does not define these fields at all (confirmed live against the
-// Grid Manager). Requesting them in the GET return-fields list fails
-// every Observe() with a 400 (AdmConProtoError: Unknown argument/field).
-// The controller no longer reads, writes, or compares these fields
-// anywhere.
+// edns_udp_size/use_edns_udp_size/last_queried_acl/max_udp_size/
+// use_max_udp_size are deliberately excluded: the provider is pinned to
+// WAPI 2.9.7, whose `view` object schema does not define these fields at
+// all (confirmed live against the Grid Manager). Requesting them in the
+// GET return-fields list fails every Observe() with a 400
+// (AdmConProtoError: Unknown argument/field). The controller no longer
+// reads, writes, or compares these fields anywhere.
 var dnsViewReturnFields = []string{
 	"blacklist_action",
 	"blacklist_log_query",
@@ -1869,7 +1851,6 @@ var dnsViewReturnFields = []string{
 	"match_destinations",
 	"max_cache_ttl",
 	"max_ncache_ttl",
-	"max_udp_size",
 	"notify_delay",
 	"nxdomain_log_query",
 	"nxdomain_redirect",
@@ -1900,7 +1881,6 @@ var dnsViewReturnFields = []string{
 	"use_lame_ttl",
 	"use_max_cache_ttl",
 	"use_max_ncache_ttl",
-	"use_max_udp_size",
 	"use_nxdomain_redirect",
 	"use_recursion",
 	"use_response_rate_limiting",
