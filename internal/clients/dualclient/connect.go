@@ -28,18 +28,20 @@ const (
 )
 
 // Credentials holds the WAPI connection parameters for one endpoint
-// (primary or candidate), extracted from a Kubernetes Secret.
+// (primary or candidate), extracted from a Kubernetes Secret. TLS
+// verification is governed by the owning ProviderConfig's sslVerify spec
+// field (passed separately to Connect), not by anything in this Secret.
 type Credentials struct {
-	Host      string
-	Username  string
-	Password  string
-	SslVerify bool
+	Host     string
+	Username string
+	Password string
 }
 
-// ExtractCredentials reads the host/username/password (+ optional
-// ssl_verify) keys from the Secret referenced by source/secretRef. This is
-// the same Secret shape used for a ProviderConfig's primary credentials,
-// reused unchanged for a readEndpoint's credentialsRef.
+// ExtractCredentials reads the host/username/password keys from the
+// Secret referenced by source/secretRef. This is the same Secret shape
+// used for a ProviderConfig's primary credentials, reused unchanged for a
+// readEndpoint's credentialsRef. TLS verification is not read from this
+// Secret — it is a ProviderConfig-level policy field (see Connect).
 func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.CredentialsSource, secretRef *xpv1.SecretKeySelector, fallbackNamespace string) (Credentials, error) {
 	if source != xpv1.CredentialsSourceSecret {
 		return Credentials{}, errors.New(errUnsupportedCreds)
@@ -65,25 +67,24 @@ func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 		return Credentials{}, errors.New(errMissingCredKey)
 	}
 
-	sslVerify := true
-	if v := string(secret.Data["ssl_verify"]); v == "false" {
-		sslVerify = false
-	}
-
-	return Credentials{Host: host, Username: username, Password: password, SslVerify: sslVerify}, nil
+	return Credentials{Host: host, Username: username, Password: password}, nil
 }
 
 // ObjectManagerFactory builds an authenticated ibclient.IBObjectManager
-// from Credentials. Callers inject their own factory (each resource
-// controller already owns one, parameterized by WAPI version and, in
-// tests, by scheme/port overrides for httptest servers) so this package
-// does not duplicate that per-controller SDK connector construction.
-type ObjectManagerFactory func(creds Credentials) (ibclient.IBObjectManager, error)
+// from Credentials and the resolved sslVerify policy. Callers inject
+// their own factory (each resource controller already owns one,
+// parameterized by WAPI version and, in tests, by scheme/port overrides
+// for httptest servers) so this package does not duplicate that
+// per-controller SDK connector construction.
+type ObjectManagerFactory func(creds Credentials, sslVerify bool) (ibclient.IBObjectManager, error)
 
 // Connect builds a dual-endpoint Client from primary credentials plus an
-// optional read endpoint. When readCreds is nil, the returned Client is a
-// pure passthrough to the primary — identical to today's single-endpoint
-// behavior. The read endpoint is entirely opt-in.
+// optional read endpoint. sslVerify is resolved by the caller from the
+// owning ProviderConfig's sslVerify spec field and applies to both the
+// primary and candidate endpoints — a single ProviderConfig governs both,
+// this is not a per-credential setting. When readCreds is nil, the
+// returned Client is a pure passthrough to the primary — identical to
+// today's single-endpoint behavior. The read endpoint is entirely opt-in.
 //
 // If readCreds is non-nil and building its ObjectManager fails, Connect
 // returns an error rather than falling back to a primary-only Client —
@@ -93,8 +94,8 @@ type ObjectManagerFactory func(creds Credentials) (ibclient.IBObjectManager, err
 // reason: a missing/invalid Secret must fail Connect(), which callers
 // achieve by returning early instead of calling this function with a nil
 // readCreds.
-func Connect(primaryCreds Credentials, readCreds *Credentials, newObjMgr ObjectManagerFactory, breaker *CircuitBreaker) (*Client, error) {
-	primary, err := newObjMgr(primaryCreds)
+func Connect(primaryCreds Credentials, readCreds *Credentials, sslVerify bool, newObjMgr ObjectManagerFactory, breaker *CircuitBreaker) (*Client, error) {
+	primary, err := newObjMgr(primaryCreds, sslVerify)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewPrimaryObjectManager)
 	}
@@ -103,7 +104,7 @@ func Connect(primaryCreds Credentials, readCreds *Credentials, newObjMgr ObjectM
 		return New(primary), nil
 	}
 
-	candidate, err := newObjMgr(*readCreds)
+	candidate, err := newObjMgr(*readCreds, sslVerify)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewCandidateObjectManager)
 	}

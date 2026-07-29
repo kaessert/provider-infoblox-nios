@@ -50,12 +50,13 @@ func TestExtractCredentialsSuccess(t *testing.T) {
 	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
 		t.Fatalf("ExtractCredentials returned unexpected creds: %+v", creds)
 	}
-	if !creds.SslVerify {
-		t.Fatal("SslVerify must default to true")
-	}
 }
 
-func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+// TestExtractCredentialsIgnoresSecretSslVerifyKey pins the sslVerify
+// migration: the ssl_verify Secret key is fully ignored — TLS
+// verification is a ProviderConfig-level policy field now, not read from
+// this Secret at all. Credentials carries no SslVerify field to prove it.
+func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
@@ -67,8 +68,8 @@ func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractCredentials: unexpected error: %v", err)
 	}
-	if creds.SslVerify {
-		t.Fatal("SslVerify must be false when ssl_verify=false")
+	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
+		t.Fatalf("ExtractCredentials returned unexpected creds: %+v", creds)
 	}
 }
 
@@ -115,12 +116,12 @@ func TestExtractCredentialsUnsupportedSource(t *testing.T) {
 
 func TestConnectPassthroughWhenNoReadCreds(t *testing.T) {
 	var built []Credentials
-	factory := func(creds Credentials) (ibclient.IBObjectManager, error) {
+	factory := func(creds Credentials, _ bool) (ibclient.IBObjectManager, error) {
 		built = append(built, creds)
 		return newFakeObjMgr(), nil
 	}
 
-	c, err := Connect(Credentials{Host: "primary.example.com"}, nil, factory, nil)
+	c, err := Connect(Credentials{Host: "primary.example.com"}, nil, true, factory, nil)
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -133,13 +134,13 @@ func TestConnectPassthroughWhenNoReadCreds(t *testing.T) {
 }
 
 func TestConnectBuildsCandidateWhenReadCredsPresent(t *testing.T) {
-	factory := func(creds Credentials) (ibclient.IBObjectManager, error) {
+	factory := func(creds Credentials, _ bool) (ibclient.IBObjectManager, error) {
 		return newFakeObjMgr(), nil
 	}
 	readCreds := Credentials{Host: "candidate.example.com"}
 	breaker := NewCircuitBreaker(5, 0)
 
-	c, err := Connect(Credentials{Host: "primary.example.com"}, &readCreds, factory, breaker)
+	c, err := Connect(Credentials{Host: "primary.example.com"}, &readCreds, true, factory, breaker)
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -151,18 +152,47 @@ func TestConnectBuildsCandidateWhenReadCredsPresent(t *testing.T) {
 	}
 }
 
+// TestConnectForwardsSslVerifyToBothEndpoints pins the design rule that a
+// single ProviderConfig's sslVerify governs both the primary and
+// candidate endpoints — Connect must forward the same value to every
+// ObjectManagerFactory call.
+func TestConnectForwardsSslVerifyToBothEndpoints(t *testing.T) {
+	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
+		t.Run(name, func(t *testing.T) {
+			var seen []bool
+			factory := func(_ Credentials, sv bool) (ibclient.IBObjectManager, error) {
+				seen = append(seen, sv)
+				return newFakeObjMgr(), nil
+			}
+			readCreds := Credentials{Host: "candidate.example.com"}
+
+			if _, err := Connect(Credentials{Host: "primary.example.com"}, &readCreds, sslVerify, factory, nil); err != nil {
+				t.Fatalf("Connect: unexpected error: %v", err)
+			}
+			if len(seen) != 2 {
+				t.Fatalf("expected sslVerify forwarded to both primary and candidate factory calls, got %d calls", len(seen))
+			}
+			for i, sv := range seen {
+				if sv != sslVerify {
+					t.Errorf("call %d: got sslVerify=%v, want %v", i, sv, sslVerify)
+				}
+			}
+		})
+	}
+}
+
 func TestConnectFailsLoudlyOnBadPrimaryCreds(t *testing.T) {
-	factory := func(Credentials) (ibclient.IBObjectManager, error) {
+	factory := func(Credentials, bool) (ibclient.IBObjectManager, error) {
 		return nil, errNewCandidateObjectManagerTestStub
 	}
-	if _, err := Connect(Credentials{}, nil, factory, nil); err == nil {
+	if _, err := Connect(Credentials{}, nil, true, factory, nil); err == nil {
 		t.Fatal("expected Connect to surface a primary ObjectManager construction failure")
 	}
 }
 
 func TestConnectFailsLoudlyOnBadCandidateCreds(t *testing.T) {
 	calls := 0
-	factory := func(Credentials) (ibclient.IBObjectManager, error) {
+	factory := func(Credentials, bool) (ibclient.IBObjectManager, error) {
 		calls++
 		if calls == 1 {
 			// primary succeeds
@@ -174,7 +204,7 @@ func TestConnectFailsLoudlyOnBadCandidateCreds(t *testing.T) {
 	}
 	readCreds := Credentials{Host: "candidate.example.com"}
 
-	c, err := Connect(Credentials{Host: "primary.example.com"}, &readCreds, factory, nil)
+	c, err := Connect(Credentials{Host: "primary.example.com"}, &readCreds, true, factory, nil)
 	if err == nil {
 		t.Fatal("expected Connect to fail loudly when the readEndpoint ObjectManager cannot be built")
 	}

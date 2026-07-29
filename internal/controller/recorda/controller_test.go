@@ -321,7 +321,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectM
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
-	}, "http", u.Port())
+	}, true, "http", u.Port())
 	if err != nil {
 		t.Fatalf("cannot build test object manager: %v", err)
 	}
@@ -1408,26 +1408,14 @@ func TestTtlOrZero(t *testing.T) {
 	}
 }
 
-// ── extractCredentials: ssl_verify ──────────────────────────────────────
+// ── extractCredentials: ssl_verify key is fully ignored ────────────────
+//
+// TLS verification moved from a Secret-embedded credential option to the
+// ProviderConfig's own sslVerify spec field (see cluster.go/namespaced.go
+// Connect methods). extractCredentials no longer reads or exposes a
+// ssl_verify value at all — nioCredentials has no SslVerify field.
 
-func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if !creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to default to true when ssl_verify key is absent")
-	}
-}
-
-func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
@@ -1440,38 +1428,20 @@ func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
 	}
-	if creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to be false when ssl_verify key is \"false\"")
-	}
-}
-
-func TestExtractCredentialsSslVerifyUnrecognizedValueDefaultsTrue(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	secret.Data["ssl_verify"] = []byte("nope")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if !creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to default to true for any value other than exactly \"false\"")
+	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
+		t.Fatalf("extractCredentials returned unexpected creds: %+v", creds)
 	}
 }
 
 func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 	// Regression guard: newObjectManagerWithScheme must not hardcode
-	// SslVerify to "true" — it must honor creds.SslVerify. Both branches
-	// must construct successfully (transport config validation happens
-	// locally; no network round-trip occurs here).
+	// sslVerify to "true" — it must honor the sslVerify parameter. Both
+	// branches must construct successfully (transport config validation
+	// happens locally; no network round-trip occurs here).
 	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
 		t.Run(name, func(t *testing.T) {
-			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t", SslVerify: sslVerify}
-			objMgr, err := newObjectManagerWithScheme(creds, "http", "80")
+			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
+			objMgr, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
 			if err != nil {
 				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
 			}
