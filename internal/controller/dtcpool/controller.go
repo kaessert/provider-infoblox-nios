@@ -13,9 +13,9 @@
 // struct itself and issues Create/Update through the lower-level
 // ibclient.IBConnector returned alongside the ObjectManager — bypassing
 // the name-based lookups entirely, mirroring the precedent already
-// established by the dtcserver package for the same reason. Read (by ref)
-// and Delete have no such mismatch, so they use the ObjectManager's
-// GetDtcPoolByRef/DeleteDtcPool convenience methods directly.
+// established by the dtcserver package for the same reason. Delete has
+// no such mismatch, so it uses the ObjectManager's DeleteDtcPool
+// convenience method directly.
 //
 // The WAPI `auto_consolidated_monitors` attribute does not exist on this
 // deployment's Grid Manager (live-verified) — this package never sets it,
@@ -24,6 +24,17 @@
 // is keyed off that pointer being non-nil). ConsolidatedMonitors is
 // therefore treated as a read-only, response-only field: mirrored into
 // AtProvider but never sent on Create/Update.
+//
+// Read (by ref) has its own, separate mismatch with this attribute: the
+// SDK's ObjectManager.GetDtcPoolByRef convenience method (via
+// NewEmptyDtcPool) unconditionally adds `auto_consolidated_monitors` to
+// the WAPI `_return_fields` list on every GET, and this deployment's WAPI
+// schema rejects the unrecognized field with a 400 — failing the GET
+// itself, not just omitting that one field from the response. This
+// package therefore never calls GetDtcPoolByRef; getDtcPoolByRef below
+// issues the same GET through the low-level IBConnector with a trimmed
+// return-fields list (see dtcPoolReturnFields) that excludes only
+// `auto_consolidated_monitors`.
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
@@ -884,6 +895,33 @@ func updateDtcPool(conn ibclient.IBConnector, ref string, name, lbPreferredMetho
 	}
 	pool.Ref = refRes
 	return pool, nil
+}
+
+// dtcPoolReturnFields lists every DtcPool field this package reads on
+// Observe, deliberately omitting `auto_consolidated_monitors`. That
+// field does not exist on this deployment's Grid Manager WAPI schema
+// (live-verified): the SDK's own read helper
+// (ibclient.ObjectManager.GetDtcPoolByRef, via NewEmptyDtcPool)
+// unconditionally requests it, and the GET is rejected outright with a
+// 400 "Unknown argument/field" error — not a per-field omission, the
+// whole response never comes back. getDtcPoolByRef below issues the
+// same GET through the low-level IBConnector with this trimmed field
+// list instead, mirroring the Create/Update bypass explained in the
+// package doc comment.
+var dtcPoolReturnFields = []string{
+	"lb_preferred_method", "servers", "lb_dynamic_ratio_preferred", "monitors", "consolidated_monitors", "disable",
+	"extattrs", "health", "lb_alternate_method", "lb_alternate_topology", "lb_dynamic_ratio_alternate", "lb_preferred_topology", "quorum", "ttl", "use_ttl", "availability",
+}
+
+// getDtcPoolByRef issues the WAPI GET call for the DTCPool identified by
+// ref via the low-level IBConnector — see dtcPoolReturnFields and the
+// package doc comment for why the ObjectManager's GetDtcPoolByRef
+// convenience method cannot be used as-is for this deployment.
+func getDtcPoolByRef(conn ibclient.IBConnector, ref string) (*ibclient.DtcPool, error) {
+	pool := &ibclient.DtcPool{}
+	pool.SetReturnFields(append(pool.ReturnFields(), dtcPoolReturnFields...))
+	err := conn.GetObject(pool, ref, ibclient.NewQueryParams(false, nil), &pool)
+	return pool, err
 }
 
 // deleteDtcPool issues the WAPI delete call.

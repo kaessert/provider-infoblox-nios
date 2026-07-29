@@ -148,6 +148,10 @@ type mockDtcPoolServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert field content.
 	lastUpdateBody []byte
+
+	// lastGetQuery captures the raw query string of the most recent GET
+	// request, for tests that assert which _return_fields were requested.
+	lastGetQuery string
 }
 
 func newMockDtcPoolServer() *mockDtcPoolServer {
@@ -280,6 +284,7 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.lastGetQuery = r.URL.RawQuery
 		rec, ok := m.records[ref]
 		m.mu.Unlock()
 		if !ok {
@@ -432,6 +437,40 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
 		t.Errorf("condition Ready = %v, want True", cond.Status)
+	}
+}
+
+// TestObserveDoesNotRequestAutoConsolidatedMonitors is a regression test
+// for the WAPI 400 "Unknown argument/field: 'auto_consolidated_monitors'"
+// bug: this Grid Manager's schema doesn't recognize that return field, so
+// Observe must never request it via getDtcPoolByRef's low-level GET.
+func TestObserveDoesNotRequestAutoConsolidatedMonitors(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+	})
+
+	e := &clusterExternal{clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	q, err := url.ParseQuery(m.lastGetQuery)
+	if err != nil {
+		t.Fatalf("parsing captured GET query %q: %v", m.lastGetQuery, err)
+	}
+	returnFields := q.Get("_return_fields")
+	if strings.Contains(returnFields, "auto_consolidated_monitors") {
+		t.Errorf("GET _return_fields = %q, must not include auto_consolidated_monitors", returnFields)
+	}
+	if !strings.Contains(returnFields, "consolidated_monitors") {
+		t.Errorf("GET _return_fields = %q, want it to still include consolidated_monitors", returnFields)
 	}
 }
 

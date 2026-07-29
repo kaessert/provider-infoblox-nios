@@ -106,7 +106,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.D
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.clients.objMgr.GetDtcPoolByRef(externalID)
+	rec, err := getDtcPoolByRef(e.clients.conn, externalID)
 	if err != nil {
 		if isNotFound(err) {
 			return managed.ExternalObservation{ResourceExists: false}, nil

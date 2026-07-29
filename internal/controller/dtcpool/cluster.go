@@ -80,7 +80,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCPool
 
 	// Pre-create guard (server-assigned external-name strategy): the
 	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetDtcPoolByRef
+	// metadata.name before Create() has run. Calling getDtcPoolByRef
 	// with the CR's Kubernetes name (not a real WAPI _ref) would error
 	// against the API on every reconcile until Create() overwrites the
 	// annotation with the real _ref.
@@ -88,7 +88,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCPool
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.clients.objMgr.GetDtcPoolByRef(externalID)
+	rec, err := getDtcPoolByRef(e.clients.conn, externalID)
 	if err != nil {
 		if isNotFound(err) {
 			return managed.ExternalObservation{ResourceExists: false}, nil
