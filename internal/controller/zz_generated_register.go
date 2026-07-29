@@ -13,7 +13,8 @@ package controller
 
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
-dtcserver "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtcserver"
+	dtcserver "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtcserver"
+	extensibleattributedef "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/extensibleattributedef"
 	fixedaddress "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/fixedaddress"
 	hostrecord "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
 	ipv4sharednetwork "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/ipv4sharednetwork"
@@ -33,19 +34,6 @@ dtcserver "github.com/crossplane-contrib/provider-infoblox-nios/internal/control
 	zoneauth "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneauth"
 	zonedelegated "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
 	zoneforward "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneforward"
-"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/extensibleattributedef"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordmx"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordsrv"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -56,9 +44,9 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
-dtcserver.SetupGated,
+		dtcserver.SetupGated,
+		extensibleattributedef.SetupGated,
 		fixedaddress.SetupGated,
-extensibleattributedef.SetupGated,
 		hostrecord.SetupGated,
 		ipv4sharednetwork.SetupGated,
 		network.SetupGated,
@@ -91,9 +79,9 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
-dtcserver.Setup,
+		dtcserver.Setup,
+		extensibleattributedef.Setup,
 		fixedaddress.Setup,
-extensibleattributedef.Setup,
 		hostrecord.Setup,
 		ipv4sharednetwork.Setup,
 		network.Setup,
