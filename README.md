@@ -521,6 +521,67 @@ The `view` field is immutable after creation: WAPI ties an MX record's
 `_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
 `view` parameter.
 
+### SRVRecord
+
+Manage Infoblox NIOS DNS "SRV" records (WAPI object type `record:srv`).
+
+**Cluster-scoped** (`recordsrv.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordsrv.infobloxnios.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord
+spec:
+  forProvider:
+    name: _sip._tcp.example.com
+    target: sipserver.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordsrv.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: _sip._tcp.ns.example.com
+    target: sipserver-ns.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `view` field is immutable after creation: WAPI ties an SRV record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-srv/record-srv.yaml
+kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+```
+
 ## Development
 
 ```bash
