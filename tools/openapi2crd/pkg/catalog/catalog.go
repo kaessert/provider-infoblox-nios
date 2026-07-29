@@ -262,6 +262,7 @@ func All() []ResourceDescriptor {
 		zoneForward(),
 		dtcServer(),
 		dnsView(),
+		dtcPool(),
 	}
 }
 
