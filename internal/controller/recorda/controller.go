@@ -49,6 +49,7 @@ const (
 	errCreateARecord    = "cannot create ARecord"
 	errUpdateARecord    = "cannot update ARecord"
 	errDeleteARecord    = "cannot delete ARecord"
+	errCidrIPv4Mutex    = "cidr and ipv4Addr are mutually exclusive"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -414,17 +415,31 @@ func observeFromRecordA(externalID string, rec *ibclient.RecordA) observedARecor
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createARecord issues the WAPI create call. netView and cidr are always
-// empty — this provider only supports statically-assigned IPv4 addresses
-// (ipv4Addr is a required ForProvider field); WAPI's dynamic
-// next-available-IP allocation (func:nextavailableip via netView/cidr) is
-// not exposed by ARecordParameters.
-func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordA, error) {
+// createARecord issues the WAPI create call. When cidr is set, the WAPI
+// dynamically allocates the next available IPv4 address from the given
+// network view (func:nextavailableip) instead of using a caller-supplied
+// static address — cidr and ipv4Addr are mutually exclusive, enforced
+// below before the SDK call is issued. CreateARecord (unlike
+// CreateAAAARecord/CreatePTRRecord) does not default an empty network
+// view to "default" itself, so this wrapper applies that default
+// explicitly for consistent behavior across all three next-available-IP
+// record types.
+func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string, cidr, networkView *string) (*ibclient.RecordA, error) {
+	cidrVal := strOrEmpty(cidr)
+	if cidrVal != "" && strOrEmpty(ipv4Addr) != "" {
+		return nil, errors.New(errCidrIPv4Mutex)
+	}
+
+	netView := strOrEmpty(networkView)
+	if cidrVal != "" && netView == "" {
+		netView = "default"
+	}
+
 	return objMgr.CreateARecord(
-		"", // netView — dynamic IP allocation is not exposed by this provider
+		netView,
 		strOrEmpty(view),
 		strOrEmpty(name),
-		"", // cidr — see netView above
+		cidrVal,
 		strOrEmpty(ipv4Addr),
 		ttlOrZero(ttl),
 		boolOrFalse(useTTL),

@@ -786,6 +786,16 @@ func (in *AAAARecordObservation) DeepCopyInto(out *AAAARecordObservation) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.Cidr != nil {
+		in, out := &in.Cidr, &out.Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.NetworkView != nil {
+		in, out := &in.NetworkView, &out.NetworkView
+		*out = new(string)
+		**out = **in
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(string)
@@ -910,6 +920,16 @@ func (in *AAAARecordParameters) DeepCopyInto(out *AAAARecordParameters) {
 	}
 	if in.View != nil {
 		in, out := &in.View, &out.View
+		*out = new(string)
+		**out = **in
+	}
+	if in.Cidr != nil {
+		in, out := &in.Cidr, &out.Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.NetworkView != nil {
+		in, out := &in.NetworkView, &out.NetworkView
 		*out = new(string)
 		**out = **in
 	}

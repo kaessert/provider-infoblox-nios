@@ -55,8 +55,10 @@ func TestAllContainsARecord(t *testing.T) {
 
 // TestARecordFieldCounts pins the request/response/both field counts
 // documented in tools/openapi/inventory.md's "### ARecord" section
-// (request=1, response=15, both=7) — a regression guard: uniform or
-// drifted counts would indicate a catalog authoring bug.
+// (request=3, response=15, both=7) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug. Request count
+// includes cidr and networkView, the create-time-only next-available-IP
+// allocation hints.
 func TestARecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recorda")
 	if !ok {
@@ -75,8 +77,8 @@ func TestARecordFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 1 {
-		t.Errorf("request-scope field count = %d, want 1", req)
+	if req != 3 {
+		t.Errorf("request-scope field count = %d, want 3", req)
 	}
 	if resp != 15 {
 		t.Errorf("response-scope field count = %d, want 15", resp)
@@ -660,8 +662,10 @@ func TestAllContainsRangeTemplate(t *testing.T) {
 
 // TestPTRRecordFieldCounts pins the request/response/both field counts
 // documented in tools/openapi/inventory.md's "### PTRRecord" section
-// (request=0, response=16, both=9) — a regression guard: uniform or
-// drifted counts would indicate a catalog authoring bug.
+// (request=2, response=16, both=9) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug. Request count
+// includes cidr and networkView, the create-time-only next-available-IP
+// allocation hints.
 func TestPTRRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordptr")
 	if !ok {
@@ -680,8 +684,8 @@ func TestPTRRecordFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 0 {
-		t.Errorf("request-scope field count = %d, want 0", req)
+	if req != 2 {
+		t.Errorf("request-scope field count = %d, want 2", req)
 	}
 	if resp != 16 {
 		t.Errorf("response-scope field count = %d, want 16", resp)

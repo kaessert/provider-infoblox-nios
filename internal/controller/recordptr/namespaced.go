@@ -119,6 +119,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.P
 	}
 
 	o := observeFromRecordPTR(externalID, rec)
+	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = namespacedv1alpha1.PTRRecordObservation{
 		Ptrdname: o.Ptrdname,
 		Name:     o.Name,
@@ -129,8 +130,14 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.P
 		TTL:      o.TTL,
 		UseTTL:   o.UseTTL,
 		ExtAttrs: o.ExtAttrs,
-		Ref:      o.Ref,
-		Zone:     o.Zone,
+		// Cidr/NetworkView are create-time-only allocation hints the WAPI
+		// never echoes back in a GET response — mirrored directly from
+		// ForProvider (informational only) rather than from the observed
+		// RecordPTR.
+		Cidr:        p.Cidr,
+		NetworkView: p.NetworkView,
+		Ref:         o.Ref,
+		Zone:        o.Zone,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
 	// above) keeps the server-assigned identifier's provenance obvious at
@@ -138,7 +145,6 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.P
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
 	lateInit := lateInitialize(&p.Name, &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
 
 	// Set Available condition — required in crossplane-runtime v2, not
@@ -156,7 +162,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.P
 // _ref as the external name.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.PTRRecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createPTRRecord(e.objMgr, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.View, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := createPTRRecord(e.objMgr, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.View, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreatePTRRecord)
 	}

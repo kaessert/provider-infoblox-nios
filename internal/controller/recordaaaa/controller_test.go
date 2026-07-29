@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -139,6 +140,14 @@ type mockWapiServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
+
+	// lastCreateIpv6Addr captures the ipv6addr value exactly as sent by
+	// the controller on the most recent POST (create) request, before
+	// the next-available-IP allocation simulation below replaces it
+	// with a synthesized concrete address. This lets cidr/networkView
+	// tests assert what was actually requested independently of what
+	// address got allocated.
+	lastCreateIpv6Addr *string
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -207,6 +216,19 @@ func (m *mockWapiServer) handler() http.Handler {
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		}
+		m.mu.Lock()
+		m.lastCreateIpv6Addr = rec.Ipv6Addr
+		m.mu.Unlock()
+		// Simulate the Grid Manager's dynamic-allocation behavior: when
+		// the caller requested a next-available-IP (the SDK encodes
+		// this as a "func:nextavailableip:<cidr>,<netview>" string in
+		// the ipv6addr field), replace it with a synthesized concrete
+		// address from within the requested CIDR — a real WAPI never
+		// echoes the func-string back, it always resolves it to the
+		// address it allocated.
+		if allocated, ok := allocateFromCidr(strOrEmpty(rec.Ipv6Addr)); ok {
+			rec.Ipv6Addr = &allocated
 		}
 		// Synthesize the zone the way NIOS derives it server-side
 		// (last two labels of the FQDN), so Observe/Create tests can
@@ -307,6 +329,37 @@ func zoneFromName(name *string) string {
 		}
 	}
 	return ""
+}
+
+// allocateFromCidr simulates the WAPI's next-available-IP allocation:
+// given the func-string address ("func:nextavailableip:<cidr>[,<netview>]")
+// the SDK sends when the caller set cidr instead of a static address, it
+// returns a synthesized concrete address from within that CIDR. ok is
+// false when addr is not a next-available-IP func-string (e.g. a static
+// address, or empty). This lets Create+Observe round-trip tests assert
+// the allocated address surfaced in AtProvider differs from the
+// func-string the controller sent — mirroring how a real Grid Manager
+// resolves the request to a concrete IP before ever echoing it back.
+func allocateFromCidr(addr string) (string, bool) {
+	const prefix = "func:nextavailableip:"
+	if !strings.HasPrefix(addr, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(addr, prefix)
+	cidr := rest
+	if idx := strings.Index(rest, ","); idx >= 0 {
+		cidr = rest[:idx]
+	}
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", false
+	}
+	ip := append(net.IP{}, ipNet.IP...)
+	// Offset from the network address by a fixed amount — arbitrary, but
+	// deterministic and guaranteed to differ from the caller-supplied
+	// func-string without needing full allocation-tracking bookkeeping.
+	ip[len(ip)-1] += 10
+	return ip.String(), true
 }
 
 func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
@@ -527,6 +580,10 @@ func TestClusterCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	// cidr/networkView are unset here (zero value) and ipv6Addr is
+	// static — this also serves as the regression guard proving the
+	// cidr next-available-IP path (added below) did not change the
+	// pre-existing static-address Create behavior.
 	cr := newClusterAAAARecord("my-aaaarecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -537,6 +594,168 @@ func TestClusterCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+// ── cluster: Create with cidr/networkView (next-available-IP) ──────────
+
+func TestClusterCreateWithCidrAllocatesNextAvailableIP(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	// cidr and networkView must be forwarded to the SDK Create call as a
+	// single next-available-IP func-string.
+	m.mu.Lock()
+	sent := m.lastCreateIpv6Addr
+	m.mu.Unlock()
+	wantSent := "func:nextavailableip:2001:db8::/64,my-view"
+	if sent == nil || *sent != wantSent {
+		t.Errorf("Create: sent ipv6addr = %v, want %q", sent, wantSent)
+	}
+
+	// Create succeeds and the allocated IP (as resolved by the WAPI, not
+	// the func-string the controller sent) appears in AtProvider once
+	// Observe runs.
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	gotIP := cr.Status.AtProvider.IPv6Addr
+	if gotIP == nil || *gotIP == wantSent || *gotIP == "" {
+		t.Errorf("AtProvider.IPv6Addr = %v, want a concrete allocated address distinct from the func-string", gotIP)
+	}
+	if gotIP != nil && *gotIP != "2001:db8::a" {
+		t.Errorf("AtProvider.IPv6Addr = %q, want the mock-allocated address %q", *gotIP, "2001:db8::a")
+	}
+}
+
+func TestClusterCreateWithCidrDefaultsNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = nil
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	sent := m.lastCreateIpv6Addr
+	m.mu.Unlock()
+	want := "func:nextavailableip:2001:db8::/64,default"
+	if sent == nil || *sent != want {
+		t.Errorf("Create: sent ipv6addr = %v, want %q", sent, want)
+	}
+}
+
+func TestClusterCreateCidrAndIPv6AddrMutuallyExclusive(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = stringPtr("2001:db8::1")
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when cidr and ipv6Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("Create: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+
+	m.mu.Lock()
+	n := len(m.records)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Errorf("Create: expected no record to be created, found %d", n)
+	}
+}
+
+// TestCreateAAAARecordRejectsCidrWithStaticIP is a white-box test of the
+// shared createAAAARecord wrapper: the mutual-exclusivity check must run
+// before any SDK/network call is attempted (passing a nil objMgr proves
+// this — a real call would panic on a nil receiver).
+func TestCreateAAAARecordRejectsCidrWithStaticIP(t *testing.T) {
+	_, err := createAAAARecord(nil, stringPtr("host.example.com"), stringPtr("default"), stringPtr("2001:db8::1"), nil, nil, nil, nil, stringPtr("2001:db8::/64"), nil)
+	if err == nil {
+		t.Fatal("createAAAARecord: expected an error when cidr and ipv6Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("createAAAARecord: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+}
+
+func TestClusterObserveMirrorsCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		Ipv6Addr: stringPtr("2001:db8::1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.Cidr == nil || *ap.Cidr != "2001:db8::/64" {
+		t.Errorf("AtProvider.Cidr = %v, want %q", ap.Cidr, "2001:db8::/64")
+	}
+	if ap.NetworkView == nil || *ap.NetworkView != "my-view" {
+		t.Errorf("AtProvider.NetworkView = %v, want %q", ap.NetworkView, "my-view")
+	}
+}
+
+func TestClusterObserveIsUpToDateIgnoresCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		Ipv6Addr: stringPtr("2001:db8::1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true despite cidr/networkView being set in spec, got false")
 	}
 }
 

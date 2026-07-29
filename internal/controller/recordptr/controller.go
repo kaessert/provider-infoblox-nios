@@ -48,6 +48,7 @@ const (
 	errCreatePTRRecord  = "cannot create PTRRecord"
 	errUpdatePTRRecord  = "cannot update PTRRecord"
 	errDeletePTRRecord  = "cannot delete PTRRecord"
+	errCidrIPMutex      = "cidr and ipv4Addr/ipv6Addr are mutually exclusive"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -421,23 +422,37 @@ func observeFromRecordPTR(externalID string, rec *ibclient.RecordPTR) observedRe
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createPTRRecord issues the WAPI create call. netView and cidr are
-// always empty — this provider only supports statically-assigned
-// IPv4/IPv6 addresses or an explicit record name (ipv4Addr/ipv6Addr/name
-// are all ForProvider fields); WAPI's dynamic next-available-IP
-// allocation (func:nextavailableip via netView/cidr) is not exposed by
-// PTRRecordParameters.
-func createPTRRecord(objMgr ibclient.IBObjectManager, ptrdname, name, ipv4Addr, ipv6Addr, view, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordPTR, error) {
+// createPTRRecord issues the WAPI create call. When cidr is set, the
+// WAPI dynamically allocates the next available IPv4/IPv6 address from
+// the given network view (func:nextavailableip) instead of using a
+// caller-supplied static address — cidr and ipv4Addr/ipv6Addr are
+// mutually exclusive, enforced below before the SDK call is issued.
+// CreatePTRRecord already defaults an empty network view to "default"
+// internally; this wrapper applies the same default explicitly for
+// consistency with createARecord (whose SDK counterpart does not
+// self-default).
+func createPTRRecord(objMgr ibclient.IBObjectManager, ptrdname, name, ipv4Addr, ipv6Addr, view, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string) (*ibclient.RecordPTR, error) {
+	cidrVal := strOrEmpty(cidr)
+	if cidrVal != "" && (strOrEmpty(ipv4Addr) != "" || strOrEmpty(ipv6Addr) != "") {
+		return nil, errors.New(errCidrIPMutex)
+	}
+
 	ipAddr := strOrEmpty(ipv4Addr)
 	if ipAddr == "" {
 		ipAddr = strOrEmpty(ipv6Addr)
 	}
+
+	netView := strOrEmpty(networkView)
+	if cidrVal != "" && netView == "" {
+		netView = "default"
+	}
+
 	return objMgr.CreatePTRRecord(
-		"", // netView — dynamic IP allocation is not exposed by this provider
+		netView,
 		strOrEmpty(view),
 		strOrEmpty(ptrdname),
 		strOrEmpty(name),
-		"", // cidr — see netView above
+		cidrVal,
 		ipAddr,
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
