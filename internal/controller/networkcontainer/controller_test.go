@@ -624,6 +624,40 @@ func TestClusterObserveIsUpToDateIgnoresImmutableFields(t *testing.T) {
 	}
 }
 
+// TestClusterObserveIsUpToDateIgnoresAllocationFields verifies that
+// parentCidr, allocatePrefixLen, and filterParams — create-time-only
+// inputs to the allocation call, never echoed back by the WAPI response —
+// never trigger a spurious Update. isUpToDate's signature does not even
+// accept these fields, but this test guards that invariant explicitly so
+// a future refactor cannot accidentally wire them in.
+func TestClusterObserveIsUpToDateIgnoresAllocationFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.NetworkContainer{
+		NetviewName: testDefaultName,
+		Cidr:        testCIDR,
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", ref)
+	// Simulate drift on the allocation-only fields after creation — none
+	// of these are ever part of the WAPI response, so none should affect
+	// ResourceUpToDate.
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(24)
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true despite parentCidr/allocatePrefixLen/filterParams drift (allocation-only fields), got false")
+	}
+}
+
 // ── cluster: Create ─────────────────────────────────────────────────────
 
 func TestClusterCreateSuccess(t *testing.T) {

@@ -141,6 +141,12 @@ type mockWapiServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
+
+	// lastCreateBody captures the raw JSON body of the most recent POST
+	// (create/allocate) request, for tests that assert allocation-path
+	// request shape — e.g. that the "object" field reaches the
+	// AllocateNetworkByEA request's "_object" filter.
+	lastCreateBody []byte
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -208,6 +214,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 // createHandler below.
 type nextAvailableNetworkRequest struct {
 	Network *struct {
+		Object       string            `json:"_object"`
 		ObjectParams map[string]string `json:"_object_parameters"`
 		Params       map[string]uint   `json:"_parameters"`
 	} `json:"network"`
@@ -252,6 +259,9 @@ func (m *mockWapiServer) handler() http.Handler {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			m.mu.Lock()
+			m.lastCreateBody = body
+			m.mu.Unlock()
 
 			// Probe the raw "network" field's JSON type: a nested object
 			// means this is an AllocateNetworkByEA request; a string (or
@@ -614,6 +624,40 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	}
 }
 
+// TestClusterObserveIsUpToDateIgnoresAllocationFields verifies that
+// parentCidr, allocatePrefixLen, and filterParams — create-time-only
+// inputs to the allocation call, never echoed back by the WAPI response —
+// never trigger a spurious Update. isUpToDate's signature does not even
+// accept these fields, but this test guards that invariant explicitly so
+// a future refactor cannot accidentally wire them in.
+func TestClusterObserveIsUpToDateIgnoresAllocationFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.Network{
+		NetviewName: testNamespace,
+		Cidr:        testCIDR,
+	}, false)
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", ref)
+	// Simulate drift on the allocation-only fields after creation — none
+	// of these are ever part of the WAPI response, so none should affect
+	// ResourceUpToDate.
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(24)
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true despite parentCidr/allocatePrefixLen/filterParams drift (allocation-only fields), got false")
+	}
+}
+
 func TestClusterObserveDetectsCommentDrift(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -735,6 +779,71 @@ func TestClusterCreateAllocateByFilterParams(t *testing.T) {
 	}
 	if !strings.Contains(got, "/28/") {
 		t.Errorf("Create: external-name = %q, want the allocated /28 subnet in the ref", got)
+	}
+}
+
+// TestClusterCreateAllocateByEAWithObjectField verifies that Network's
+// object field reaches the AllocateNetworkByEA call and selects the
+// EA-search container type in the WAPI request: object="network" targets
+// the "network"/"ipv6network" object type directly (rather than the
+// default "networkcontainer"/"ipv6networkcontainer").
+func TestClusterCreateAllocateByEAWithObjectField(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(28)
+	cr.Spec.ForProvider.Object = stringPtr("network")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	var req nextAvailableNetworkRequest
+	if err := json.Unmarshal(m.lastCreateBody, &req); err != nil {
+		t.Fatalf("cannot unmarshal captured create request: %v", err)
+	}
+	if req.Network == nil {
+		t.Fatal("Create: want a nested next-available-network request body, got none")
+	}
+	if req.Network.Object != "network" {
+		t.Errorf("Create: request _object = %q, want %q (object field not passed through to AllocateNetworkByEA)", req.Network.Object, "network")
+	}
+}
+
+// TestClusterCreateAllocateByEADefaultsObjectToNetworkContainer verifies
+// the counterpart of TestClusterCreateAllocateByEAWithObjectField — when
+// object is left unset, AllocateNetworkByEA searches "networkcontainer"
+// (the SDK's non-"network" fallback), not "network".
+func TestClusterCreateAllocateByEADefaultsObjectToNetworkContainer(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(28)
+	// Object intentionally left nil.
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	var req nextAvailableNetworkRequest
+	if err := json.Unmarshal(m.lastCreateBody, &req); err != nil {
+		t.Fatalf("cannot unmarshal captured create request: %v", err)
+	}
+	if req.Network == nil {
+		t.Fatal("Create: want a nested next-available-network request body, got none")
+	}
+	if req.Network.Object != "networkcontainer" {
+		t.Errorf("Create: request _object = %q, want %q when object is unset", req.Network.Object, "networkcontainer")
 	}
 }
 
