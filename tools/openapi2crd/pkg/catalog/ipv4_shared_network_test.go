@@ -149,18 +149,43 @@ func TestIPv4SharedNetworkNestedTypes(t *testing.T) {
 	}
 }
 
-// TestIPv4SharedNetworkNoReferenceYet verifies the networks field does not
-// yet carry a cross-resource Reference — wiring is deferred until the
-// Network managed resource merges to main (see ipv4SharedNetwork's doc
-// comment).
-func TestIPv4SharedNetworkNoReferenceYet(t *testing.T) {
+// TestIPv4SharedNetworkNetworksReference verifies the networks field now
+// carries the cross-resource Reference to Network (cluster scope), wired
+// once the Network managed resource merged to main — see ipv4SharedNetwork's
+// doc comment. It uses the cidr-match extractor (referencehelpers.ExtractField
+// reading "spec.forProvider.network") rather than the default
+// reference.ExternalName(), since `networks` entries are CIDRs, not the
+// referenced Network's external name.
+func TestIPv4SharedNetworkNetworksReference(t *testing.T) {
 	rd, ok := FindResource("ipv4sharednetwork")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "ipv4sharednetwork")
 	}
+
+	var found bool
 	for _, f := range rd.Fields {
-		if f.JSONName == "networks" && f.Reference != nil {
-			t.Errorf("networks field has a Reference wired; expected nil until Network resource merges to main")
+		if f.JSONName != "networks" {
+			continue
 		}
+		found = true
+		if f.Reference == nil {
+			t.Fatalf("networks field has no Reference wired; expected the Network cross-resource reference")
+		}
+		if f.Reference.TargetKind != "Network" {
+			t.Errorf("networks Reference.TargetKind = %q, want %q", f.Reference.TargetKind, "Network")
+		}
+		if f.Reference.TargetSlug != "network" {
+			t.Errorf("networks Reference.TargetSlug = %q, want %q", f.Reference.TargetSlug, "network")
+		}
+		if f.Reference.TargetScope != "cluster" {
+			t.Errorf("networks Reference.TargetScope = %q, want %q", f.Reference.TargetScope, "cluster")
+		}
+		wantExtractor := extractFieldFuncPath + `("spec.forProvider.network")`
+		if f.Reference.Extractor != wantExtractor {
+			t.Errorf("networks Reference.Extractor = %q, want %q", f.Reference.Extractor, wantExtractor)
+		}
+	}
+	if !found {
+		t.Fatalf("networks field not found on IPv4SharedNetwork descriptor")
 	}
 }

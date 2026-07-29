@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	v1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -221,6 +222,18 @@ func (in *IPv4SharedNetworkParameters) DeepCopyInto(out *IPv4SharedNetworkParame
 		in, out := &in.Networks, &out.Networks
 		*out = make([]string, len(*in))
 		copy(*out, *in)
+	}
+	if in.NetworksRefs != nil {
+		in, out := &in.NetworksRefs, &out.NetworksRefs
+		*out = make([]v1.Reference, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.NetworksSelector != nil {
+		in, out := &in.NetworksSelector, &out.NetworksSelector
+		*out = new(v1.Selector)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.NetworkView != nil {
 		in, out := &in.NetworkView, &out.NetworkView

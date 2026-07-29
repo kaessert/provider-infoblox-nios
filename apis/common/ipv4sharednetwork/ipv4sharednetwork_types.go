@@ -8,6 +8,10 @@
 // generator package doc comment for the rationale.
 package ipv4sharednetwork
 
+import (
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+)
+
 // IPv4SharedNetworkDhcpOption is a DHCP option associated with an IPv4SharedNetwork, mirroring the SDK's Dhcpoption struct.
 type IPv4SharedNetworkDhcpOption struct {
 	// Name of the DHCP option.
@@ -27,9 +31,15 @@ type IPv4SharedNetworkParameters struct {
 	// Display name of the shared network.
 	// +kubebuilder:validation:Required
 	Name *string `json:"name"`
-	// CIDRs of the member networks combined into this shared network. Each entry must match an existing Network resource's network (CIDR) field — a cidr-match cross-resource reference, not a _ref or name lookup. Not yet wired with the Ref/Selector reference pattern: the Network managed resource is not merged to main in this provider yet; wiring is deferred to a follow-up ticket to avoid an angryjet resolver import of a nonexistent package.
+	// CIDRs of the member networks combined into this shared network. Each entry must match an existing Network resource's network (CIDR) field — a cidr-match cross-resource reference, not a _ref or name lookup. Set networksRefs/networksSelector to reference Network objects by name; resolution populates each networks entry with the referenced Network's CIDR.
 	// +kubebuilder:validation:Required
+	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1.Network
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.network")
 	Networks []string `json:"networks"`
+	// +optional
+	NetworksRefs []xpv1.Reference `json:"networksRefs"`
+	// +optional
+	NetworksSelector *xpv1.Selector `json:"networksSelector,omitempty"`
 	// Network view the shared network belongs to. Present in both the Create and Update ObjectManager wrapper signatures, but live WAPI _schema probing found supports=rws (no u) for this field — the WAPI schema rejects changing it after creation even though the wrapper accepts the parameter on update calls.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"`
@@ -60,10 +70,11 @@ type IPv4SharedNetworkObservation struct {
 	ID string `json:"id,omitempty"` // atProvider
 	// Display name of the shared network.
 	Name *string `json:"name,omitempty"` // atProvider
-	// CIDRs of the member networks combined into this shared network. Each entry must match an existing Network resource's network (CIDR) field — a cidr-match cross-resource reference, not a _ref or name lookup. Not yet wired with the Ref/Selector reference pattern: the Network managed resource is not merged to main in this provider yet; wiring is deferred to a follow-up ticket to avoid an angryjet resolver import of a nonexistent package.
+	// CIDRs of the member networks combined into this shared network. Each entry must match an existing Network resource's network (CIDR) field — a cidr-match cross-resource reference, not a _ref or name lookup. Set networksRefs/networksSelector to reference Network objects by name; resolution populates each networks entry with the referenced Network's CIDR.
 	// +optional
 	Networks []string `json:"networks"` // atProvider
 	// Network view the shared network belongs to. Present in both the Create and Update ObjectManager wrapper signatures, but live WAPI _schema probing found supports=rws (no u) for this field — the WAPI schema rejects changing it after creation even though the wrapper accepts the parameter on update calls.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// Comment for the shared network.
 	Comment *string `json:"comment,omitempty"` // atProvider

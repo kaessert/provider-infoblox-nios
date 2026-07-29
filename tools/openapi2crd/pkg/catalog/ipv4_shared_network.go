@@ -32,19 +32,20 @@ package catalog
 // catalog marks `network_view` Immutable and the generator emits a CEL
 // `self == oldSelf` XValidation rule for it.
 //
-// `networks` is a cross-resource reference candidate — each entry is a
-// CIDR that must match an existing Network resource's `network` (CIDR)
-// field, not a `_ref` or name (see tools/openapi/inventory.md's
-// "Cross-Resource References" subsection: cidr-match extractor, novel
-// pattern). The Network managed resource is not yet merged to main in
-// this provider (its wave review ticket is still open), so wiring the
-// Ref/Selector companion fields now would make angryjet emit a reference
-// resolver that imports a package that does not exist yet on this branch,
-// breaking the build. Per this provider's cross-resource-reference
-// ordering rule, this field is modeled as a plain `[]string` value for
-// now; wiring the three-field reference pattern (plus the cidr-match
-// extractor function, which does not yet exist in any cataloged resource)
-// is deferred to a follow-up stage:apigen ticket once Network merges.
+// `networks` is a cross-resource reference: each entry is a CIDR that must
+// match an existing Network resource's `network` (CIDR) field, not a `_ref`
+// or name (see tools/openapi/inventory.md's "Cross-Resource References"
+// subsection: cidr-match extractor). The Network managed resource is now
+// merged to main (cluster-scoped: apis/cluster/network/v1alpha1), so this
+// field carries the standard three-field reference pattern (value + Refs +
+// Selector) with a custom extractor:
+// referencehelpers.ExtractField — a generic, fieldpath-based extractor
+// (apis/common/referencehelpers/zz_referencehelpers.go) that reads an
+// arbitrary JSON field path off the resolved target instead of the
+// default reference.ExternalName(). Here it reads
+// "spec.forProvider.network" off the referenced Network so that resolving
+// a NetworksRefs entry populates the corresponding `networks` slot with
+// that Network's CIDR — the cidr-match semantics named above.
 func ipv4SharedNetwork() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "IPv4SharedNetwork",
@@ -69,10 +70,15 @@ func ipv4SharedNetwork() ResourceDescriptor {
 				Required: true,
 				Description: "CIDRs of the member networks combined into this shared network. Each entry " +
 					"must match an existing Network resource's network (CIDR) field — a cidr-match " +
-					"cross-resource reference, not a _ref or name lookup. Not yet wired with the " +
-					"Ref/Selector reference pattern: the Network managed resource is not merged to main " +
-					"in this provider yet; wiring is deferred to a follow-up ticket to avoid an angryjet " +
-					"resolver import of a nonexistent package.",
+					"cross-resource reference, not a _ref or name lookup. Set networksRefs/networksSelector " +
+					"to reference Network objects by name; resolution populates each networks entry with " +
+					"the referenced Network's CIDR.",
+				Reference: &ReferenceDescriptor{
+					TargetKind:  "Network",
+					TargetSlug:  "network",
+					TargetScope: "cluster",
+					Extractor:   extractFieldFuncPath + `("spec.forProvider.network")`,
+				},
 			},
 			{
 				Name:      "NetworkView",

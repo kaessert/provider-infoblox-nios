@@ -82,6 +82,16 @@ func runGenerate(args []string) error {
 		}
 		fmt.Fprintf(os.Stdout, "openapi2crd: generated types for %s in %s\n", rd.Kind, root) //nolint:errcheck
 	}
+
+	// apis/common/referencehelpers/zz_referencehelpers.go is a single,
+	// static, non-resource-specific file (the generic ExtractField
+	// cross-resource reference extractor) — rewrite it unconditionally on
+	// every run rather than tying it to any one resource.
+	if err := generator.GenerateReferenceHelpers(root); err != nil {
+		return fmt.Errorf("generate reference helpers: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "openapi2crd: generated reference helpers in %s\n", root) //nolint:errcheck
+
 	return nil
 }
 

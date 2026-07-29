@@ -182,6 +182,29 @@ func TestGeneratedSourceIsValidGo(t *testing.T) {
 	}
 }
 
+// TestRenderReferenceHelpers verifies the generic cross-resource reference
+// extractor renders as valid, gofmt-formatted Go source in its own leaf
+// package (referencehelpers, NOT the root apis package — see
+// referenceHelpersTemplate's doc comment for why importing the root apis
+// package back from a scope package's zz_generated.resolvers.go would be an
+// import cycle).
+func TestRenderReferenceHelpers(t *testing.T) {
+	src, err := RenderReferenceHelpers()
+	if err != nil {
+		t.Fatalf("RenderReferenceHelpers: %v", err)
+	}
+	got := string(src)
+	if !strings.Contains(got, "package referencehelpers") {
+		t.Errorf("reference helpers source missing %q package declaration:\n%s", "referencehelpers", got)
+	}
+	if !strings.Contains(got, "func ExtractField(path string) reference.ExtractValueFn") {
+		t.Errorf("reference helpers source missing ExtractField signature:\n%s", got)
+	}
+	if strings.Contains(got, "package apis\n") {
+		t.Errorf("reference helpers source must NOT live in the root apis package (import cycle risk):\n%s", got)
+	}
+}
+
 func fieldNames(fields []FieldData) map[string]bool {
 	m := make(map[string]bool, len(fields))
 	for _, f := range fields {

@@ -62,6 +62,15 @@ const (
 	// out to satisfy the goconst linter.
 	fieldNameGo   = "Name"
 	fieldNameJSON = "name"
+	// extractFieldFuncPath is the fully-qualified reference to the generic
+	// field-path cross-resource reference extractor generated at
+	// apis/common/referencehelpers/zz_referencehelpers.go
+	// (referencehelpers.ExtractField). Used as the prefix for a
+	// ReferenceDescriptor.Extractor value whenever a field must resolve to
+	// something other than the target's external name — e.g.
+	// IPv4SharedNetwork.networks resolves to the referenced Network's
+	// spec.forProvider.network CIDR, not its crossplane.io/external-name.
+	extractFieldFuncPath = "github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField"
 )
 
 // FieldDef describes one field of a resource or nested type.
