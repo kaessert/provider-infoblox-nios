@@ -267,6 +267,9 @@ func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
 	// (network_view is immutable — absent from UpdateNetworkContainer).
 	if !strings.Contains(cs, `message="networkView is immutable after creation"`) {
 		t.Errorf("expected CEL immutability rule for networkView field, got:\n%s", cs)
+	}
+}
+
 // TestSafeGoPackageName verifies keyword collisions get a "pkg" suffix and
 // ordinary slugs pass through unchanged.
 func TestSafeGoPackageName(t *testing.T) {

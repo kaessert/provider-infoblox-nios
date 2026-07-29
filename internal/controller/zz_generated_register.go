@@ -19,6 +19,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkcontainer"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
+	rangepkg "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/range"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
@@ -46,6 +47,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		network.SetupGated,
 		networkcontainer.SetupGated,
 		networkview.SetupGated,
+		rangepkg.SetupGated,
 		rangetemplate.SetupGated,
 		recorda.SetupGated,
 		recordaaaa.SetupGated,
@@ -77,6 +79,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		network.Setup,
 		networkcontainer.Setup,
 		networkview.Setup,
+		rangepkg.Setup,
 		rangetemplate.Setup,
 		recorda.Setup,
 		recordaaaa.Setup,

@@ -78,6 +78,10 @@ const (
 	// FixedAddressCloudInfoDelegatedMember.Name).
 	fieldNameName = "Name"
 	jsonNameName  = "name"
+	// kindNetworkView recurs across the HostRecord, Network, and Range
+	// networkView cross-resource reference fields (Name, TargetKind) plus
+	// the NetworkView resource's own Kind, and their table-driven tests.
+	kindNetworkView = "NetworkView"
 )
 
 // FieldDef describes one field of a resource or nested type.

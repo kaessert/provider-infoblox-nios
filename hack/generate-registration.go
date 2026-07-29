@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -177,9 +178,22 @@ func discoverProviderConfigs(modulePath string) []apiEntry {
 	return entries
 }
 
+// safeGoPackageName returns a Go-identifier-safe package alias for a
+// resource name. Reserved keywords (e.g. "range") are not valid Go
+// identifiers, so they get a "pkg" suffix (e.g. "rangepkg") — the same
+// scheme tools/openapi2crd/pkg/generator/generator.go uses for
+// apis/common/<resource> reference packages.
+func safeGoPackageName(slug string) string {
+	if token.IsKeyword(slug) {
+		return slug + "pkg"
+	}
+	return slug
+}
+
 // controllerEntry describes a discovered controller package.
 type controllerEntry struct {
 	Resource   string // e.g. "recorda"
+	Alias      string // Go-safe import alias, e.g. "recorda" or "rangepkg"
 	ImportPath string // full import path
 }
 
@@ -213,6 +227,7 @@ func discoverControllers(modulePath string, apiEntries []apiEntry) []controllerE
 		}
 		entries = append(entries, controllerEntry{
 			Resource:   name,
+			Alias:      safeGoPackageName(name),
 			ImportPath: modulePath + "/internal/controller/" + name,
 		})
 	}
@@ -318,7 +333,7 @@ func writeControllerRegistration(modulePath string, controllers []controllerEntr
 		`"` + configPkg + `"`,
 	}
 	for _, c := range controllers {
-		imports = append(imports, `"`+c.ImportPath+`"`)
+		imports = append(imports, c.Alias+` "`+c.ImportPath+`"`)
 	}
 
 	buf.WriteString("import (\n")
@@ -336,7 +351,7 @@ func writeControllerRegistration(modulePath string, controllers []controllerEntr
 	buf.WriteString("\t\t// ProviderConfig — never gated, must always be available.\n")
 	buf.WriteString("\t\tconfig.Setup,\n")
 	for _, c := range controllers {
-		pkg := filepath.Base(c.ImportPath)
+		pkg := c.Alias
 		fmt.Fprintf(&buf, "\t\t%s.SetupGated,\n", pkg)
 	}
 	buf.WriteString("\t} {\n")
@@ -356,7 +371,7 @@ func writeControllerRegistration(modulePath string, controllers []controllerEntr
 	buf.WriteString("\t\t// ProviderConfig — never gated, must always be available.\n")
 	buf.WriteString("\t\tconfig.Setup,\n")
 	for _, c := range controllers {
-		pkg := filepath.Base(c.ImportPath)
+		pkg := c.Alias
 		fmt.Fprintf(&buf, "\t\t%s.Setup,\n", pkg)
 	}
 	buf.WriteString("\t} {\n")

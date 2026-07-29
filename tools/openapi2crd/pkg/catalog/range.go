@@ -57,13 +57,13 @@ func rangeResource() ResourceDescriptor {
 				Description: "Last address in the DHCP range.",
 			},
 			{
-				Name:        "NetworkView",
+				Name:        kindNetworkView,
 				JSONName:    "networkView",
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
 				Description: "Name of the network view the range belongs to. Referenced by name (not _ref), since NetworkView's name is stable across most operations while its _ref changes on rename.",
 				Reference: &ReferenceDescriptor{
-					TargetKind: "NetworkView",
+					TargetKind: kindNetworkView,
 					TargetSlug: "networkview",
 				},
 			},

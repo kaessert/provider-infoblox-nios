@@ -93,14 +93,14 @@ func TestRangeNetworkViewReference(t *testing.T) {
 
 	found := false
 	for _, f := range rd.Fields {
-		if f.Name != "NetworkView" {
+		if f.Name != kindNetworkView {
 			continue
 		}
 		found = true
 		if f.Reference == nil {
 			t.Fatalf("NetworkView: expected a Reference, got nil")
 		}
-		if f.Reference.TargetKind != "NetworkView" {
+		if f.Reference.TargetKind != kindNetworkView {
 			t.Errorf("NetworkView.Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {

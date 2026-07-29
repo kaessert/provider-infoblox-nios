@@ -15,6 +15,7 @@ import (
 	clusternetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1"
 	clusternetworkcontainerv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkcontainer/v1alpha1"
 	clusternetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
+	clusterrangev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/range/v1alpha1"
 	clusterrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	clusterrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	clusterrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
@@ -33,6 +34,7 @@ import (
 	namespacednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	namespacednetworkcontainerv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
 	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
+	namespacedrangev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/range/v1alpha1"
 	namespacedrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
@@ -67,6 +69,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusternetworkcontainerv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Networkview types.
 	AddToSchemes = append(AddToSchemes, clusternetworkviewv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Range types.
+	AddToSchemes = append(AddToSchemes, clusterrangev1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Rangetemplate types.
 	AddToSchemes = append(AddToSchemes, clusterrangetemplatev1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Recorda types.
@@ -101,6 +105,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacednetworkcontainerv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Networkview types.
 	AddToSchemes = append(AddToSchemes, namespacednetworkviewv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Range types.
+	AddToSchemes = append(AddToSchemes, namespacedrangev1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Rangetemplate types.
 	AddToSchemes = append(AddToSchemes, namespacedrangetemplatev1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.

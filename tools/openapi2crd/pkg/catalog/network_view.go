@@ -42,7 +42,7 @@ package catalog
 // resource.
 func networkView() ResourceDescriptor {
 	return ResourceDescriptor{
-		Kind:                 "NetworkView",
+		Kind:                 kindNetworkView,
 		Slug:                 "networkview",
 		ClusterGroup:         clusterGroup("networkview"),
 		NamespacedGroup:      namespacedGroup("networkview"),

@@ -2,12 +2,6 @@ package catalog
 
 import "testing"
 
-// testKindNetworkView is the shared "NetworkView" Kind/TargetKind literal
-// asserted by every cross-resource reference test in this package
-// (HostRecord, Network, FixedAddress all reference NetworkView, and
-// NetworkView's own descriptor test pins its own Kind). Centralizing it
-// here avoids repeating the raw string literal across test files.
-const testKindNetworkView = "NetworkView"
 
 // testScopeCluster is the shared "cluster" TargetScope literal asserted by
 // every cross-resource reference test in this package that points at a
@@ -749,7 +743,7 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 		if f.Reference == nil {
 			t.Fatalf("networkView field has nil Reference")
 		}
-		if f.Reference.TargetKind != testKindNetworkView {
+		if f.Reference.TargetKind != kindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {
@@ -830,14 +824,14 @@ func TestFixedAddressNetworkViewReference(t *testing.T) {
 
 	var found bool
 	for _, f := range rd.Fields {
-		if f.Name != testKindNetworkView {
+		if f.Name != kindNetworkView {
 			continue
 		}
 		found = true
 		if f.Reference == nil {
 			t.Fatalf("NetworkView field has no Reference descriptor")
 		}
-		if f.Reference.TargetKind != testKindNetworkView {
+		if f.Reference.TargetKind != kindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {
@@ -1066,14 +1060,14 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 
 	var found bool
 	for _, f := range rd.Fields {
-		if f.Name != testKindNetworkView {
+		if f.Name != kindNetworkView {
 			continue
 		}
 		found = true
 		if f.Reference == nil {
 			t.Fatalf("NetworkView field has no Reference descriptor")
 		}
-		if f.Reference.TargetKind != testKindNetworkView {
+		if f.Reference.TargetKind != kindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {

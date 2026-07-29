@@ -99,13 +99,13 @@ func TestNetworkNetworkViewHasReference(t *testing.T) {
 	}
 
 	for _, f := range rd.Fields {
-		if f.Name != testKindNetworkView {
+		if f.Name != kindNetworkView {
 			continue
 		}
 		if f.Reference == nil {
 			t.Fatalf("NetworkView.Reference = nil, want a ReferenceDescriptor targeting NetworkView")
 		}
-		if f.Reference.TargetKind != testKindNetworkView {
+		if f.Reference.TargetKind != kindNetworkView {
 			t.Errorf("NetworkView.Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {
