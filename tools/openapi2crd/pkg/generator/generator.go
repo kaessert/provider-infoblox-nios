@@ -272,7 +272,11 @@ func atProviderGoType(goType string) string {
 
 // buildAtProviderFieldData converts one catalog.FieldDef into AtProvider
 // FieldData. AtProvider fields always use omitempty, except slice/map fields
-// (which never carry omitempty).
+// (which never carry omitempty). Immutable is carried over so the
+// Observation template can emit a CEL `self == oldSelf` rule on the mirror
+// field — this is the ONLY place a response-only (FieldScopeResponse)
+// immutable field can carry the rule at all, since it has no ForProvider
+// counterpart to attach it to.
 func buildAtProviderFieldData(f catalog.FieldDef) FieldData {
 	goType := atProviderGoType(f.GoType)
 	return FieldData{
@@ -281,6 +285,7 @@ func buildAtProviderFieldData(f catalog.FieldDef) FieldData {
 		JSONName:    f.JSONName,
 		Description: f.Description,
 		OmitEmpty:   isOmitEmpty(goType, false),
+		Immutable:   f.Immutable,
 	}
 }
 
@@ -490,6 +495,9 @@ type {{.Kind}}Observation struct {
 {{range .AtProvider}}	// {{.Description}}
 {{- if not .OmitEmpty}}
 	// +optional
+{{- end}}
+{{- if .Immutable}}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="{{.JSONName}} is immutable after creation"
 {{- end}}
 	{{.Name}} {{.GoType}} {{jsonTag .JSONName .OmitEmpty}} // atProvider
 {{end}}}

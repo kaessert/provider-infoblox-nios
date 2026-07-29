@@ -1,0 +1,40 @@
+# NetworkView is a cluster-scoped Infoblox NIOS network view (WAPI object
+# type networkview). See network-view-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "networkview/ZG5z...:test-network-view/false") from Create;
+# Crossplane stores it in the crossplane.io/external-name annotation. Do
+# not set that annotation manually — the controller populates it.
+#
+# Required fields:
+#   name: the network view's name. Mutable — UpdateNetworkView accepts a
+#         new name, but renaming changes the record's `_ref`; the
+#         controller re-syncs the annotation when that happens.
+#
+# Optional mutable fields: comment, extAttrs.
+#
+# The Grid always has a well-known "default" network view (is_default=true)
+# that cannot be deleted or un-defaulted. This example creates an
+# additional, ordinary network view — standard CRUD applies to it.
+apiVersion: networkview.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkView
+metadata:
+  name: example-network-view
+  annotations:
+    meta.upbound.io/example-id: infobloxnios/v1alpha1/networkview
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-view.sh
+    # comment is the only mutable scalar exercised here.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: "test-network-view"
+    comment: "Test network view created by Crossplane"
+  providerConfigRef:
+    name: default
