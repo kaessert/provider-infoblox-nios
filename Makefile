@@ -257,7 +257,6 @@ update-test.zone-auth: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/zone-auth/zone-auth-namespaced.yaml
 	$(UPDATE_TESTER) run examples/zone-auth/zone-auth-namespaced.yaml
 
-<<<<<<< HEAD
 update-test.ipv4-shared-network: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network.yaml
 	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network.yaml
@@ -265,9 +264,6 @@ update-test.ipv4-shared-network: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 
 .PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network
-=======
-.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated
->>>>>>> 9dc23ca (feat(scaffolder): ph6-zone-auth-docs ZoneAuth example manifests + Makefile E2E wiring)
 
 update-test.network-view: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/network-view/network-view.yaml
