@@ -9,6 +9,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,6 +45,8 @@ const (
 )
 
 func stringPtr(s string) *string { return &s }
+
+func uintPtr(u uint) *uint { return &u }
 
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
 // provider's API types registered.
@@ -196,6 +199,47 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_, _ = w.Write(body)
 }
 
+// nextAvailableNetworkRequest mirrors the wire shape of the SDK's
+// NetworkContainerNextAvailable object (the request body AllocateNetworkByEA
+// sends) — a nested "network" object carrying the EA search filter and the
+// requested prefix length, rather than a plain CIDR string. Probing the raw
+// "network" field's JSON type (object vs string) is what distinguishes an
+// AllocateNetworkByEA request from a static-CIDR/AllocateNetwork request in
+// createHandler below.
+type nextAvailableNetworkRequest struct {
+	Network *struct {
+		ObjectParams map[string]string `json:"_object_parameters"`
+		Params       map[string]uint   `json:"_parameters"`
+	} `json:"network"`
+	NetviewName string      `json:"network_view"`
+	Comment     string      `json:"comment"`
+	Ea          ibclient.EA `json:"extattrs"`
+}
+
+// resolveNextAvailableCIDR fabricates a deterministic "allocated" CIDR for
+// the mock server's AllocateNetwork path, given the SDK's
+// "func:nextavailablenetwork:<parentCidr>,<netview>,<prefixLen>" encoding.
+// Real WAPI carves an actual free subnet out of the parent; the mock only
+// needs a syntactically valid CIDR at the requested prefix length so the
+// SDK's ref-parsing regex (BuildNetworkFromRef) succeeds.
+func resolveNextAvailableCIDR(funcCall string) string {
+	parts := strings.SplitN(funcCall, ":", 3)
+	if len(parts) != 3 {
+		return funcCall
+	}
+	fields := strings.Split(parts[2], ",")
+	if len(fields) < 3 {
+		return funcCall
+	}
+	parentCidr := fields[0]
+	prefixLen := fields[len(fields)-1]
+	ip, _, err := net.ParseCIDR(parentCidr)
+	if err != nil {
+		return funcCall
+	}
+	return ip.String() + "/" + prefixLen
+}
+
 // handler returns an http.Handler implementing the network/ipv6network
 // WAPI surface.
 func (m *mockWapiServer) handler() http.Handler {
@@ -203,11 +247,54 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	createHandler := func(isIPv6 bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			var nw ibclient.Network
-			if err := json.NewDecoder(r.Body).Decode(&nw); err != nil {
+			body, err := readAll(r.Body)
+			if err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+
+			// Probe the raw "network" field's JSON type: a nested object
+			// means this is an AllocateNetworkByEA request; a string (or
+			// absent) means static-CIDR create or AllocateNetwork.
+			var probe struct {
+				Network json.RawMessage `json:"network"`
+			}
+			if err := json.Unmarshal(body, &probe); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			var nw ibclient.Network
+			switch {
+			case len(probe.Network) > 0 && probe.Network[0] == '{':
+				var req nextAvailableNetworkRequest
+				if err := json.Unmarshal(body, &req); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var prefixLen uint
+				if req.Network != nil {
+					prefixLen = req.Network.Params["cidr"]
+				}
+				// The mock allocates from a fixed pool for EA-matched
+				// containers — real WAPI would resolve _object_parameters
+				// against actual container EAs server-side.
+				nw = ibclient.Network{
+					NetviewName: req.NetviewName,
+					Cidr:        "192.168.100.0/" + itoa(int(prefixLen)),
+					Comment:     req.Comment,
+					Ea:          req.Ea,
+				}
+			default:
+				if err := json.Unmarshal(body, &nw); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if strings.HasPrefix(nw.Cidr, "func:nextavailablenetwork:") {
+					nw.Cidr = resolveNextAvailableCIDR(nw.Cidr)
+				}
+			}
+
 			ref := m.seed(&nw, isIPv6)
 			writeJSON(w, http.StatusOK, ref)
 		}
@@ -357,6 +444,37 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
 		t.Errorf("condition Ready = %v, want True", cond.Status)
+	}
+}
+
+func TestClusterObserveLateInitializesNetworkAfterAllocation(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// Simulates a resource created via the parentCidr/filterParams
+	// allocation path: spec.forProvider.network was never set by the
+	// user, only the server knows the allocated CIDR.
+	ref := m.seed(&ibclient.Network{
+		NetviewName: testNamespace,
+		Cidr:        "10.0.5.0/24",
+	}, false)
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", ref)
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(24)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true after backfilling network from the allocated CIDR, got false")
+	}
+	if cr.Spec.ForProvider.Network == nil || *cr.Spec.ForProvider.Network != "10.0.5.0/24" {
+		t.Errorf("Spec.ForProvider.Network = %v, want 10.0.5.0/24", cr.Spec.ForProvider.Network)
 	}
 }
 
@@ -561,6 +679,83 @@ func TestClusterCreateSuccessIPv6(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if !strings.HasPrefix(got, "ipv6network/") {
 		t.Errorf("Create: external-name = %q, want ipv6network/ prefix for IPv6 CIDR", got)
+	}
+}
+
+// ── cluster: Create — allocation paths ───────────────────────────────────
+
+func TestClusterCreateAllocateFromParentCidr(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(24)
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == "" || got == cr.GetName() {
+		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+	if !strings.HasPrefix(got, "network/") {
+		t.Errorf("Create: external-name = %q, want network/ prefix", got)
+	}
+	if !strings.Contains(got, "/24/") {
+		t.Errorf("Create: external-name = %q, want the allocated /24 subnet in the ref", got)
+	}
+}
+
+func TestClusterCreateAllocateByFilterParams(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(28)
+	cr.Spec.ForProvider.Object = stringPtr("networkcontainer")
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == "" || got == cr.GetName() {
+		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+	if !strings.Contains(got, "/28/") {
+		t.Errorf("Create: external-name = %q, want the allocated /28 subnet in the ref", got)
+	}
+}
+
+func TestCreateValidationRejectsParentCidrAndFilterParams(t *testing.T) {
+	_, err := createOrAllocateNetwork(nil, stringPtr(testNamespace), nil, stringPtr("10.0.0.0/8"), nil, nil, uintPtr(24), map[string]string{"region": "us-east"}, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetwork: want error when parentCidr and filterParams are both set, got nil")
+	}
+}
+
+func TestCreateValidationRequiresAllocatePrefixLenForParentCidr(t *testing.T) {
+	_, err := createOrAllocateNetwork(nil, stringPtr(testNamespace), nil, stringPtr("10.0.0.0/8"), nil, nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetwork: want error when parentCidr is set without allocatePrefixLen, got nil")
+	}
+}
+
+func TestCreateValidationRequiresAllocatePrefixLenForFilterParams(t *testing.T) {
+	_, err := createOrAllocateNetwork(nil, stringPtr(testNamespace), nil, nil, nil, nil, nil, map[string]string{"region": "us-east"}, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetwork: want error when filterParams is set without allocatePrefixLen, got nil")
 	}
 }
 
@@ -1196,17 +1391,22 @@ func errWithStatus(code int) error {
 }
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
+	var network *string
 	var comment *string
 	extAttrs := map[string]string{}
 
 	nw := &ibclient.Network{
+		Cidr:    "10.0.0.0/24",
 		Comment: "server comment",
 		Ea:      ibclient.EA{testEAKey: testEAVal},
 	}
 
-	changed := lateInitialize(&comment, &extAttrs, nw)
+	changed := lateInitialize(&network, &comment, &extAttrs, nw)
 	if !changed {
 		t.Error("lateInitialize: want changed=true, got false")
+	}
+	if network == nil || *network != "10.0.0.0/24" {
+		t.Errorf("lateInitialize: network = %v, want %q", network, "10.0.0.0/24")
 	}
 	if comment == nil || *comment != "server comment" {
 		t.Errorf("lateInitialize: comment = %v, want %q", comment, "server comment")
@@ -1217,17 +1417,22 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 }
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
+	network := stringPtr("10.0.0.0/24")
 	comment := stringPtr("user comment")
 	extAttrs := map[string]string{testEAKey: "user-set"}
 
 	nw := &ibclient.Network{
+		Cidr:    "10.0.1.0/24",
 		Comment: "server comment",
 		Ea:      ibclient.EA{testEAKey: "server-set"},
 	}
 
-	changed := lateInitialize(&comment, &extAttrs, nw)
+	changed := lateInitialize(&network, &comment, &extAttrs, nw)
 	if changed {
 		t.Error("lateInitialize: want changed=false when fields already set, got true")
+	}
+	if *network != "10.0.0.0/24" {
+		t.Errorf("lateInitialize: network overwritten, got %q, want %q", *network, "10.0.0.0/24")
 	}
 	if *comment != "user comment" {
 		t.Errorf("lateInitialize: comment overwritten, got %q, want %q", *comment, "user comment")

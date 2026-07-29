@@ -55,6 +55,10 @@ const (
 	errUpdateNetwork    = "cannot update Network"
 	errDeleteNetwork    = "cannot delete Network"
 	errMissingCIDR      = "network CIDR is required to determine the WAPI object type (network vs ipv6network)"
+
+	errParentCidrAndFilterParams = "parentCidr and filterParams are mutually exclusive"
+	errAllocatePrefixLenRequired = "allocatePrefixLen is required when parentCidr or filterParams is set"
+	errMissingAllocationInput    = "one of network, parentCidr, or filterParams is required"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -288,7 +292,10 @@ func isNotFound(err error) bool {
 // isUpToDate compares the desired mutable Network fields against the
 // observed ibclient.Network. networkView and network (cidr) are
 // intentionally excluded — both are immutable (absent from the
-// UpdateNetwork SDK method signature).
+// UpdateNetwork SDK method signature). parentCidr, allocatePrefixLen,
+// filterParams, and object are also excluded — they are create-time-only
+// inputs to the allocation call, never echoed back by the WAPI response,
+// so there is nothing to compare them against.
 func isUpToDate(comment *string, extAttrs map[string]string, nw *ibclient.Network) bool {
 	if strOrEmpty(comment) != nw.Comment {
 		return false
@@ -296,14 +303,23 @@ func isUpToDate(comment *string, extAttrs map[string]string, nw *ibclient.Networ
 	return extAttrsEqual(extAttrs, extAttrsFromEA(nw.Ea))
 }
 
-// lateInitialize back-fills server-defaulted optional fields (comment,
-// extAttrs) from the observed Network into spec so isUpToDate does not see
-// phantom drift on the next reconcile. The required, immutable fields
-// (networkView, network) are always user-supplied and never
-// late-initialized. Returns true if any field was changed.
-func lateInitialize(comment **string, extAttrs *map[string]string, nw *ibclient.Network) bool {
+// lateInitialize back-fills server-defaulted optional fields (network,
+// comment, extAttrs) from the observed Network into spec so isUpToDate
+// does not see phantom drift on the next reconcile. network is normally
+// user-supplied (static CIDR path), but is left nil when the resource was
+// created via the parentCidr or filterParams allocation paths — this
+// back-fills it with the server-allocated CIDR so it becomes the stable
+// identity for future Observe/Update cycles. networkView (required,
+// immutable) is always user-supplied and never late-initialized. Returns
+// true if any field was changed.
+func lateInitialize(network, comment **string, extAttrs *map[string]string, nw *ibclient.Network) bool {
 	changed := false
 
+	if *network == nil && nw.Cidr != "" {
+		c := nw.Cidr
+		*network = &c
+		changed = true
+	}
 	if *comment == nil && nw.Comment != "" {
 		c := nw.Comment
 		*comment = &c
@@ -409,15 +425,59 @@ func observeFromNetwork(externalID string, nw *ibclient.Network) observedNetwork
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createNetwork issues the WAPI create call. The WAPI object type
-// ("network" vs "ipv6network") is selected at runtime from the CIDR's
-// format.
+// createNetwork issues the WAPI create call for the static-CIDR path. The
+// WAPI object type ("network" vs "ipv6network") is selected at runtime
+// from the CIDR's format.
 func createNetwork(objMgr ibclient.IBObjectManager, networkView, cidr, comment *string, extAttrs map[string]string) (*ibclient.Network, error) {
 	c := strOrEmpty(cidr)
 	if c == "" {
 		return nil, errors.New(errMissingCIDR)
 	}
 	return objMgr.CreateNetwork(strOrEmpty(networkView), c, isIPv6CIDR(c), strOrEmpty(comment), buildEA(extAttrs))
+}
+
+// createOrAllocateNetwork routes Network creation across the three
+// supported paths, selected by which ForProvider fields are set:
+//   - network set                       → createNetwork (static CIDR, existing path, unchanged)
+//   - parentCidr + allocatePrefixLen    → AllocateNetwork (subnet carved from a parent CIDR)
+//   - filterParams + allocatePrefixLen  → AllocateNetworkByEA (subnet carved from an EA-matched container)
+//
+// parentCidr and filterParams are mutually exclusive; either requires
+// allocatePrefixLen. object only applies to the filterParams path (WAPI
+// object type filter for the EA search, e.g. "networkcontainer") and is
+// ignored otherwise.
+//
+// AllocateNetworkByEA has no parent CIDR to infer the address family
+// from, so isIPv6 is always passed as false for that path — EA-based
+// allocation of an IPv6 subnet would require an explicit ipVersion field
+// on the CRD, which this catalog does not define.
+func createOrAllocateNetwork(objMgr ibclient.IBObjectManager, networkView, network, parentCidr, comment, object *string, allocatePrefixLen *uint, filterParams, extAttrs map[string]string) (*ibclient.Network, error) {
+	if strOrEmpty(parentCidr) != "" && len(filterParams) > 0 {
+		return nil, errors.New(errParentCidrAndFilterParams)
+	}
+
+	switch {
+	case strOrEmpty(network) != "":
+		return createNetwork(objMgr, networkView, network, comment, extAttrs)
+
+	case strOrEmpty(parentCidr) != "":
+		if allocatePrefixLen == nil {
+			return nil, errors.New(errAllocatePrefixLenRequired)
+		}
+		cidr := strOrEmpty(parentCidr)
+		return objMgr.AllocateNetwork(strOrEmpty(networkView), cidr, isIPv6CIDR(cidr), *allocatePrefixLen, strOrEmpty(comment), buildEA(extAttrs))
+
+	case len(filterParams) > 0:
+		if allocatePrefixLen == nil {
+			return nil, errors.New(errAllocatePrefixLenRequired)
+		}
+		return objMgr.AllocateNetworkByEA(strOrEmpty(networkView), false, strOrEmpty(comment), buildEA(extAttrs), filterParams, *allocatePrefixLen, strOrEmpty(object))
+
+	default:
+		// Unreachable in practice — the CRD's XValidation rule requires one
+		// of network, parentCidr, or filterParams to be set.
+		return nil, errors.New(errMissingAllocationInput)
+	}
 }
 
 // updateNetwork issues the WAPI update call. Only comment and extattrs are

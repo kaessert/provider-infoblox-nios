@@ -48,6 +48,8 @@ const (
 
 func stringPtr(s string) *string { return &s }
 
+func uintPtr(u uint) *uint { return &u }
+
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
 // provider's API types registered.
 func newTestScheme(t *testing.T) *runtime.Scheme {
@@ -236,17 +238,76 @@ func filterReturnFields(nc *ibclient.NetworkContainer, returnFields string) inte
 	return filtered
 }
 
+// nextAvailableNetworkContainerRequest mirrors the wire shape of the SDK's
+// NetworkContainerNextAvailable object — the request body both
+// AllocateNetworkContainer and AllocateNetworkContainerByEA send. Both use
+// a nested "network" object (carrying either a parentCidr search or an EA
+// filter, plus the requested prefix length) rather than a plain CIDR
+// string. Probing the raw "network" field's JSON type (object vs string)
+// is what distinguishes an allocation request from a static-CIDR create in
+// createHandler below.
+type nextAvailableNetworkContainerRequest struct {
+	Network *struct {
+		ObjectParams map[string]string `json:"_object_parameters"`
+		Params       map[string]uint   `json:"_parameters"`
+	} `json:"network"`
+	NetviewName string      `json:"network_view"`
+	Comment     string      `json:"comment"`
+	Ea          ibclient.EA `json:"extattrs"`
+}
+
 // handler returns an http.Handler implementing the networkcontainer /
 // ipv6networkcontainer WAPI surface.
 func (m *mockWapiServer) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	createHandler := func(w http.ResponseWriter, r *http.Request) {
-		var nc ibclient.NetworkContainer
-		if err := json.NewDecoder(r.Body).Decode(&nc); err != nil {
+		body, err := readAll(r.Body)
+		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+
+		// Probe the raw "network" field's JSON type: a nested object
+		// means this is an AllocateNetworkContainer(ByEA) request; a
+		// string (or absent) means a static-CIDR create.
+		var probe struct {
+			Network json.RawMessage `json:"network"`
+		}
+		if err := json.Unmarshal(body, &probe); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		var nc ibclient.NetworkContainer
+		switch {
+		case len(probe.Network) > 0 && probe.Network[0] == '{':
+			var req nextAvailableNetworkContainerRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var prefixLen uint
+			if req.Network != nil {
+				prefixLen = req.Network.Params["cidr"]
+			}
+			// The mock allocates from a fixed pool for the
+			// parentCidr/filterParams paths — real WAPI would resolve
+			// the search (parent CIDR match or EA match) against
+			// actual container state server-side.
+			nc = ibclient.NetworkContainer{
+				NetviewName: req.NetviewName,
+				Cidr:        "192.168.200.0/" + itoa(int(prefixLen)),
+				Comment:     req.Comment,
+				Ea:          req.Ea,
+			}
+		default:
+			if err := json.Unmarshal(body, &nc); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+
 		ref := m.seed(&nc)
 		writeJSON(w, http.StatusOK, ref)
 	}
@@ -398,6 +459,37 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
 		t.Errorf("condition Ready = %v, want True", cond.Status)
+	}
+}
+
+func TestClusterObserveLateInitializesNetworkAfterAllocation(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// Simulates a resource created via the parentCidr/filterParams
+	// allocation path: spec.forProvider.network was never set by the
+	// user, only the server knows the allocated CIDR.
+	ref := m.seed(&ibclient.NetworkContainer{
+		NetviewName: testDefaultName,
+		Cidr:        "10.0.5.0/16",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", ref)
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(16)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true after backfilling network from the allocated CIDR, got false")
+	}
+	if cr.Spec.ForProvider.Network == nil || *cr.Spec.ForProvider.Network != "10.0.5.0/16" {
+		t.Errorf("Spec.ForProvider.Network = %v, want 10.0.5.0/16", cr.Spec.ForProvider.Network)
 	}
 }
 
@@ -599,6 +691,82 @@ func TestClusterCreateError(t *testing.T) {
 	}
 	if got := meta.GetExternalName(cr); got != "" {
 		t.Errorf("Create: external-name = %q, want empty after failed create", got)
+	}
+}
+
+// ── cluster: Create — allocation paths ───────────────────────────────────
+
+func TestClusterCreateAllocateFromParentCidr(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(16)
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == "" || got == cr.GetName() {
+		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+	if !strings.HasPrefix(got, "networkcontainer/") {
+		t.Errorf("Create: external-name = %q, want networkcontainer/ prefix", got)
+	}
+	if !strings.Contains(got, "/16/") {
+		t.Errorf("Create: external-name = %q, want the allocated /16 subnet in the ref", got)
+	}
+}
+
+func TestClusterCreateAllocateByFilterParams(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", "")
+	cr.Spec.ForProvider.Network = nil
+	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
+	cr.Spec.ForProvider.AllocatePrefixLen = uintPtr(20)
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == "" || got == cr.GetName() {
+		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+	if !strings.Contains(got, "/20/") {
+		t.Errorf("Create: external-name = %q, want the allocated /20 subnet in the ref", got)
+	}
+}
+
+func TestCreateValidationRejectsParentCidrAndFilterParams(t *testing.T) {
+	_, err := createOrAllocateNetworkContainer(nil, stringPtr(testDefaultName), nil, stringPtr("10.0.0.0/8"), nil, uintPtr(16), map[string]string{"region": "us-east"}, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetworkContainer: want error when parentCidr and filterParams are both set, got nil")
+	}
+}
+
+func TestCreateValidationRequiresAllocatePrefixLenForParentCidr(t *testing.T) {
+	_, err := createOrAllocateNetworkContainer(nil, stringPtr(testDefaultName), nil, stringPtr("10.0.0.0/8"), nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetworkContainer: want error when parentCidr is set without allocatePrefixLen, got nil")
+	}
+}
+
+func TestCreateValidationRequiresAllocatePrefixLenForFilterParams(t *testing.T) {
+	_, err := createOrAllocateNetworkContainer(nil, stringPtr(testDefaultName), nil, nil, nil, nil, map[string]string{"region": "us-east"}, nil)
+	if err == nil {
+		t.Fatal("createOrAllocateNetworkContainer: want error when filterParams is set without allocatePrefixLen, got nil")
 	}
 }
 
@@ -1299,17 +1467,22 @@ func TestIsIPv6CIDR(t *testing.T) {
 }
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
+	var network *string
 	var comment *string
 	extAttrs := map[string]string(nil)
 
 	nc := &ibclient.NetworkContainer{
+		Cidr:    "10.0.0.0/16",
 		Comment: "server default",
 		Ea:      ibclient.EA{testExtAttrKey: testExtAttrValue},
 	}
 
-	changed := lateInitialize(&comment, &extAttrs, nc)
+	changed := lateInitialize(&network, &comment, &extAttrs, nc)
 	if !changed {
 		t.Fatal("lateInitialize: want changed=true, got false")
+	}
+	if network == nil || *network != "10.0.0.0/16" {
+		t.Errorf("lateInitialize: network = %v, want %q", network, "10.0.0.0/16")
 	}
 	if comment == nil || *comment != "server default" {
 		t.Errorf("lateInitialize: comment = %v, want %q", comment, "server default")
@@ -1320,17 +1493,22 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 }
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
+	network := stringPtr("10.0.0.0/16")
 	comment := stringPtr("user comment")
 	extAttrs := map[string]string{testExtAttrKey: "staging"}
 
 	nc := &ibclient.NetworkContainer{
+		Cidr:    "10.0.1.0/16",
 		Comment: "server default",
 		Ea:      ibclient.EA{testExtAttrKey: testExtAttrValue},
 	}
 
-	changed := lateInitialize(&comment, &extAttrs, nc)
+	changed := lateInitialize(&network, &comment, &extAttrs, nc)
 	if changed {
 		t.Error("lateInitialize: want changed=false when all fields already set, got true")
+	}
+	if *network != "10.0.0.0/16" {
+		t.Errorf("lateInitialize: network = %q, want unchanged %q", *network, "10.0.0.0/16")
 	}
 	if *comment != "user comment" {
 		t.Errorf("lateInitialize: comment = %q, want unchanged %q", *comment, "user comment")
