@@ -43,7 +43,7 @@ type DNSViewDnssecTrustedKey struct {
 	DnssecMustBeSecure *bool `json:"dnssecMustBeSecure,omitempty"`
 }
 
-// DNSViewAddressAc describes one address/ACL access-control entry (mirrors the SDK's Addressac struct). Reused across filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+// DNSViewAddressAc describes one address/ACL access-control entry (mirrors the SDK's Addressac struct). Reused across filterAaaaList, matchClients, and matchDestinations.
 type DNSViewAddressAc struct {
 	// The address this rule applies to, or "Any".
 	Address *string `json:"address,omitempty"`
@@ -314,9 +314,6 @@ type DNSViewParameters struct {
 	LameTTL *int64 `json:"lameTtl,omitempty"`
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"`
-	// The last-queried ACL for the specified IPv4/IPv6 addresses and networks in scavenging settings.
-	// +optional
-	LastQueriedAcl []*DNSViewAddressAc `json:"lastQueriedAcl"`
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of clients that are allowed or denied access to the DNS view.
 	// +optional
 	MatchClients []*DNSViewAddressAc `json:"matchClients"`
@@ -376,7 +373,7 @@ type DNSViewParameters struct {
 	UseRpzQnameWaitRecurse *bool `json:"useRpzQnameWaitRecurse,omitempty"`
 	// The scavenging settings for the DNS view.
 	ScavengingSettings *DNSViewScavengingSettings `json:"scavengingSettings,omitempty"`
-	// Use flag for: scavenging_settings, last_queried_acl.
+	// Use flag for: scavenging_settings.
 	UseScavengingSettings *bool `json:"useScavengingSettings,omitempty"`
 	// A sort list that determines the order of IP addresses in responses sent to DNS queries.
 	// +optional
@@ -505,9 +502,6 @@ type DNSViewObservation struct {
 	LameTTL *int64 `json:"lameTtl,omitempty"` // atProvider
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"` // atProvider
-	// The last-queried ACL for the specified IPv4/IPv6 addresses and networks in scavenging settings.
-	// +optional
-	LastQueriedAcl []*DNSViewAddressAc `json:"lastQueriedAcl"` // atProvider
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of clients that are allowed or denied access to the DNS view.
 	// +optional
 	MatchClients []*DNSViewAddressAc `json:"matchClients"` // atProvider
@@ -567,7 +561,7 @@ type DNSViewObservation struct {
 	UseRpzQnameWaitRecurse *bool `json:"useRpzQnameWaitRecurse,omitempty"` // atProvider
 	// The scavenging settings for the DNS view.
 	ScavengingSettings *DNSViewScavengingSettings `json:"scavengingSettings,omitempty"` // atProvider
-	// Use flag for: scavenging_settings, last_queried_acl.
+	// Use flag for: scavenging_settings.
 	UseScavengingSettings *bool `json:"useScavengingSettings,omitempty"` // atProvider
 	// A sort list that determines the order of IP addresses in responses sent to DNS queries.
 	// +optional

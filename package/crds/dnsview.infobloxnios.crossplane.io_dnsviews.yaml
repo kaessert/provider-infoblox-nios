@@ -269,7 +269,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -326,34 +326,6 @@ spec:
                       lame servers.
                     format: int64
                     type: integer
-                  lastQueriedAcl:
-                    description: The last-queried ACL for the specified IPv4/IPv6
-                      addresses and networks in scavenging settings.
-                    items:
-                      description: DNSViewAddressAc describes one address/ACL access-control
-                        entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
-                      properties:
-                        address:
-                          description: The address this rule applies to, or "Any".
-                          type: string
-                        permission:
-                          description: The permission to use for this address.
-                          type: string
-                        tsigKey:
-                          description: A generated TSIG key.
-                          type: string
-                        tsigKeyAlg:
-                          description: The TSIG key algorithm.
-                          type: string
-                        tsigKeyName:
-                          description: The name of the TSIG key.
-                          type: string
-                        useTsigKeyName:
-                          description: 'Use flag for: tsig_key_name.'
-                          type: boolean
-                      type: object
-                    type: array
                   matchClients:
                     description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
                       or TSIG keys of clients that are allowed or denied access to
@@ -361,7 +333,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -390,7 +362,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -752,7 +724,7 @@ spec:
                     description: 'Use flag for: rpz_qname_wait_recurse.'
                     type: boolean
                   useScavengingSettings:
-                    description: 'Use flag for: scavenging_settings, last_queried_acl.'
+                    description: 'Use flag for: scavenging_settings.'
                     type: boolean
                   useSortlist:
                     description: 'Use flag for: sortlist.'
@@ -1090,7 +1062,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -1167,34 +1139,6 @@ spec:
                       lame servers.
                     format: int64
                     type: integer
-                  lastQueriedAcl:
-                    description: The last-queried ACL for the specified IPv4/IPv6
-                      addresses and networks in scavenging settings.
-                    items:
-                      description: DNSViewAddressAc describes one address/ACL access-control
-                        entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
-                      properties:
-                        address:
-                          description: The address this rule applies to, or "Any".
-                          type: string
-                        permission:
-                          description: The permission to use for this address.
-                          type: string
-                        tsigKey:
-                          description: A generated TSIG key.
-                          type: string
-                        tsigKeyAlg:
-                          description: The TSIG key algorithm.
-                          type: string
-                        tsigKeyName:
-                          description: The name of the TSIG key.
-                          type: string
-                        useTsigKeyName:
-                          description: 'Use flag for: tsig_key_name.'
-                          type: boolean
-                      type: object
-                    type: array
                   matchClients:
                     description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
                       or TSIG keys of clients that are allowed or denied access to
@@ -1202,7 +1146,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -1231,7 +1175,7 @@ spec:
                     items:
                       description: DNSViewAddressAc describes one address/ACL access-control
                         entry (mirrors the SDK's Addressac struct). Reused across
-                        filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.
+                        filterAaaaList, matchClients, and matchDestinations.
                       properties:
                         address:
                           description: The address this rule applies to, or "Any".
@@ -1600,7 +1544,7 @@ spec:
                     description: 'Use flag for: rpz_qname_wait_recurse.'
                     type: boolean
                   useScavengingSettings:
-                    description: 'Use flag for: scavenging_settings, last_queried_acl.'
+                    description: 'Use flag for: scavenging_settings.'
                     type: boolean
                   useSortlist:
                     description: 'Use flag for: sortlist.'

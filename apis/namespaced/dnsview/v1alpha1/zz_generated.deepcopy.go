@@ -671,17 +671,6 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.LastQueriedAcl != nil {
-		in, out := &in.LastQueriedAcl, &out.LastQueriedAcl
-		*out = make([]*DNSViewAddressAc, len(*in))
-		for i := range *in {
-			if (*in)[i] != nil {
-				in, out := &(*in)[i], &(*out)[i]
-				*out = new(DNSViewAddressAc)
-				(*in).DeepCopyInto(*out)
-			}
-		}
-	}
 	if in.MatchClients != nil {
 		in, out := &in.MatchClients, &out.MatchClients
 		*out = make([]*DNSViewAddressAc, len(*in))
@@ -1146,17 +1135,6 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 		in, out := &in.UseLameTTL, &out.UseLameTTL
 		*out = new(bool)
 		**out = **in
-	}
-	if in.LastQueriedAcl != nil {
-		in, out := &in.LastQueriedAcl, &out.LastQueriedAcl
-		*out = make([]*DNSViewAddressAc, len(*in))
-		for i := range *in {
-			if (*in)[i] != nil {
-				in, out := &(*in)[i], &(*out)[i]
-				*out = new(DNSViewAddressAc)
-				(*in).DeepCopyInto(*out)
-			}
-		}
 	}
 	if in.MatchClients != nil {
 		in, out := &in.MatchClients, &out.MatchClients

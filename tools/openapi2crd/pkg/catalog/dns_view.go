@@ -49,13 +49,16 @@ package catalog
 // live-verification decision record to avoid retroactive changes during
 // wave expansion.
 //
-// Excluded fields: edns_udp_size and use_edns_udp_size are NOT part of this
-// descriptor. They are documented in newer WAPI schema versions but do not
-// exist at all on the pinned WAPI 2.9.7 baseline — requesting either field
-// returns a live 400 from a real Grid Manager appliance. They first appear
-// starting WAPI 2.13.1. Re-add them (as FieldScopeBoth, matching the rest
-// of the View object) only after the pinned WAPI baseline is upgraded past
-// 2.13.1.
+// Excluded fields: edns_udp_size, use_edns_udp_size, and last_queried_acl are
+// NOT part of this descriptor. They are documented in newer WAPI schema
+// versions but do not exist at all on the pinned WAPI 2.9.7 baseline —
+// requesting any of them returns a live 400 from a real Grid Manager
+// appliance ("Unknown argument/field"). edns_udp_size/use_edns_udp_size first
+// appear starting WAPI 2.13.1; last_queried_acl was confirmed unsupported by
+// the same live-probing method during the DNSView Phase 6 wave. Re-add them
+// (as FieldScopeBoth, matching the rest of the View object) only after the
+// pinned WAPI baseline is upgraded past the version that introduces each
+// field.
 func dnsView() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "DNSView",
@@ -416,13 +419,13 @@ func dnsView() ResourceDescriptor {
 				Scope:       FieldScopeBoth,
 				Description: "Use flag for: lame_ttl.",
 			},
-			{
-				Name:        "LastQueriedAcl",
-				JSONName:    "lastQueriedAcl",
-				GoType:      "[]*DNSViewAddressAc",
-				Scope:       FieldScopeBoth,
-				Description: "The last-queried ACL for the specified IPv4/IPv6 addresses and networks in scavenging settings.",
-			},
+			// LastQueriedAcl (WAPI last_queried_acl) is intentionally excluded
+			// from this descriptor: it doesn't exist at all on the pinned WAPI
+			// 2.9.7 baseline (confirmed by a live 400 response against a real
+			// Grid Manager appliance) — the same class of gap as
+			// edns_udp_size/use_edns_udp_size. Advertising it in the CRD schema
+			// would let a user set a field the controller can never read back
+			// or persist.
 			{
 				Name:        "MatchClients",
 				JSONName:    "matchClients",
@@ -617,7 +620,7 @@ func dnsView() ResourceDescriptor {
 				JSONName:    "useScavengingSettings",
 				GoType:      goTypeBool,
 				Scope:       FieldScopeBoth,
-				Description: "Use flag for: scavenging_settings, last_queried_acl.",
+				Description: "Use flag for: scavenging_settings.",
 			},
 			{
 				Name:        "Sortlist",
@@ -684,7 +687,7 @@ func dnsView() ResourceDescriptor {
 			},
 			{
 				TypeName:    "DNSViewAddressAc",
-				Description: "describes one address/ACL access-control entry (mirrors the SDK's Addressac struct). Reused across filterAaaaList, lastQueriedAcl, matchClients, and matchDestinations.",
+				Description: "describes one address/ACL access-control entry (mirrors the SDK's Addressac struct). Reused across filterAaaaList, matchClients, and matchDestinations.",
 				Fields: []FieldDef{
 					{Name: "Address", JSONName: "address", GoType: goTypeString, Description: "The address this rule applies to, or \"Any\"."},
 					{Name: "Permission", JSONName: "permission", GoType: goTypeString, Description: "The permission to use for this address."},
