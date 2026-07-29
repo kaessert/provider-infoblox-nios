@@ -267,5 +267,49 @@ func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
 	// (network_view is immutable — absent from UpdateNetworkContainer).
 	if !strings.Contains(cs, `message="networkView is immutable after creation"`) {
 		t.Errorf("expected CEL immutability rule for networkView field, got:\n%s", cs)
+// TestSafeGoPackageName verifies keyword collisions get a "pkg" suffix and
+// ordinary slugs pass through unchanged.
+func TestSafeGoPackageName(t *testing.T) {
+	cases := []struct {
+		slug string
+		want string
+	}{
+		{slug: "range", want: "rangepkg"}, // Go reserved keyword
+		{slug: "recorda", want: "recorda"},
+		{slug: "networkview", want: "networkview"},
+		{slug: "type", want: "typepkg"}, // Go reserved keyword
+	}
+	for _, tc := range cases {
+		if got := safeGoPackageName(tc.slug); got != tc.want {
+			t.Errorf("safeGoPackageName(%q) = %q, want %q", tc.slug, got, tc.want)
+		}
+	}
+}
+
+// TestRangeCommonReferencePackageNameIsValidGo is a regression guard for the
+// "range" slug collision with the Go reserved keyword: the standalone
+// apis/common/<package-name> reference copy must declare a valid Go package
+// identifier ("rangepkg", not "range") so it — and, critically, angryjet's
+// jennifer-based code generator, which derives the `package` clause it
+// writes from the LAST PATH SEGMENT of the import path rather than the
+// file's actual `package` declaration — never emits an uncompilable
+// `package range`.
+func TestRangeCommonReferencePackageNameIsValidGo(t *testing.T) {
+	rd, ok := catalog.FindResource("range")
+	if !ok {
+		t.Fatalf("catalog.FindResource(%q): not found", "range")
+	}
+
+	data := BuildFieldSetData(*rd, true)
+	if data.PackageName != "rangepkg" {
+		t.Fatalf("BuildFieldSetData(Range).PackageName = %q, want %q", data.PackageName, "rangepkg")
+	}
+
+	src, err := RenderCommonReference(data)
+	if err != nil {
+		t.Fatalf("RenderCommonReference(Range): %v", err)
+	}
+	if !strings.Contains(string(src), "package rangepkg") {
+		t.Errorf("expected rendered source to declare `package rangepkg`, got:\n%s", src)
 	}
 }
