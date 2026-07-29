@@ -649,10 +649,10 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	}
 }
 
-// TestUpdateSendsAllFields pins the PUT-echo-everything contract for
+// TestClusterUpdateSendsAllFields pins the PUT-echo-everything contract for
 // DTCLBDN: since there are no known immutable fields, Update must send
 // every mutable field on every request (not a partial patch).
-func TestUpdateSendsAllFields(t *testing.T) {
+func TestClusterUpdateSendsAllFields(t *testing.T) {
 	m := newMockDtcLbdnServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -690,11 +690,11 @@ func TestUpdateSendsAllFields(t *testing.T) {
 	}
 }
 
-// TestUpdateRefreshesExternalNameOnRefChange pins the _ref-instability
+// TestClusterUpdateRefreshesExternalNameOnRefChange pins the _ref-instability
 // contract (live-verified, ADR-IN-0004): renaming a DTCLBDN changes its
 // WAPI `_ref`, so Update must detect the change and refresh the
 // crossplane.io/external-name annotation from the PUT response.
-func TestUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
+func TestClusterUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
 	m := newMockDtcLbdnServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -977,6 +977,60 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveMinimalResponse is the namespaced-scope counterpart
+// of TestClusterObserveMinimalResponse — see that test's doc comment for
+// rationale.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcLbdn{})
+
+	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.LBMethod != nil {
+		t.Errorf("AtProvider.LBMethod = %v, want nil", ap.LBMethod)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.Disable != nil {
+		t.Errorf("AtProvider.Disable = %v, want nil", ap.Disable)
+	}
+	if ap.Topology != nil {
+		t.Errorf("AtProvider.Topology = %v, want nil", ap.Topology)
+	}
+	if ap.Pools != nil {
+		t.Errorf("AtProvider.Pools = %v, want nil", ap.Pools)
+	}
+	if ap.AuthZones != nil {
+		t.Errorf("AtProvider.AuthZones = %v, want nil", ap.AuthZones)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Health != nil {
+		t.Errorf("AtProvider.Health = %v, want nil", ap.Health)
+	}
+}
+
 // ── namespaced: Create ────────────────────────────────────────────────────
 
 func TestNamespacedCreateSuccess(t *testing.T) {
@@ -1048,6 +1102,38 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestNamespacedUpdateRefreshesExternalNameOnRefChange mirrors
+// TestClusterUpdateRefreshesExternalNameOnRefChange for the namespaced scope: the
+// server-returned _ref must be re-adopted as the external-name annotation
+// when it differs from the ref addressed.
+func TestNamespacedUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcLbdn{
+		Name:     stringPtr("old-name"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+	})
+
+	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Name = stringPtr("new-name")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got == ref {
+		t.Errorf("Update: external-name still %q, want it refreshed to the new _ref after rename", ref)
+	}
+	if got == "" {
+		t.Error("Update: external-name unexpectedly cleared")
 	}
 }
 
