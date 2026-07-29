@@ -9,6 +9,7 @@ package recordptr
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -132,6 +133,16 @@ type mockWapiServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
+
+	// lastCreateIpv4Addr/lastCreateIpv6Addr capture the ipv4addr/ipv6addr
+	// values exactly as sent by the controller on the most recent POST
+	// (create) request, before the next-available-IP allocation
+	// simulation below replaces whichever one was set with a
+	// synthesized concrete address. This lets cidr/networkView tests
+	// assert what was actually requested independently of what address
+	// got allocated.
+	lastCreateIpv4Addr *string
+	lastCreateIpv6Addr *string
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -200,6 +211,24 @@ func (m *mockWapiServer) handler() http.Handler {
 		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		}
+		m.mu.Lock()
+		m.lastCreateIpv4Addr = rec.Ipv4Addr
+		m.lastCreateIpv6Addr = rec.Ipv6Addr
+		m.mu.Unlock()
+		// Simulate the Grid Manager's dynamic-allocation behavior: when
+		// the caller requested a next-available-IP (the SDK encodes
+		// this as a "func:nextavailableip:<cidr>,<netview>" string in
+		// whichever address field applies — ipv4addr or ipv6addr —
+		// depending on the CIDR family), replace it with a synthesized
+		// concrete address from within the requested CIDR — a real
+		// WAPI never echoes the func-string back, it always resolves
+		// it to the address it allocated.
+		if allocated, ok := allocateFromCidr(strOrEmpty(rec.Ipv4Addr)); ok {
+			rec.Ipv4Addr = &allocated
+		}
+		if allocated, ok := allocateFromCidr(strOrEmpty(rec.Ipv6Addr)); ok {
+			rec.Ipv6Addr = &allocated
 		}
 		// Synthesize the zone the way NIOS derives it server-side, so
 		// Observe/Create tests can assert the response-only Zone field
@@ -308,6 +337,37 @@ func zoneFromPtrdname(ptrdname *string) string {
 		}
 	}
 	return ""
+}
+
+// allocateFromCidr simulates the WAPI's next-available-IP allocation:
+// given the func-string address ("func:nextavailableip:<cidr>[,<netview>]")
+// the SDK sends when the caller set cidr instead of a static address, it
+// returns a synthesized concrete address from within that CIDR. ok is
+// false when addr is not a next-available-IP func-string (e.g. a static
+// address, or empty). This lets Create+Observe round-trip tests assert
+// the allocated address surfaced in AtProvider differs from the
+// func-string the controller sent — mirroring how a real Grid Manager
+// resolves the request to a concrete IP before ever echoing it back.
+func allocateFromCidr(addr string) (string, bool) {
+	const prefix = "func:nextavailableip:"
+	if !strings.HasPrefix(addr, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(addr, prefix)
+	cidr := rest
+	if idx := strings.Index(rest, ","); idx >= 0 {
+		cidr = rest[:idx]
+	}
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", false
+	}
+	ip := append(net.IP{}, ipNet.IP...)
+	// Offset from the network address by a fixed amount — arbitrary, but
+	// deterministic and guaranteed to differ from the caller-supplied
+	// func-string without needing full allocation-tracking bookkeeping.
+	ip[len(ip)-1] += 10
+	return ip.String(), true
 }
 
 func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
@@ -530,6 +590,10 @@ func TestClusterCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	// cidr/networkView are unset here (zero value) and ipv4Addr is
+	// static — this also serves as the regression guard proving the
+	// cidr next-available-IP path (added below) did not change the
+	// pre-existing static-address Create behavior.
 	cr := newClusterPTRRecord("my-ptrrecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -561,14 +625,28 @@ func TestClusterCreateWithCidrAllocatesNextAvailableIP(t *testing.T) {
 		t.Fatalf("Create: unexpected error: %v", err)
 	}
 
-	ref := meta.GetExternalName(cr)
+	// cidr and networkView must be forwarded to the SDK Create call as a
+	// single next-available-IP func-string.
 	m.mu.Lock()
-	stored := m.records[ref]
+	sent := m.lastCreateIpv4Addr
 	m.mu.Unlock()
+	wantSent := "func:nextavailableip:10.0.0.0/24,my-view"
+	if sent == nil || *sent != wantSent {
+		t.Errorf("Create: sent ipv4addr = %v, want %q", sent, wantSent)
+	}
 
-	want := "func:nextavailableip:10.0.0.0/24,my-view"
-	if stored.Ipv4Addr == nil || *stored.Ipv4Addr != want {
-		t.Errorf("Create: stored ipv4addr = %v, want %q", stored.Ipv4Addr, want)
+	// Create succeeds and the allocated IP (as resolved by the WAPI, not
+	// the func-string the controller sent) appears in AtProvider once
+	// Observe runs.
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	gotIP := cr.Status.AtProvider.IPv4Addr
+	if gotIP == nil || *gotIP == wantSent || *gotIP == "" {
+		t.Errorf("AtProvider.IPv4Addr = %v, want a concrete allocated address distinct from the func-string", gotIP)
+	}
+	if gotIP != nil && *gotIP != "10.0.0.10" {
+		t.Errorf("AtProvider.IPv4Addr = %q, want the mock-allocated address %q", *gotIP, "10.0.0.10")
 	}
 }
 
@@ -588,14 +666,12 @@ func TestClusterCreateWithCidrDefaultsNetworkView(t *testing.T) {
 		t.Fatalf("Create: unexpected error: %v", err)
 	}
 
-	ref := meta.GetExternalName(cr)
 	m.mu.Lock()
-	stored := m.records[ref]
+	sent := m.lastCreateIpv4Addr
 	m.mu.Unlock()
-
 	want := "func:nextavailableip:10.0.0.0/24,default"
-	if stored.Ipv4Addr == nil || *stored.Ipv4Addr != want {
-		t.Errorf("Create: stored ipv4addr = %v, want %q", stored.Ipv4Addr, want)
+	if sent == nil || *sent != want {
+		t.Errorf("Create: sent ipv4addr = %v, want %q", sent, want)
 	}
 }
 
