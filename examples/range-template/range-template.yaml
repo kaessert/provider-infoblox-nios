@@ -25,8 +25,8 @@
 # uptest.upbound.io/update-parameter is intentionally omitted — it has
 # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
 # comment field below is a safe mutable scalar for update coverage;
-# field-level update testing is wired via post-assert-hook and the
-# crossplane.io/update-test annotation below.
+# field-level update testing runs through the post-assert hook wiring and
+# the crossplane.io/update-test annotation below.
 apiVersion: rangetemplate.infobloxnios.crossplane.io/v1alpha1
 kind: RangeTemplate
 metadata:
