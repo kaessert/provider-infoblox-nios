@@ -1,0 +1,1553 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: dnsviews.dnsview.infobloxnios.m.crossplane.io
+spec:
+  group: dnsview.infobloxnios.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - infobloxnios
+    kind: DNSView
+    listKind: DNSViewList
+    plural: dnsviews
+    singular: dnsview
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DNSView is the Namespaced-scoped managed resource representing
+          an Infoblox NIOS DNSView.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DNSViewSpec defines the desired state of DNSView.
+            properties:
+              forProvider:
+                description: ForProvider holds the user-supplied parameters for this
+                  DNSView.
+                properties:
+                  blacklistAction:
+                    description: The action to perform when a domain name matches
+                      the pattern defined in a rule specified by the blacklist ruleset.
+                      The default value is "REFUSE".
+                    enum:
+                    - REDIRECT
+                    - REFUSE
+                    type: string
+                  blacklistLogQuery:
+                    description: The flag that indicates whether blacklist redirection
+                      queries are logged. The default value is false.
+                    type: boolean
+                  blacklistRedirectAddresses:
+                    description: The array of IP addresses the appliance includes
+                      in the response it sends in place of a blacklisted IP address.
+                    items:
+                      type: string
+                    type: array
+                  blacklistRedirectTtl:
+                    description: The Time To Live (TTL), in seconds, of the synthetic
+                      DNS responses resulting from blacklist redirection.
+                    format: int64
+                    type: integer
+                  blacklistRulesets:
+                    description: The name of the Ruleset object assigned at the Grid
+                      level for blacklist redirection.
+                    items:
+                      type: string
+                    type: array
+                  comment:
+                    description: Comment for the DNS view; maximum 64 characters.
+                    type: string
+                  customRootNameServers:
+                    description: The list of customized root name servers. Select
+                      and use Internet root name servers, or specify custom root name
+                      servers by providing a host name and IP address to which the
+                      appliance can send queries.
+                    items:
+                      description: DNSViewNameServer describes one customized root
+                        name server entry (mirrors the SDK's NameServer struct).
+                      properties:
+                        address:
+                          description: The IPv4 address or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: A resolvable domain name for the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether the name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Hide the NS record for the primary name server
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  ddnsForceCreationTimestampUpdate:
+                    description: Defines whether the creation timestamp of a resource
+                      record is updated when a DDNS update happens, even if there
+                      is no change to the resource record.
+                    type: boolean
+                  ddnsPrincipalGroup:
+                    description: The DDNS Principal cluster group name.
+                    type: string
+                  ddnsPrincipalTracking:
+                    description: The flag that indicates whether the DDNS principal
+                      track is enabled or disabled.
+                    type: boolean
+                  ddnsRestrictPatterns:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests based on FQDN patterns is enabled or disabled.
+                    type: boolean
+                  ddnsRestrictPatternsList:
+                    description: The unordered list of restriction patterns for the
+                      option to restrict DDNS updates based on FQDN patterns.
+                    items:
+                      type: string
+                    type: array
+                  ddnsRestrictProtected:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests to protected resource records is enabled
+                      or disabled.
+                    type: boolean
+                  ddnsRestrictSecure:
+                    description: The flag that indicates whether DDNS update requests
+                      for a principal other than the target resource record's principal
+                      are restricted.
+                    type: boolean
+                  ddnsRestrictStatic:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests to resource records marked as 'STATIC'
+                      is enabled or disabled.
+                    type: boolean
+                  disable:
+                    description: Determines if the DNS view is disabled or not. When
+                      this is set to false, the DNS view is enabled.
+                    type: boolean
+                  dns64Enabled:
+                    description: Determines if DNS64 is enabled or not.
+                    type: boolean
+                  dns64Groups:
+                    description: The list of DNS64 synthesis groups associated with
+                      this DNS view.
+                    items:
+                      type: string
+                    type: array
+                  dnssecEnabled:
+                    description: Determines if the DNS security extension is enabled
+                      or not.
+                    type: boolean
+                  dnssecExpiredSignaturesEnabled:
+                    description: Determines if the DNS security extension accepts
+                      expired signatures or not.
+                    type: boolean
+                  dnssecNegativeTrustAnchors:
+                    description: A list of zones for which the server does not perform
+                      DNSSEC validation.
+                    items:
+                      type: string
+                    type: array
+                  dnssecTrustedKeys:
+                    description: The list of trusted keys for the DNS security extension.
+                    items:
+                      description: DNSViewDnssecTrustedKey describes one DNSSEC trusted
+                        key entry (mirrors the SDK's Dnssectrustedkey struct).
+                      properties:
+                        algorithm:
+                          description: The DNSSEC algorithm used to generate the key.
+                          type: string
+                        dnssecMustBeSecure:
+                          description: Responses must be DNSSEC secure for this hierarchy/domain.
+                          type: boolean
+                        fqdn:
+                          description: The FQDN of the domain for which the member
+                            validates responses to recursive queries.
+                          type: string
+                        key:
+                          description: The DNSSEC key.
+                          type: string
+                        secureEntryPoint:
+                          description: The secure entry point flag; if set, this is
+                            a KSK configuration.
+                          type: boolean
+                      type: object
+                    type: array
+                  dnssecValidationEnabled:
+                    description: Determines if the DNS security validation is enabled
+                      or not.
+                    type: boolean
+                  enableBlacklist:
+                    description: Determines if the blacklist in a DNS view is enabled
+                      or not.
+                    type: boolean
+                  enableFixedRrsetOrderFqdns:
+                    description: Determines if the fixed RRset order FQDN is enabled
+                      or not.
+                    type: boolean
+                  enableMatchRecursiveOnly:
+                    description: Determines if the 'match-recursive-only' option in
+                      a DNS view is enabled or not.
+                    type: boolean
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  filterAaaa:
+                    description: The type of AAAA filtering for this DNS view object.
+                    type: string
+                  filterAaaaList:
+                    description: Applies AAAA filtering to a named ACL, or to a list
+                      of IPv4/IPv6 addresses and networks from which queries are received.
+                      This field does not allow TSIG keys.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  fixedRrsetOrderFqdns:
+                    description: The fixed RRset order FQDN list. If this field is
+                      non-empty, the appliance automatically sets enable_fixed_rrset_order_fqdns
+                      to true, unless the same request also sets it to false.
+                    items:
+                      description: DNSViewFixedRrsetOrderFqdn describes one fixed
+                        RRset order FQDN entry (mirrors the SDK's GridDnsFixedrrsetorderfqdn
+                        struct).
+                      properties:
+                        fqdn:
+                          description: The FQDN of the fixed RRset configuration item.
+                          type: string
+                        recordType:
+                          description: The record type for the specified FQDN in the
+                            fixed RRset configuration.
+                          type: string
+                      type: object
+                    type: array
+                  forwardOnly:
+                    description: Determines if this DNS view sends queries to forwarders
+                      only or not. When true, queries are sent to forwarders only,
+                      not to other internal or Internet root servers.
+                    type: boolean
+                  forwarders:
+                    description: The list of forwarders for the DNS view. A forwarder
+                      is a name server to which other name servers first send their
+                      off-site queries.
+                    items:
+                      type: string
+                    type: array
+                  lameTtl:
+                    description: The number of seconds to cache lame delegations or
+                      lame servers.
+                    format: int64
+                    type: integer
+                  matchClients:
+                    description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
+                      or TSIG keys of clients that are allowed or denied access to
+                      the DNS view.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  matchDestinations:
+                    description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
+                      or TSIG keys of destinations that are allowed or denied access
+                      to the DNS view.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  maxCacheTtl:
+                    description: The maximum number of seconds to cache ordinary (positive)
+                      answers.
+                    format: int64
+                    type: integer
+                  maxNcacheTtl:
+                    description: The maximum number of seconds to cache negative (NXDOMAIN)
+                      answers.
+                    format: int64
+                    type: integer
+                  name:
+                    description: Name of the DNS view. Renaming an existing view changes
+                      its _ref (DNSView is in the _ref-unstable resource group — the
+                      controller re-reads _ref from the PUT response and updates the
+                      external-name annotation).
+                    type: string
+                  networkView:
+                    description: The name of the network view object associated with
+                      this DNS view.
+                    type: string
+                  notifyDelay:
+                    description: The number of seconds of delay before notify messages
+                      are sent to secondaries.
+                    format: int64
+                    type: integer
+                  nxdomainLogQuery:
+                    description: The flag that indicates whether NXDOMAIN redirection
+                      queries are logged. The default value is false.
+                    type: boolean
+                  nxdomainRedirect:
+                    description: Determines if NXDOMAIN redirection in a DNS view
+                      is enabled or not.
+                    type: boolean
+                  nxdomainRedirectAddresses:
+                    description: The array with IPv4 addresses the appliance includes
+                      in the response it sends in place of an NXDOMAIN response.
+                    items:
+                      type: string
+                    type: array
+                  nxdomainRedirectAddressesV6:
+                    description: The array with IPv6 addresses the appliance includes
+                      in the response it sends in place of an NXDOMAIN response.
+                    items:
+                      type: string
+                    type: array
+                  nxdomainRedirectTtl:
+                    description: The Time To Live (TTL), in seconds, of the synthetic
+                      DNS responses resulting from NXDOMAIN redirection.
+                    format: int64
+                    type: integer
+                  nxdomainRulesets:
+                    description: The names of the Ruleset objects assigned at the
+                      grid level for NXDOMAIN redirection.
+                    items:
+                      type: string
+                    type: array
+                  recursion:
+                    description: Determines if recursion is enabled or not.
+                    type: boolean
+                  responseRateLimiting:
+                    description: The response rate limiting settings for the DNS view.
+                    properties:
+                      enableRrl:
+                        description: Determines if response rate limiting is enabled
+                          or not.
+                        type: boolean
+                      logOnly:
+                        description: Determines if logging for response rate limiting
+                          without dropping any requests is enabled or not.
+                        type: boolean
+                      responsesPerSecond:
+                        description: The number of responses per client per second.
+                        format: int64
+                        type: integer
+                      slip:
+                        description: The response rate limiting slip. If slip is not
+                          0, every n-th rate-limited UDP request is sent a truncated
+                          response instead of being dropped.
+                        format: int64
+                        type: integer
+                      window:
+                        description: The time interval in seconds over which responses
+                          are tracked.
+                        format: int64
+                        type: integer
+                    type: object
+                  rootNameServerType:
+                    description: Determines the type of root name servers.
+                    type: string
+                  rpzDropIpRuleEnabled:
+                    description: Enables the appliance to ignore RPZ-IP triggers with
+                      prefix lengths less than the specified minimum prefix length.
+                    type: boolean
+                  rpzDropIpRuleMinPrefixLengthIpv4:
+                    description: The minimum prefix length for IPv4 RPZ-IP triggers.
+                      The appliance ignores RPZ-IP triggers with prefix lengths less
+                      than this value.
+                    format: int64
+                    type: integer
+                  rpzDropIpRuleMinPrefixLengthIpv6:
+                    description: The minimum prefix length for IPv6 RPZ-IP triggers.
+                      The appliance ignores RPZ-IP triggers with prefix lengths less
+                      than this value.
+                    format: int64
+                    type: integer
+                  rpzQnameWaitRecurse:
+                    description: The flag that indicates whether recursive RPZ lookups
+                      are enabled.
+                    type: boolean
+                  scavengingSettings:
+                    description: The scavenging settings for the DNS view.
+                    properties:
+                      eaExpressionList:
+                        description: The extensible attributes expression list. A
+                          record is treated as reclaimable if the extensible-attributes
+                          expression evaluates to 'true' for it, unless scavenging
+                          has been manually disabled on that record.
+                        items:
+                          description: DNSViewEaExpressionOp describes one scavenging
+                            extensible-attributes expression operand pair (mirrors
+                            the SDK's Eaexpressionop struct).
+                          properties:
+                            op:
+                              description: The operation name.
+                              type: string
+                            op1:
+                              description: The name of the Extensible Attribute Definition
+                                object used as the first operand value.
+                              type: string
+                            op1Type:
+                              description: The first operand type.
+                              type: string
+                            op2:
+                              description: The second operand value.
+                              type: string
+                            op2Type:
+                              description: The second operand type.
+                              type: string
+                          type: object
+                        type: array
+                      enableAutoReclamation:
+                        description: Indicates if automatic resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      enableRecurrentScavenging:
+                        description: Indicates if recurrent resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      enableRrLastQueried:
+                        description: Indicates if resource record last-queried monitoring
+                          in affected zones is enabled or not.
+                        type: boolean
+                      enableScavenging:
+                        description: Indicates if resource record scavenging is enabled
+                          or not.
+                        type: boolean
+                      enableZoneLastQueried:
+                        description: Indicates if last-queried monitoring for affected
+                          zones is enabled or not.
+                        type: boolean
+                      expressionList:
+                        description: The expression list. A record is treated as reclaimable
+                          if the expression evaluates to 'true' for it, unless scavenging
+                          has been manually disabled on that record.
+                        items:
+                          description: DNSViewExpressionOp describes one scavenging
+                            expression operand pair (mirrors the SDK's Expressionop
+                            struct).
+                          properties:
+                            op:
+                              description: The operation name.
+                              type: string
+                            op1:
+                              description: The first operand value.
+                              type: string
+                            op1Type:
+                              description: The first operand type.
+                              type: string
+                            op2:
+                              description: The second operand value.
+                              type: string
+                            op2Type:
+                              description: The second operand type.
+                              type: string
+                          type: object
+                        type: array
+                      reclaimAssociatedRecords:
+                        description: Indicates if associated resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      scavengingSchedule:
+                        description: Schedule setting for the scavenging task.
+                        properties:
+                          dayOfMonth:
+                            description: The day of the month for the scheduled task.
+                            format: int64
+                            type: integer
+                          disable:
+                            description: If set to true, the scheduled task is disabled.
+                            type: boolean
+                          every:
+                            description: The number of frequency units to wait before
+                              repeating the scheduled task.
+                            format: int64
+                            type: integer
+                          frequency:
+                            description: The frequency for the scheduled task.
+                            type: string
+                          hourOfDay:
+                            description: The hour of day for the scheduled task.
+                            format: int64
+                            type: integer
+                          minutesPastHour:
+                            description: The minutes past the hour for the scheduled
+                              task.
+                            format: int64
+                            type: integer
+                          month:
+                            description: The month for the scheduled task.
+                            format: int64
+                            type: integer
+                          recurringTime:
+                            description: The recurring time for the schedule, in Epoch
+                              seconds. Obsolete — preserved for backward compatibility;
+                              prefer year/month/day_of_month/hour_of_day/minutes_past_hour.
+                            format: int64
+                            type: integer
+                          repeat:
+                            description: Indicates if the scheduled task repeats or
+                              runs only once.
+                            type: string
+                          timeZone:
+                            description: The time zone for the schedule.
+                            type: string
+                          weekdays:
+                            description: Days of the week when scheduling is triggered.
+                            items:
+                              type: string
+                            type: array
+                          year:
+                            description: The year for the scheduled task.
+                            format: int64
+                            type: integer
+                        type: object
+                    type: object
+                  sortlist:
+                    description: A sort list that determines the order of IP addresses
+                      in responses sent to DNS queries.
+                    items:
+                      description: DNSViewSortlistEntry describes one sortlist entry
+                        (mirrors the SDK's Sortlist struct; renamed to avoid a name
+                        clash with the Sortlist field).
+                      properties:
+                        address:
+                          description: The source address of a sortlist entry.
+                          type: string
+                        matchList:
+                          description: The match list of a sortlist entry.
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    type: array
+                  useBlacklist:
+                    description: 'Use flag for: blacklist_action, blacklist_log_query,
+                      blacklist_redirect_addresses, blacklist_redirect_ttl, blacklist_rulesets,
+                      enable_blacklist.'
+                    type: boolean
+                  useDdnsForceCreationTimestampUpdate:
+                    description: 'Use flag for: ddns_force_creation_timestamp_update.'
+                    type: boolean
+                  useDdnsPatternsRestriction:
+                    description: 'Use flag for: ddns_restrict_patterns_list, ddns_restrict_patterns.'
+                    type: boolean
+                  useDdnsPrincipalSecurity:
+                    description: 'Use flag for: ddns_restrict_secure, ddns_principal_tracking,
+                      ddns_principal_group.'
+                    type: boolean
+                  useDdnsRestrictProtected:
+                    description: 'Use flag for: ddns_restrict_protected.'
+                    type: boolean
+                  useDdnsRestrictStatic:
+                    description: 'Use flag for: ddns_restrict_static.'
+                    type: boolean
+                  useDns64:
+                    description: 'Use flag for: dns64_enabled, dns64_groups.'
+                    type: boolean
+                  useDnssec:
+                    description: 'Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled,
+                      dnssec_validation_enabled, dnssec_trusted_keys.'
+                    type: boolean
+                  useFilterAaaa:
+                    description: 'Use flag for: filter_aaaa, filter_aaaa_list.'
+                    type: boolean
+                  useFixedRrsetOrderFqdns:
+                    description: 'Use flag for: fixed_rrset_order_fqdns, enable_fixed_rrset_order_fqdns.'
+                    type: boolean
+                  useForwarders:
+                    description: 'Use flag for: forwarders, forward_only.'
+                    type: boolean
+                  useLameTtl:
+                    description: 'Use flag for: lame_ttl.'
+                    type: boolean
+                  useMaxCacheTtl:
+                    description: 'Use flag for: max_cache_ttl.'
+                    type: boolean
+                  useMaxNcacheTtl:
+                    description: 'Use flag for: max_ncache_ttl.'
+                    type: boolean
+                  useNxdomainRedirect:
+                    description: 'Use flag for: nxdomain_redirect, nxdomain_redirect_addresses,
+                      nxdomain_redirect_addresses_v6, nxdomain_redirect_ttl, nxdomain_log_query,
+                      nxdomain_rulesets.'
+                    type: boolean
+                  useRecursion:
+                    description: 'Use flag for: recursion.'
+                    type: boolean
+                  useResponseRateLimiting:
+                    description: 'Use flag for: response_rate_limiting.'
+                    type: boolean
+                  useRootNameServer:
+                    description: 'Use flag for: custom_root_name_servers, root_name_server_type.'
+                    type: boolean
+                  useRpzDropIpRule:
+                    description: 'Use flag for: rpz_drop_ip_rule_enabled, rpz_drop_ip_rule_min_prefix_length_ipv4,
+                      rpz_drop_ip_rule_min_prefix_length_ipv6.'
+                    type: boolean
+                  useRpzQnameWaitRecurse:
+                    description: 'Use flag for: rpz_qname_wait_recurse.'
+                    type: boolean
+                  useScavengingSettings:
+                    description: 'Use flag for: scavenging_settings.'
+                    type: boolean
+                  useSortlist:
+                    description: 'Use flag for: sortlist.'
+                    type: boolean
+                required:
+                - name
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: DNSViewStatus defines the observed state of DNSView.
+            properties:
+              atProvider:
+                description: AtProvider holds the observed values from the Infoblox
+                  NIOS WAPI.
+                properties:
+                  blacklistAction:
+                    description: The action to perform when a domain name matches
+                      the pattern defined in a rule specified by the blacklist ruleset.
+                      The default value is "REFUSE".
+                    type: string
+                  blacklistLogQuery:
+                    description: The flag that indicates whether blacklist redirection
+                      queries are logged. The default value is false.
+                    type: boolean
+                  blacklistRedirectAddresses:
+                    description: The array of IP addresses the appliance includes
+                      in the response it sends in place of a blacklisted IP address.
+                    items:
+                      type: string
+                    type: array
+                  blacklistRedirectTtl:
+                    description: The Time To Live (TTL), in seconds, of the synthetic
+                      DNS responses resulting from blacklist redirection.
+                    format: int64
+                    type: integer
+                  blacklistRulesets:
+                    description: The name of the Ruleset object assigned at the Grid
+                      level for blacklist redirection.
+                    items:
+                      type: string
+                    type: array
+                  cloudInfo:
+                    description: Cloud API related information for this object (cloud-managed
+                      views only).
+                    properties:
+                      authorityType:
+                        description: Type of authority over the object.
+                        type: string
+                      delegatedMember:
+                        description: The Cloud Platform Appliance to which authority
+                          of the object is delegated.
+                        properties:
+                          ipv4Addr:
+                            description: The IPv4 Address of the Grid Member.
+                            type: string
+                          ipv6Addr:
+                            description: The IPv6 Address of the Grid Member.
+                            type: string
+                          name:
+                            description: The Grid member name.
+                            type: string
+                        type: object
+                      delegatedRoot:
+                        description: Indicates the root of the delegation if delegated_scope
+                          is SUBTREE or RECLAIMING. Not set otherwise.
+                        type: string
+                      delegatedScope:
+                        description: 'Indicates the scope of delegation for the object:
+                          NONE (outside any delegation), ROOT (the delegation point),
+                          SUBTREE (within the scope of a delegation), or RECLAIMING
+                          (within the scope of a delegation being reclaimed).'
+                        type: string
+                      mgmtPlatform:
+                        description: Indicates the specified cloud management platform.
+                        type: string
+                      ownedByAdaptor:
+                        description: Determines whether the object was created by
+                          the cloud adapter or not.
+                        type: boolean
+                      tenant:
+                        description: Reference to the tenant object associated with
+                          the object, if any.
+                        type: string
+                      usage:
+                        description: Indicates the cloud origin of the object.
+                        type: string
+                    type: object
+                  comment:
+                    description: Comment for the DNS view; maximum 64 characters.
+                    type: string
+                  customRootNameServers:
+                    description: The list of customized root name servers. Select
+                      and use Internet root name servers, or specify custom root name
+                      servers by providing a host name and IP address to which the
+                      appliance can send queries.
+                    items:
+                      description: DNSViewNameServer describes one customized root
+                        name server entry (mirrors the SDK's NameServer struct).
+                      properties:
+                        address:
+                          description: The IPv4 address or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: A resolvable domain name for the external DNS
+                            server.
+                          type: string
+                        sharedWithMsParentDelegation:
+                          description: Whether the name server is shared with the
+                            parent Microsoft primary zone's delegation server.
+                          type: boolean
+                        stealth:
+                          description: Hide the NS record for the primary name server
+                            from DNS queries.
+                          type: boolean
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The TSIG key name.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  ddnsForceCreationTimestampUpdate:
+                    description: Defines whether the creation timestamp of a resource
+                      record is updated when a DDNS update happens, even if there
+                      is no change to the resource record.
+                    type: boolean
+                  ddnsPrincipalGroup:
+                    description: The DDNS Principal cluster group name.
+                    type: string
+                  ddnsPrincipalTracking:
+                    description: The flag that indicates whether the DDNS principal
+                      track is enabled or disabled.
+                    type: boolean
+                  ddnsRestrictPatterns:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests based on FQDN patterns is enabled or disabled.
+                    type: boolean
+                  ddnsRestrictPatternsList:
+                    description: The unordered list of restriction patterns for the
+                      option to restrict DDNS updates based on FQDN patterns.
+                    items:
+                      type: string
+                    type: array
+                  ddnsRestrictProtected:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests to protected resource records is enabled
+                      or disabled.
+                    type: boolean
+                  ddnsRestrictSecure:
+                    description: The flag that indicates whether DDNS update requests
+                      for a principal other than the target resource record's principal
+                      are restricted.
+                    type: boolean
+                  ddnsRestrictStatic:
+                    description: The flag that indicates whether an option to restrict
+                      DDNS update requests to resource records marked as 'STATIC'
+                      is enabled or disabled.
+                    type: boolean
+                  disable:
+                    description: Determines if the DNS view is disabled or not. When
+                      this is set to false, the DNS view is enabled.
+                    type: boolean
+                  dns64Enabled:
+                    description: Determines if DNS64 is enabled or not.
+                    type: boolean
+                  dns64Groups:
+                    description: The list of DNS64 synthesis groups associated with
+                      this DNS view.
+                    items:
+                      type: string
+                    type: array
+                  dnssecEnabled:
+                    description: Determines if the DNS security extension is enabled
+                      or not.
+                    type: boolean
+                  dnssecExpiredSignaturesEnabled:
+                    description: Determines if the DNS security extension accepts
+                      expired signatures or not.
+                    type: boolean
+                  dnssecNegativeTrustAnchors:
+                    description: A list of zones for which the server does not perform
+                      DNSSEC validation.
+                    items:
+                      type: string
+                    type: array
+                  dnssecTrustedKeys:
+                    description: The list of trusted keys for the DNS security extension.
+                    items:
+                      description: DNSViewDnssecTrustedKey describes one DNSSEC trusted
+                        key entry (mirrors the SDK's Dnssectrustedkey struct).
+                      properties:
+                        algorithm:
+                          description: The DNSSEC algorithm used to generate the key.
+                          type: string
+                        dnssecMustBeSecure:
+                          description: Responses must be DNSSEC secure for this hierarchy/domain.
+                          type: boolean
+                        fqdn:
+                          description: The FQDN of the domain for which the member
+                            validates responses to recursive queries.
+                          type: string
+                        key:
+                          description: The DNSSEC key.
+                          type: string
+                        secureEntryPoint:
+                          description: The secure entry point flag; if set, this is
+                            a KSK configuration.
+                          type: boolean
+                      type: object
+                    type: array
+                  dnssecValidationEnabled:
+                    description: Determines if the DNS security validation is enabled
+                      or not.
+                    type: boolean
+                  enableBlacklist:
+                    description: Determines if the blacklist in a DNS view is enabled
+                      or not.
+                    type: boolean
+                  enableFixedRrsetOrderFqdns:
+                    description: Determines if the fixed RRset order FQDN is enabled
+                      or not.
+                    type: boolean
+                  enableMatchRecursiveOnly:
+                    description: Determines if the 'match-recursive-only' option in
+                      a DNS view is enabled or not.
+                    type: boolean
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  filterAaaa:
+                    description: The type of AAAA filtering for this DNS view object.
+                    type: string
+                  filterAaaaList:
+                    description: Applies AAAA filtering to a named ACL, or to a list
+                      of IPv4/IPv6 addresses and networks from which queries are received.
+                      This field does not allow TSIG keys.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  fixedRrsetOrderFqdns:
+                    description: The fixed RRset order FQDN list. If this field is
+                      non-empty, the appliance automatically sets enable_fixed_rrset_order_fqdns
+                      to true, unless the same request also sets it to false.
+                    items:
+                      description: DNSViewFixedRrsetOrderFqdn describes one fixed
+                        RRset order FQDN entry (mirrors the SDK's GridDnsFixedrrsetorderfqdn
+                        struct).
+                      properties:
+                        fqdn:
+                          description: The FQDN of the fixed RRset configuration item.
+                          type: string
+                        recordType:
+                          description: The record type for the specified FQDN in the
+                            fixed RRset configuration.
+                          type: string
+                      type: object
+                    type: array
+                  forwardOnly:
+                    description: Determines if this DNS view sends queries to forwarders
+                      only or not. When true, queries are sent to forwarders only,
+                      not to other internal or Internet root servers.
+                    type: boolean
+                  forwarders:
+                    description: The list of forwarders for the DNS view. A forwarder
+                      is a name server to which other name servers first send their
+                      off-site queries.
+                    items:
+                      type: string
+                    type: array
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
+                  isDefault:
+                    description: The NIOS appliance always provides one default DNS
+                      view (name "default") plus two other well-known views ("External",
+                      "Internal"). You can rename the default view and change its
+                      settings, but its is_default flag never changes after creation.
+                      WAPI marks this field `supports=sr` (search + read only) — it
+                      is never a POST/PUT parameter, so it has no ForProvider representation;
+                      the CEL `self == oldSelf` rule is instead emitted on this AtProvider
+                      (status) mirror field (see FieldDef.Immutable doc, same pattern
+                      as ARecord's `zone` field).
+                    type: boolean
+                    x-kubernetes-validations:
+                    - message: isDefault is immutable after creation
+                      rule: self == oldSelf
+                  lameTtl:
+                    description: The number of seconds to cache lame delegations or
+                      lame servers.
+                    format: int64
+                    type: integer
+                  matchClients:
+                    description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
+                      or TSIG keys of clients that are allowed or denied access to
+                      the DNS view.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  matchDestinations:
+                    description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
+                      or TSIG keys of destinations that are allowed or denied access
+                      to the DNS view.
+                    items:
+                      description: DNSViewAddressAc describes one address/ACL access-control
+                        entry (mirrors the SDK's Addressac struct). Reused across
+                        filterAaaaList, matchClients, and matchDestinations.
+                      properties:
+                        address:
+                          description: The address this rule applies to, or "Any".
+                          type: string
+                        permission:
+                          description: The permission to use for this address.
+                          type: string
+                        tsigKey:
+                          description: A generated TSIG key.
+                          type: string
+                        tsigKeyAlg:
+                          description: The TSIG key algorithm.
+                          type: string
+                        tsigKeyName:
+                          description: The name of the TSIG key.
+                          type: string
+                        useTsigKeyName:
+                          description: 'Use flag for: tsig_key_name.'
+                          type: boolean
+                      type: object
+                    type: array
+                  maxCacheTtl:
+                    description: The maximum number of seconds to cache ordinary (positive)
+                      answers.
+                    format: int64
+                    type: integer
+                  maxNcacheTtl:
+                    description: The maximum number of seconds to cache negative (NXDOMAIN)
+                      answers.
+                    format: int64
+                    type: integer
+                  name:
+                    description: Name of the DNS view. Renaming an existing view changes
+                      its _ref (DNSView is in the _ref-unstable resource group — the
+                      controller re-reads _ref from the PUT response and updates the
+                      external-name annotation).
+                    type: string
+                  networkView:
+                    description: The name of the network view object associated with
+                      this DNS view.
+                    type: string
+                  notifyDelay:
+                    description: The number of seconds of delay before notify messages
+                      are sent to secondaries.
+                    format: int64
+                    type: integer
+                  nxdomainLogQuery:
+                    description: The flag that indicates whether NXDOMAIN redirection
+                      queries are logged. The default value is false.
+                    type: boolean
+                  nxdomainRedirect:
+                    description: Determines if NXDOMAIN redirection in a DNS view
+                      is enabled or not.
+                    type: boolean
+                  nxdomainRedirectAddresses:
+                    description: The array with IPv4 addresses the appliance includes
+                      in the response it sends in place of an NXDOMAIN response.
+                    items:
+                      type: string
+                    type: array
+                  nxdomainRedirectAddressesV6:
+                    description: The array with IPv6 addresses the appliance includes
+                      in the response it sends in place of an NXDOMAIN response.
+                    items:
+                      type: string
+                    type: array
+                  nxdomainRedirectTtl:
+                    description: The Time To Live (TTL), in seconds, of the synthetic
+                      DNS responses resulting from NXDOMAIN redirection.
+                    format: int64
+                    type: integer
+                  nxdomainRulesets:
+                    description: The names of the Ruleset objects assigned at the
+                      grid level for NXDOMAIN redirection.
+                    items:
+                      type: string
+                    type: array
+                  recursion:
+                    description: Determines if recursion is enabled or not.
+                    type: boolean
+                  ref:
+                    description: Server-assigned opaque object reference (WAPI `_ref`).
+                      Mirrors the crossplane.io/external-name annotation for observability
+                      and uptest import verification. UNSTABLE — renaming the view
+                      changes this value; the controller re-reads _ref from the PUT
+                      response and updates the external-name annotation.
+                    type: string
+                  responseRateLimiting:
+                    description: The response rate limiting settings for the DNS view.
+                    properties:
+                      enableRrl:
+                        description: Determines if response rate limiting is enabled
+                          or not.
+                        type: boolean
+                      logOnly:
+                        description: Determines if logging for response rate limiting
+                          without dropping any requests is enabled or not.
+                        type: boolean
+                      responsesPerSecond:
+                        description: The number of responses per client per second.
+                        format: int64
+                        type: integer
+                      slip:
+                        description: The response rate limiting slip. If slip is not
+                          0, every n-th rate-limited UDP request is sent a truncated
+                          response instead of being dropped.
+                        format: int64
+                        type: integer
+                      window:
+                        description: The time interval in seconds over which responses
+                          are tracked.
+                        format: int64
+                        type: integer
+                    type: object
+                  rootNameServerType:
+                    description: Determines the type of root name servers.
+                    type: string
+                  rpzDropIpRuleEnabled:
+                    description: Enables the appliance to ignore RPZ-IP triggers with
+                      prefix lengths less than the specified minimum prefix length.
+                    type: boolean
+                  rpzDropIpRuleMinPrefixLengthIpv4:
+                    description: The minimum prefix length for IPv4 RPZ-IP triggers.
+                      The appliance ignores RPZ-IP triggers with prefix lengths less
+                      than this value.
+                    format: int64
+                    type: integer
+                  rpzDropIpRuleMinPrefixLengthIpv6:
+                    description: The minimum prefix length for IPv6 RPZ-IP triggers.
+                      The appliance ignores RPZ-IP triggers with prefix lengths less
+                      than this value.
+                    format: int64
+                    type: integer
+                  rpzQnameWaitRecurse:
+                    description: The flag that indicates whether recursive RPZ lookups
+                      are enabled.
+                    type: boolean
+                  scavengingSettings:
+                    description: The scavenging settings for the DNS view.
+                    properties:
+                      eaExpressionList:
+                        description: The extensible attributes expression list. A
+                          record is treated as reclaimable if the extensible-attributes
+                          expression evaluates to 'true' for it, unless scavenging
+                          has been manually disabled on that record.
+                        items:
+                          description: DNSViewEaExpressionOp describes one scavenging
+                            extensible-attributes expression operand pair (mirrors
+                            the SDK's Eaexpressionop struct).
+                          properties:
+                            op:
+                              description: The operation name.
+                              type: string
+                            op1:
+                              description: The name of the Extensible Attribute Definition
+                                object used as the first operand value.
+                              type: string
+                            op1Type:
+                              description: The first operand type.
+                              type: string
+                            op2:
+                              description: The second operand value.
+                              type: string
+                            op2Type:
+                              description: The second operand type.
+                              type: string
+                          type: object
+                        type: array
+                      enableAutoReclamation:
+                        description: Indicates if automatic resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      enableRecurrentScavenging:
+                        description: Indicates if recurrent resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      enableRrLastQueried:
+                        description: Indicates if resource record last-queried monitoring
+                          in affected zones is enabled or not.
+                        type: boolean
+                      enableScavenging:
+                        description: Indicates if resource record scavenging is enabled
+                          or not.
+                        type: boolean
+                      enableZoneLastQueried:
+                        description: Indicates if last-queried monitoring for affected
+                          zones is enabled or not.
+                        type: boolean
+                      expressionList:
+                        description: The expression list. A record is treated as reclaimable
+                          if the expression evaluates to 'true' for it, unless scavenging
+                          has been manually disabled on that record.
+                        items:
+                          description: DNSViewExpressionOp describes one scavenging
+                            expression operand pair (mirrors the SDK's Expressionop
+                            struct).
+                          properties:
+                            op:
+                              description: The operation name.
+                              type: string
+                            op1:
+                              description: The first operand value.
+                              type: string
+                            op1Type:
+                              description: The first operand type.
+                              type: string
+                            op2:
+                              description: The second operand value.
+                              type: string
+                            op2Type:
+                              description: The second operand type.
+                              type: string
+                          type: object
+                        type: array
+                      reclaimAssociatedRecords:
+                        description: Indicates if associated resource record scavenging
+                          is enabled or not.
+                        type: boolean
+                      scavengingSchedule:
+                        description: Schedule setting for the scavenging task.
+                        properties:
+                          dayOfMonth:
+                            description: The day of the month for the scheduled task.
+                            format: int64
+                            type: integer
+                          disable:
+                            description: If set to true, the scheduled task is disabled.
+                            type: boolean
+                          every:
+                            description: The number of frequency units to wait before
+                              repeating the scheduled task.
+                            format: int64
+                            type: integer
+                          frequency:
+                            description: The frequency for the scheduled task.
+                            type: string
+                          hourOfDay:
+                            description: The hour of day for the scheduled task.
+                            format: int64
+                            type: integer
+                          minutesPastHour:
+                            description: The minutes past the hour for the scheduled
+                              task.
+                            format: int64
+                            type: integer
+                          month:
+                            description: The month for the scheduled task.
+                            format: int64
+                            type: integer
+                          recurringTime:
+                            description: The recurring time for the schedule, in Epoch
+                              seconds. Obsolete — preserved for backward compatibility;
+                              prefer year/month/day_of_month/hour_of_day/minutes_past_hour.
+                            format: int64
+                            type: integer
+                          repeat:
+                            description: Indicates if the scheduled task repeats or
+                              runs only once.
+                            type: string
+                          timeZone:
+                            description: The time zone for the schedule.
+                            type: string
+                          weekdays:
+                            description: Days of the week when scheduling is triggered.
+                            items:
+                              type: string
+                            type: array
+                          year:
+                            description: The year for the scheduled task.
+                            format: int64
+                            type: integer
+                        type: object
+                    type: object
+                  sortlist:
+                    description: A sort list that determines the order of IP addresses
+                      in responses sent to DNS queries.
+                    items:
+                      description: DNSViewSortlistEntry describes one sortlist entry
+                        (mirrors the SDK's Sortlist struct; renamed to avoid a name
+                        clash with the Sortlist field).
+                      properties:
+                        address:
+                          description: The source address of a sortlist entry.
+                          type: string
+                        matchList:
+                          description: The match list of a sortlist entry.
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    type: array
+                  useBlacklist:
+                    description: 'Use flag for: blacklist_action, blacklist_log_query,
+                      blacklist_redirect_addresses, blacklist_redirect_ttl, blacklist_rulesets,
+                      enable_blacklist.'
+                    type: boolean
+                  useDdnsForceCreationTimestampUpdate:
+                    description: 'Use flag for: ddns_force_creation_timestamp_update.'
+                    type: boolean
+                  useDdnsPatternsRestriction:
+                    description: 'Use flag for: ddns_restrict_patterns_list, ddns_restrict_patterns.'
+                    type: boolean
+                  useDdnsPrincipalSecurity:
+                    description: 'Use flag for: ddns_restrict_secure, ddns_principal_tracking,
+                      ddns_principal_group.'
+                    type: boolean
+                  useDdnsRestrictProtected:
+                    description: 'Use flag for: ddns_restrict_protected.'
+                    type: boolean
+                  useDdnsRestrictStatic:
+                    description: 'Use flag for: ddns_restrict_static.'
+                    type: boolean
+                  useDns64:
+                    description: 'Use flag for: dns64_enabled, dns64_groups.'
+                    type: boolean
+                  useDnssec:
+                    description: 'Use flag for: dnssec_enabled, dnssec_expired_signatures_enabled,
+                      dnssec_validation_enabled, dnssec_trusted_keys.'
+                    type: boolean
+                  useFilterAaaa:
+                    description: 'Use flag for: filter_aaaa, filter_aaaa_list.'
+                    type: boolean
+                  useFixedRrsetOrderFqdns:
+                    description: 'Use flag for: fixed_rrset_order_fqdns, enable_fixed_rrset_order_fqdns.'
+                    type: boolean
+                  useForwarders:
+                    description: 'Use flag for: forwarders, forward_only.'
+                    type: boolean
+                  useLameTtl:
+                    description: 'Use flag for: lame_ttl.'
+                    type: boolean
+                  useMaxCacheTtl:
+                    description: 'Use flag for: max_cache_ttl.'
+                    type: boolean
+                  useMaxNcacheTtl:
+                    description: 'Use flag for: max_ncache_ttl.'
+                    type: boolean
+                  useNxdomainRedirect:
+                    description: 'Use flag for: nxdomain_redirect, nxdomain_redirect_addresses,
+                      nxdomain_redirect_addresses_v6, nxdomain_redirect_ttl, nxdomain_log_query,
+                      nxdomain_rulesets.'
+                    type: boolean
+                  useRecursion:
+                    description: 'Use flag for: recursion.'
+                    type: boolean
+                  useResponseRateLimiting:
+                    description: 'Use flag for: response_rate_limiting.'
+                    type: boolean
+                  useRootNameServer:
+                    description: 'Use flag for: custom_root_name_servers, root_name_server_type.'
+                    type: boolean
+                  useRpzDropIpRule:
+                    description: 'Use flag for: rpz_drop_ip_rule_enabled, rpz_drop_ip_rule_min_prefix_length_ipv4,
+                      rpz_drop_ip_rule_min_prefix_length_ipv6.'
+                    type: boolean
+                  useRpzQnameWaitRecurse:
+                    description: 'Use flag for: rpz_qname_wait_recurse.'
+                    type: boolean
+                  useScavengingSettings:
+                    description: 'Use flag for: scavenging_settings.'
+                    type: boolean
+                  useSortlist:
+                    description: 'Use flag for: sortlist.'
+                    type: boolean
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

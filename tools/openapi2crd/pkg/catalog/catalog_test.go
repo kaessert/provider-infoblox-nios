@@ -1196,3 +1196,67 @@ func TestZoneForwardNestedTypes(t *testing.T) {
 		}
 	}
 }
+
+// TestFindResourceDNSView verifies FindResource returns the DNSView
+// descriptor discovered during Phase 6 live probing (missing from the
+// original inventory).
+func TestFindResourceDNSView(t *testing.T) {
+	rd, ok := FindResource("dnsview")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dnsview")
+	}
+	if rd.Kind != "DNSView" {
+		t.Errorf("Kind = %q, want DNSView", rd.Kind)
+	}
+	if rd.ClusterGroup != "dnsview.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want dnsview.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "dnsview.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want dnsview.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+	if len(rd.Fields) == 0 {
+		t.Errorf("DNSView descriptor has zero fields")
+	}
+	if len(rd.NestedTypes) == 0 {
+		t.Errorf("DNSView descriptor has zero nested types (expected DNSViewCloudInfo, DNSViewScavengingSettings, etc.)")
+	}
+}
+
+// TestDNSViewIsDefaultImmutableResponseOnly verifies the is_default field
+// is catalogued as Immutable + Response-scope (no ForProvider
+// representation — WAPI supports=sr — same pattern as ARecord's zone
+// field), and that the required name field is present and mutable.
+func TestDNSViewIsDefaultImmutableResponseOnly(t *testing.T) {
+	rd, ok := FindResource("dnsview")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dnsview")
+	}
+
+	var foundIsDefault, foundName bool
+	for _, f := range rd.Fields {
+		switch f.Name {
+		case "IsDefault":
+			foundIsDefault = true
+			if !f.Immutable {
+				t.Errorf("IsDefault.Immutable = false, want true")
+			}
+			if f.Scope != FieldScopeResponse {
+				t.Errorf("IsDefault.Scope = %v, want FieldScopeResponse", f.Scope)
+			}
+		case "Name":
+			foundName = true
+			if !f.Required {
+				t.Errorf("Name.Required = false, want true")
+			}
+			if f.Immutable {
+				t.Errorf("Name.Immutable = true, want false (DNSView.name is mutable and _ref-mutating on rename)")
+			}
+		}
+	}
+	if !foundIsDefault {
+		t.Errorf("DNSView descriptor missing IsDefault field")
+	}
+	if !foundName {
+		t.Errorf("DNSView descriptor missing Name field")
+	}
+}

@@ -105,6 +105,7 @@ UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/fixed-address.yaml,exam
 UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that only need NIOS Grid Manager API credentials (no
@@ -122,6 +123,8 @@ UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECOR
 # ExtensibleAttributeDef is also tier:core — only needs API credentials, no
 # external infrastructure beyond the NIOS Grid Manager itself.
 UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
+# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth, IPv4SharedNetwork, NetworkContainer, and DNSView are also tier:core.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_DNS_VIEW)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -214,6 +217,9 @@ e2e.dtc-server: e2e
 e2e.extensible-attribute-def: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
 e2e.extensible-attribute-def: e2e
 
+e2e.dns-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DNS_VIEW)
+e2e.dns-view: e2e
+
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
 e2e-full: e2e-preflight e2e
@@ -225,6 +231,7 @@ local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e-full
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.dtc-server e2e-full
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.extensible-attribute-def e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.dns-view e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -358,6 +365,14 @@ update-test.range: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/range/range-namespaced.yaml
 
 .PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated update-test.host-record update-test.network update-test.range-template update-test.network-container update-test.fixed-address update-test.zone-forward update-test.range
+
+update-test.dns-view: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/dns-view/dns-view.yaml
+	$(UPDATE_TESTER) run examples/dns-view/dns-view.yaml
+	$(UPDATE_TESTER) converge examples/dns-view/dns-view-namespaced.yaml
+	$(UPDATE_TESTER) run examples/dns-view/dns-view-namespaced.yaml
+
+.PHONY: update-test.dns-view
 
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration

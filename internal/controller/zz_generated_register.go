@@ -13,6 +13,7 @@ package controller
 
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	dnsview "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dnsview"
 	dtcserver "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtcserver"
 	extensibleattributedef "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/extensibleattributedef"
 	fixedaddress "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/fixedaddress"
@@ -44,6 +45,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
+		dnsview.SetupGated,
 		dtcserver.SetupGated,
 		extensibleattributedef.SetupGated,
 		fixedaddress.SetupGated,
@@ -79,6 +81,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
+		dnsview.Setup,
 		dtcserver.Setup,
 		extensibleattributedef.Setup,
 		fixedaddress.Setup,
