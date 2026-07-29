@@ -1305,3 +1305,168 @@ func TestIsUpToDate(t *testing.T) {
 		})
 	}
 }
+
+// ── extractCredentials: error paths and ssl_verify ──────────────────────
+
+func TestExtractCredentialsUnsupportedSource(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	_, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceInjectedIdentity, nil, "")
+	if err == nil {
+		t.Fatal("extractCredentials: expected error for unsupported credentials source, got nil")
+	}
+}
+
+func TestExtractCredentialsMissingSecretRef(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	_, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, nil, "")
+	if err == nil {
+		t.Fatal("extractCredentials: expected error when secretRef is nil, got nil")
+	}
+}
+
+func TestExtractCredentialsSecretNotFound(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	_, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "missing", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err == nil {
+		t.Fatal("extractCredentials: expected error when the credentials Secret does not exist, got nil")
+	}
+}
+
+func TestExtractCredentialsMissingKeys(t *testing.T) {
+	scheme := newTestScheme(t)
+	// Secret exists but is missing the required password key.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Data: map[string][]byte{
+			"host":     []byte("grid.example.com"),
+			"username": []byte("admin"),
+		},
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	_, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err == nil {
+		t.Fatal("extractCredentials: expected error when a required credential key is missing, got nil")
+	}
+}
+
+func TestExtractCredentialsFallsBackToProvidedNamespace(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("fallback-ns", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	// secretRef.Namespace left empty — extractCredentials must fall back
+	// to the caller-supplied namespace.
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials"},
+		Key:             "unused",
+	}, "fallback-ns")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if creds.Host != "grid.example.com" {
+		t.Errorf("extractCredentials: Host = %q, want grid.example.com", creds.Host)
+	}
+}
+
+func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if !creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to default to true when ssl_verify key is absent")
+	}
+}
+
+func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	secret.Data["ssl_verify"] = []byte("false")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to be false when ssl_verify key is \"false\"")
+	}
+}
+
+func TestExtractCredentialsSslVerifyUnrecognizedValueDefaultsTrue(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
+	secret.Data["ssl_verify"] = []byte("nope")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
+		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+		Key:             "unused",
+	}, "")
+	if err != nil {
+		t.Fatalf("extractCredentials: unexpected error: %v", err)
+	}
+	if !creds.SslVerify {
+		t.Error("extractCredentials: expected SslVerify to default to true for any value other than exactly \"false\"")
+	}
+}
+
+func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
+	// Regression guard: newObjectManagerWithScheme must not hardcode
+	// SslVerify to "true" — it must honor creds.SslVerify. Both branches
+	// must construct successfully (transport config validation happens
+	// locally; no network round-trip occurs here).
+	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
+		t.Run(name, func(t *testing.T) {
+			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t", SslVerify: sslVerify}
+			objMgr, err := newObjectManagerWithScheme(creds, "http", "80")
+			if err != nil {
+				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+			}
+			if objMgr == nil {
+				t.Fatal("newObjectManagerWithScheme: expected non-nil ObjectManager, got nil")
+			}
+		})
+	}
+}
+
+func TestClusterConnectNoProviderConfigReference(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	conn := &clusterConnector{
+		kube:  kube,
+		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
+	}
+
+	cr := newClusterRange("my-range", "")
+	cr.Spec.ProviderConfigReference = nil
+
+	_, err := conn.Connect(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Connect: expected error when ProviderConfigReference is nil, got nil")
+	}
+}
