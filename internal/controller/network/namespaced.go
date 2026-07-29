@@ -140,7 +140,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.ExtAttrs, nw)
+	lateInit := lateInitialize(&p.Network, &p.Comment, &p.ExtAttrs, nw)
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
@@ -154,11 +154,12 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 }
 
 // Create provisions a new Network and records the server-assigned _ref as
-// the external name. The WAPI object type (network vs ipv6network) is
-// selected at runtime from the CIDR format.
+// the external name. Routes across three creation paths — see
+// createOrAllocateNetwork. The WAPI object type (network vs ipv6network)
+// is selected at runtime from the CIDR format.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	nw, err := createNetwork(e.objMgr, p.NetworkView, p.Network, p.Comment, p.ExtAttrs)
+	nw, err := createOrAllocateNetwork(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.Object, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateNetwork)
 	}

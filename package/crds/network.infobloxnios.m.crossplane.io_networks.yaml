@@ -61,6 +61,11 @@ spec:
                 description: ForProvider holds the user-supplied parameters for this
                   Network.
                 properties:
+                  allocatePrefixLen:
+                    description: Prefix length of the subnet to allocate from parentCidr
+                      or filterParams, e.g. 24 for a /24. Required when parentCidr
+                      or filterParams is set.
+                    type: integer
                   comment:
                     description: Comment for the network; maximum 256 characters.
                     type: string
@@ -73,11 +78,22 @@ spec:
                       CRD representation (the controller translates to/from the SDK''s
                       EA map[string]interface{} type).'
                     type: object
+                  filterParams:
+                    additionalProperties:
+                      type: string
+                    description: Extensible attribute key/value filter for EA-based
+                      allocation, driving the AllocateNetworkByEA SDK call. Mutually
+                      exclusive with parentCidr. When set, allocatePrefixLen is required.
+                    type: object
                   network:
-                    description: CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or
+                    description: 'CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or
                       an IPv6 CIDR. Fixed at creation — confirmed absent from the
                       UpdateNetwork SDK method signature. The WAPI object type (network
-                      vs ipv6network) is selected at runtime from this value's format.
+                      vs ipv6network) is selected at runtime from this value''s format.
+                      Optional at the type level: one of network, parentCidr, or filterParams
+                      is required (enforced by a struct-level validation rule); when
+                      parentCidr or filterParams is used instead, the controller late-initializes
+                      this field from the allocated CIDR once creation succeeds.'
                     type: string
                     x-kubernetes-validations:
                     - message: network is immutable after creation
@@ -170,10 +186,23 @@ spec:
                             type: string
                         type: object
                     type: object
+                  object:
+                    description: WAPI object type filter for AllocateNetworkByEA,
+                      e.g. "networkcontainer". Only valid when filterParams is set;
+                      ignored otherwise.
+                    type: string
+                  parentCidr:
+                    description: Parent CIDR from which to allocate a subnet, e.g.
+                      "10.0.0.0/8". Create-time-only — drives the AllocateNetwork
+                      SDK call. Mutually exclusive with network. When set, allocatePrefixLen
+                      is required.
+                    type: string
                 required:
-                - network
                 - networkView
                 type: object
+                x-kubernetes-validations:
+                - message: one of network, parentCidr, or filterParams is required
+                  rule: has(self.network) || has(self.parentCidr) || has(self.filterParams)
               managementPolicies:
                 default:
                 - '*'
@@ -239,6 +268,11 @@ spec:
                 description: AtProvider holds the observed values from the Infoblox
                   NIOS WAPI.
                 properties:
+                  allocatePrefixLen:
+                    description: Prefix length of the subnet to allocate from parentCidr
+                      or filterParams, e.g. 24 for a /24. Required when parentCidr
+                      or filterParams is set.
+                    type: integer
                   comment:
                     description: Comment for the network; maximum 256 characters.
                     type: string
@@ -250,6 +284,13 @@ spec:
                       as {"value": ...}; this map is the simplified string-valued
                       CRD representation (the controller translates to/from the SDK''s
                       EA map[string]interface{} type).'
+                    type: object
+                  filterParams:
+                    additionalProperties:
+                      type: string
+                    description: Extensible attribute key/value filter for EA-based
+                      allocation, driving the AllocateNetworkByEA SDK call. Mutually
+                      exclusive with parentCidr. When set, allocatePrefixLen is required.
                     type: object
                   id:
                     description: |-
@@ -286,10 +327,14 @@ spec:
                       type: object
                     type: array
                   network:
-                    description: CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or
+                    description: 'CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or
                       an IPv6 CIDR. Fixed at creation — confirmed absent from the
                       UpdateNetwork SDK method signature. The WAPI object type (network
-                      vs ipv6network) is selected at runtime from this value's format.
+                      vs ipv6network) is selected at runtime from this value''s format.
+                      Optional at the type level: one of network, parentCidr, or filterParams
+                      is required (enforced by a struct-level validation rule); when
+                      parentCidr or filterParams is used instead, the controller late-initializes
+                      this field from the allocated CIDR once creation succeeds.'
                     type: string
                     x-kubernetes-validations:
                     - message: network is immutable after creation
@@ -302,6 +347,17 @@ spec:
                     x-kubernetes-validations:
                     - message: networkView is immutable after creation
                       rule: self == oldSelf
+                  object:
+                    description: WAPI object type filter for AllocateNetworkByEA,
+                      e.g. "networkcontainer". Only valid when filterParams is set;
+                      ignored otherwise.
+                    type: string
+                  parentCidr:
+                    description: Parent CIDR from which to allocate a subnet, e.g.
+                      "10.0.0.0/8". Create-time-only — drives the AllocateNetwork
+                      SDK call. Mutually exclusive with network. When set, allocatePrefixLen
+                      is required.
+                    type: string
                   ref:
                     description: Server-assigned opaque object reference (WAPI `_ref`).
                       Mirrors the crossplane.io/external-name annotation for observability

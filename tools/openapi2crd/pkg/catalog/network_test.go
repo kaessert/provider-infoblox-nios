@@ -22,8 +22,11 @@ func TestFindResourceNetwork(t *testing.T) {
 
 // TestNetworkFieldCounts pins the request/response/both field counts
 // documented in tools/openapi/inventory.md's "### Network" section
-// (request=0, response=2, both=4) — a regression guard: uniform or
-// drifted counts would indicate a catalog authoring bug.
+// (request=4, response=2, both=4) — a regression guard: uniform or
+// drifted counts would indicate a catalog authoring bug. The four
+// request-scope fields (parentCidr, allocatePrefixLen, filterParams,
+// object) are the dynamic CIDR allocation parameters added for
+// AllocateNetwork/AllocateNetworkByEA support.
 func TestNetworkFieldCounts(t *testing.T) {
 	rd, ok := FindResource("network")
 	if !ok {
@@ -42,8 +45,8 @@ func TestNetworkFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 0 {
-		t.Errorf("request-scope field count = %d, want 0", req)
+	if req != 4 {
+		t.Errorf("request-scope field count = %d, want 4", req)
 	}
 	if resp != 2 {
 		t.Errorf("response-scope field count = %d, want 2", resp)
@@ -62,11 +65,15 @@ func TestNetworkImmutableFields(t *testing.T) {
 	}
 
 	wantImmutable := map[string]bool{
-		"networkView": true,
-		"network":     true,
-		"comment":     false,
-		"extAttrs":    false,
-		"ref":         false,
+		"networkView":       true,
+		"network":           true,
+		"comment":           false,
+		"extAttrs":          false,
+		"ref":               false,
+		"parentCidr":        false,
+		"allocatePrefixLen": false,
+		"filterParams":      false,
+		"object":            false,
 	}
 
 	seen := map[string]bool{}

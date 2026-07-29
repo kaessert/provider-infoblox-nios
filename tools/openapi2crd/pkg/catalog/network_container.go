@@ -21,6 +21,20 @@ package catalog
 // (reference.ExternalName(), reading the target's crossplane.io/external-
 // name annotation) is used per this provider's cross-resource reference
 // convention.
+//
+// `parentCidr`, `allocatePrefixLen`, and `filterParams` are create-time-only
+// dynamic CIDR allocation parameters — they drive the
+// AllocateNetworkContainer/AllocateNetworkContainerByEA SDK calls (an
+// alternate creation path to the static CreateNetworkContainer call driven
+// by `network`) and are never echoed back by the WAPI, so they are
+// modeled as request-only fields. Unlike Network's AllocateNetworkByEA
+// call, AllocateNetworkContainerByEA takes no `object` parameter, so no
+// corresponding field is cataloged here. `network` itself is now optional
+// at the type level (one of `network`, `parentCidr`, or `filterParams` is
+// required — enforced by a struct-level CEL rule) since dynamic allocation
+// supplies the CIDR only after creation, at which point the controller
+// late-initializes `network` from the allocated value so the resource has
+// a stable identity going forward.
 func networkContainer() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "NetworkContainer",
@@ -28,6 +42,12 @@ func networkContainer() ResourceDescriptor {
 		ClusterGroup:         clusterGroup("networkcontainer"),
 		NamespacedGroup:      namespacedGroup("networkcontainer"),
 		ExternalNameStrategy: StrategyServerAssigned,
+		ParameterValidations: []ValidationRule{
+			{
+				Rule:    "has(self.network) || has(self.parentCidr) || has(self.filterParams)",
+				Message: "one of network, parentCidr, or filterParams is required",
+			},
+		},
 		Fields: []FieldDef{
 			{
 				Name:        "NetworkView",
@@ -48,9 +68,29 @@ func networkContainer() ResourceDescriptor {
 				JSONName:    "network",
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
-				Required:    true,
 				Immutable:   true,
-				Description: "CIDR of the container network, e.g. \"10.0.0.0/16\". Immutable — absent from UpdateNetworkContainer.",
+				Description: "CIDR of the container network, e.g. \"10.0.0.0/16\". Immutable — absent from UpdateNetworkContainer. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.",
+			},
+			{
+				Name:        "ParentCidr",
+				JSONName:    "parentCidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "Parent CIDR from which to allocate a subnet container, e.g. \"10.0.0.0/8\". Create-time-only — drives the AllocateNetworkContainer SDK call. Mutually exclusive with network. When set, allocatePrefixLen is required.",
+			},
+			{
+				Name:        "AllocatePrefixLen",
+				JSONName:    "allocatePrefixLen",
+				GoType:      goTypeUint,
+				Scope:       FieldScopeRequest,
+				Description: "Prefix length of the subnet container to allocate from parentCidr or filterParams, e.g. 16 for a /16. Required when parentCidr or filterParams is set.",
+			},
+			{
+				Name:        "FilterParams",
+				JSONName:    "filterParams",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeRequest,
+				Description: "Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.",
 			},
 			{
 				Name:        "Comment",

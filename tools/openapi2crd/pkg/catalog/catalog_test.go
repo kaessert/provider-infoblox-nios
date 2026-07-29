@@ -1205,7 +1205,10 @@ func TestFindResourceNetworkContainer(t *testing.T) {
 
 // TestNetworkContainerFieldCounts pins the request/response/both field
 // counts documented in tools/openapi/inventory.md's "### NetworkContainer"
-// section (request=0, response=1, both=4).
+// section (request=3, response=1, both=4). The three request-scope fields
+// (parentCidr, allocatePrefixLen, filterParams) are the dynamic CIDR
+// allocation parameters added for
+// AllocateNetworkContainer/AllocateNetworkContainerByEA support.
 func TestNetworkContainerFieldCounts(t *testing.T) {
 	rd, ok := FindResource("networkcontainer")
 	if !ok {
@@ -1224,8 +1227,8 @@ func TestNetworkContainerFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 0 {
-		t.Errorf("request-scope field count = %d, want 0", req)
+	if req != 3 {
+		t.Errorf("request-scope field count = %d, want 3", req)
 	}
 	if resp != 1 {
 		t.Errorf("response-scope field count = %d, want 1", resp)

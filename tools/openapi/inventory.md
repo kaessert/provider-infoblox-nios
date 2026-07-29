@@ -552,16 +552,20 @@ SharedNetwork exposes ~20 additional DHCP tuning fields (bootfile, bootserver, d
 | Update | `UpdateNetwork` | ObjectManager | — |
 | Delete | `DeleteNetwork` | ObjectManager | — |
 
-#### Fields (request=0, response=2, both=4)
+#### Fields (request=4, response=2, both=4)
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
 | `_ref` | `string` | response | no | no | — | Server-assigned opaque object reference. This is the Crossplane external-name. |
 | `network_view` | `string` | both | yes | yes | — | Network view the network belongs to. CreateNetwork accepts it; UpdateNetwork does not — immutable after creation. |
-| `network` | `string` | both | yes | yes | — | CIDR of the network, e.g. "10.0.0.0/24". CreateNetwork accepts it; UpdateNetwork does not — immutable after creation (matches blueprint's preliminary assessment). |
+| `network` | `string` | both | no | yes | — | CIDR of the network, e.g. "10.0.0.0/24". CreateNetwork accepts it; UpdateNetwork does not — immutable after creation (matches blueprint's preliminary assessment). Optional at the CRD level: one of network, parentCidr, or filterParams is required (struct-level CEL rule) — dynamic allocation (AllocateNetwork/AllocateNetworkByEA) supplies the CIDR only after creation. |
 | `comment` | `string` | both | no | no | — | Comment for the network. |
 | `extattrs` | `EA` | both | no | no | — | Extensible attributes. |
 | `members` | `[]NetworkMember` | response | no | no | — | Grid members serving DHCP for this network. Populated on GET but not a CreateNetwork/UpdateNetwork parameter via the wrapper (requires the generic Connector to set). |
+| `parent_cidr` | `string` | request | no | no | — | Parent CIDR from which to allocate a subnet, e.g. "10.0.0.0/8". Create-time-only — drives the AllocateNetwork SDK call (`prefixLen` parameter). Mutually exclusive with network; allocatePrefixLen is required when set. |
+| `allocate_prefix_len` | `uint` | request | no | no | — | Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Matches the AllocateNetwork/AllocateNetworkByEA `prefixLen uint` SDK parameter. Required when parentCidr or filterParams is set. |
+| `filter_params` | `map[string]string` | request | no | no | — | Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call (`eaMap` parameter). Mutually exclusive with parentCidr; allocatePrefixLen is required when set. |
+| `object` | `string` | request | no | no | — | WAPI object type filter for AllocateNetworkByEA (`object` parameter, e.g. "networkcontainer"). Only valid when filterParams is set; ignored otherwise. |
 
 #### Full Schema Notes
 
@@ -599,15 +603,18 @@ The full WAPI network object (objects_generated.go type 'Network' is shadowed by
 | Update | `UpdateNetworkContainer` | ObjectManager | — |
 | Delete | `DeleteNetworkContainer` | ObjectManager | — |
 
-#### Fields (request=0, response=1, both=4)
+#### Fields (request=3, response=1, both=4)
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
 | `_ref` | `string` | response | no | no | — | Server-assigned opaque object reference. This is the Crossplane external-name. |
 | `network_view` | `string` | both | yes | yes | — | Network view the container belongs to. Immutable — absent from UpdateNetworkContainer. |
-| `network` | `string` | both | yes | yes | — | CIDR of the container network, e.g. "10.0.0.0/16". Immutable — absent from UpdateNetworkContainer. |
+| `network` | `string` | both | no | yes | — | CIDR of the container network, e.g. "10.0.0.0/16". Immutable — absent from UpdateNetworkContainer. Optional at the CRD level: one of network, parentCidr, or filterParams is required (struct-level CEL rule) — dynamic allocation (AllocateNetworkContainer/AllocateNetworkContainerByEA) supplies the CIDR only after creation. |
 | `comment` | `string` | both | no | no | — | Comment for the network container. |
 | `extattrs` | `EA` | both | no | no | — | Extensible attributes. |
+| `parent_cidr` | `string` | request | no | no | — | Parent CIDR from which to allocate a subnet container, e.g. "10.0.0.0/8". Create-time-only — drives the AllocateNetworkContainer SDK call (`prefixLen` parameter). Mutually exclusive with network; allocatePrefixLen is required when set. |
+| `allocate_prefix_len` | `uint` | request | no | no | — | Prefix length of the subnet container to allocate from parentCidr or filterParams, e.g. 16 for a /16. Matches the AllocateNetworkContainer/AllocateNetworkContainerByEA `prefixLen uint` SDK parameter. Required when parentCidr or filterParams is set. |
+| `filter_params` | `map[string]string` | request | no | no | — | Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call (`eaMap` parameter). Mutually exclusive with parentCidr; allocatePrefixLen is required when set. Unlike Network's AllocateNetworkByEA, AllocateNetworkContainerByEA takes no `object` parameter — no corresponding field is modeled. |
 
 #### Cross-Resource References
 

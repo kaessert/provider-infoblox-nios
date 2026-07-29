@@ -130,7 +130,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.ExtAttrs, nc)
+	lateInit := lateInitialize(&p.Network, &p.Comment, &p.ExtAttrs, nc)
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
@@ -144,10 +144,11 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 }
 
 // Create provisions a new NetworkContainer and records the server-assigned
-// _ref as the external name.
+// _ref as the external name. Routes across three creation paths — see
+// createOrAllocateNetworkContainer.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.NetworkContainer) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	nc, err := createNetworkContainer(e.objMgr, p.NetworkView, p.Network, p.Comment, p.ExtAttrs)
+	nc, err := createOrAllocateNetworkContainer(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateNetworkContainer)
 	}
