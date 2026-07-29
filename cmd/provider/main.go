@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/alecthomas/kingpin/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	authv1 "k8s.io/api/authorization/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -36,6 +38,7 @@ import (
 
 	changelogsv1alpha1 "github.com/crossplane/crossplane-runtime/v2/apis/changelogs/proto/v1alpha1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/gate"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -126,7 +129,6 @@ func main() {
 		PollInterval:            *pollInterval,
 		GlobalRateLimiter:       ratelimiter.NewGlobal(*maxReconcileRate),
 		Features:                &feature.Flags{},
-		Gate:                    new(gate.Gate[schema.GroupVersionKind]),
 		MetricOptions: &controller.MetricOptions{
 			PollStateMetricInterval: *pollStateMetricInterval,
 			MRMetrics:               metricRecorder,
@@ -154,7 +156,61 @@ func main() {
 		o.ChangeLogOptions = &clo
 	}
 
-	kingpin.FatalIfError(customresourcesgate.Setup(mgr, o), "Cannot setup CRD gate controller")
-	kingpin.FatalIfError(infobloxnios.SetupGated(mgr, o), "Cannot setup Infobloxnios controllers")
+	// SafeStart precheck: only enable the CRD gate (which requires cluster-scope
+	// get/list/watch on CustomResourceDefinitions) when the provider's service
+	// account actually has that RBAC. Control planes that don't grant CRD-level
+	// RBAC to providers would otherwise crash-loop trying to watch CRDs.
+	precheckCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	canSafeStart, err := canWatchCRD(precheckCtx, mgr)
+	kingpin.FatalIfError(err, "SafeStart precheck failed")
+
+	if canSafeStart {
+		crdGate := new(gate.Gate[schema.GroupVersionKind])
+		o.Gate = crdGate
+		gateOpts := controller.Options{
+			Gate:                    crdGate,
+			Logger:                  log,
+			MaxConcurrentReconciles: 1,
+		}
+		kingpin.FatalIfError(customresourcesgate.Setup(mgr, gateOpts), "Cannot setup CRD gate controller")
+		kingpin.FatalIfError(infobloxnios.SetupGated(mgr, o), "Cannot setup Infobloxnios controllers")
+	} else {
+		log.Info("Provider has missing RBAC permissions for watching CRDs, controller SafeStart capability will be disabled")
+		kingpin.FatalIfError(infobloxnios.Setup(mgr, o), "Cannot setup Infobloxnios controllers")
+	}
+
 	kingpin.FatalIfError(mgr.Start(ctrl.SetupSignalHandler()), "Cannot start controller manager")
+}
+
+// canWatchCRD performs a SelfSubjectAccessReview to determine whether the
+// provider's service account has get/list/watch permissions on
+// CustomResourceDefinitions. Without these permissions the CRD gate
+// controller cannot start, so callers should fall back to the non-gated
+// Setup path.
+func canWatchCRD(ctx context.Context, mgr ctrl.Manager) (bool, error) {
+	if err := authv1.AddToScheme(mgr.GetScheme()); err != nil {
+		return false, errors.Wrap(err, "cannot add authorization/v1 to scheme")
+	}
+
+	verbs := []string{"get", "list", "watch"}
+	for _, verb := range verbs {
+		sar := &authv1.SelfSubjectAccessReview{
+			Spec: authv1.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authv1.ResourceAttributes{
+					Group:    "apiextensions.k8s.io",
+					Resource: "customresourcedefinitions",
+					Verb:     verb,
+				},
+			},
+		}
+		if err := mgr.GetClient().Create(ctx, sar); err != nil {
+			return false, errors.Wrapf(err, "unable to perform RBAC check for verb %s on CustomResourceDefinitions", verb)
+		}
+		if !sar.Status.Allowed {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
