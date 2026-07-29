@@ -1,0 +1,303 @@
+package rangetemplate
+
+import (
+	"context"
+
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
+	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
+	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+)
+
+const namespacedControllerName = "namespaced-rangetemplate.infobloxnios.m.crossplane.io"
+
+// ── Namespaced controller ────────────────────────────────────────────────
+
+// +kubebuilder:rbac:groups=rangetemplate.infobloxnios.m.crossplane.io,resources=rangetemplates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rangetemplate.infobloxnios.m.crossplane.io,resources=rangetemplates/status,verbs=get;update;patch
+
+// namespacedConnector implements managed.TypedExternalConnector[*namespacedv1alpha1.RangeTemplate].
+// The Kind field on providerConfigRef selects which config type to fetch:
+//   - "ProviderConfig" → namespace-scoped config (same namespace as the CR)
+//   - "ClusterProviderConfig" → cluster-scoped config
+//
+// Per the dual-scope resource-spec convention, there is no IsNotFound
+// fallback between the two — the Kind field explicitly declares intent
+// and an unsupported Kind is a hard error.
+type namespacedConnector struct {
+	kube  k8sclient.Client
+	usage *resource.ProviderConfigUsageTracker
+}
+
+// Connect tracks ProviderConfig usage, resolves the referenced
+// ProviderConfig or ClusterProviderConfig by Kind, and returns an
+// authenticated WAPI ObjectManager.
+func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.TypedExternalClient[*namespacedv1alpha1.RangeTemplate], error) {
+	if err := c.usage.Track(ctx, cr); err != nil {
+		return nil, errors.Wrap(err, errTrackPCUsage)
+	}
+
+	ref := cr.GetProviderConfigReference()
+	if ref == nil {
+		return nil, errors.New(errGetPC + ": no ProviderConfigReference set")
+	}
+
+	var creds *nioCredentials
+	switch ref.Kind {
+	case "ProviderConfig":
+		pc := &apisv1alpha1.ProviderConfig{}
+		if err := c.kube.Get(ctx, k8sclient.ObjectKey{Name: ref.Name, Namespace: cr.GetNamespace()}, pc); err != nil {
+			return nil, errors.Wrap(err, errGetPC)
+		}
+		var err error
+		creds, err = extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace())
+		if err != nil {
+			return nil, err
+		}
+
+	case "ClusterProviderConfig":
+		cpc := &apisv1alpha1.ClusterProviderConfig{}
+		if err := c.kube.Get(ctx, k8sclient.ObjectKey{Name: ref.Name}, cpc); err != nil {
+			return nil, errors.Wrap(err, errGetClusterPC)
+		}
+		var err error
+		creds, err = extractCredentials(ctx, c.kube, cpc.Spec.Credentials.Source, cpc.Spec.Credentials.SecretRef, "")
+		if err != nil {
+			return nil, err
+		}
+
+	default:
+		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
+	}
+
+	objMgr, err := newObjectManager(creds)
+	if err != nil {
+		return nil, err
+	}
+
+	return &namespacedExternal{objMgr: objMgr}, nil
+}
+
+// namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.RangeTemplate].
+type namespacedExternal struct {
+	objMgr ibclient.IBObjectManager
+}
+
+// ── namespaced type <-> scope-neutral currency conversion ──────────────────
+
+func namespacedOptionsToCommon(opts []*namespacedv1alpha1.RangeTemplateOption) []templateOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]templateOption, 0, len(opts))
+	for _, o := range opts {
+		if o == nil {
+			continue
+		}
+		out = append(out, templateOption{Name: o.Name, Num: o.Num, VendorClass: o.VendorClass, Value: o.Value, UseOption: o.UseOption})
+	}
+	return out
+}
+
+func commonToNamespacedOptions(opts []templateOption) []*namespacedv1alpha1.RangeTemplateOption {
+	if len(opts) == 0 {
+		return nil
+	}
+	out := make([]*namespacedv1alpha1.RangeTemplateOption, 0, len(opts))
+	for _, o := range opts {
+		opt := o
+		out = append(out, &namespacedv1alpha1.RangeTemplateOption{Name: opt.Name, Num: opt.Num, VendorClass: opt.VendorClass, Value: opt.Value, UseOption: opt.UseOption})
+	}
+	return out
+}
+
+func namespacedMemberToCommon(m *namespacedv1alpha1.RangeTemplateMember) *templateMember {
+	if m == nil {
+		return nil
+	}
+	return &templateMember{Ipv4Addr: m.Ipv4Addr, Ipv6Addr: m.Ipv6Addr, Name: m.Name}
+}
+
+func commonToNamespacedMember(m *templateMember) *namespacedv1alpha1.RangeTemplateMember {
+	if m == nil {
+		return nil
+	}
+	return &namespacedv1alpha1.RangeTemplateMember{Ipv4Addr: m.Ipv4Addr, Ipv6Addr: m.Ipv6Addr, Name: m.Name}
+}
+
+// Observe fetches the RangeTemplate from the WAPI by its _ref external
+// name and compares it against the desired spec.
+func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalObservation, error) {
+	externalID := meta.GetExternalName(cr)
+
+	// Pre-create guard (server-assigned external-name strategy) — see
+	// clusterExternal.Observe for the full rationale.
+	if externalID == cr.GetName() {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
+	rec, err := e.objMgr.GetRangeTemplateByRef(externalID)
+	if err != nil {
+		if isNotFound(err) {
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
+		return managed.ExternalObservation{}, errors.Wrap(err, errObserveRangeTemplate)
+	}
+
+	o := observeFromRangeTemplate(externalID, rec)
+	cr.Status.AtProvider = namespacedv1alpha1.RangeTemplateObservation{
+		Name:                  o.Name,
+		NumberOfAddresses:     o.NumberOfAddresses,
+		Offset:                o.Offset,
+		Comment:               o.Comment,
+		ExtAttrs:              o.ExtAttrs,
+		Options:               commonToNamespacedOptions(o.Options),
+		UseOptions:            o.UseOptions,
+		ServerAssociationType: o.ServerAssociationType,
+		FailoverAssociation:   o.FailoverAssociation,
+		Member:                commonToNamespacedMember(o.Member),
+		CloudApiCompatible:    o.CloudApiCompatible,
+		Ref:                   o.Ref,
+	}
+	// Explicit assignment (rather than folding ID into the struct literal
+	// above) keeps the server-assigned identifier's provenance obvious at
+	// the call site — it always mirrors the external name used to fetch
+	// this record, not a field returned inside the WAPI response body.
+	cr.Status.AtProvider.ID = o.ID
+
+	p := &cr.Spec.ForProvider
+	options := namespacedOptionsToCommon(p.Options)
+	member := namespacedMemberToCommon(p.Member)
+	lateInit := lateInitialize(&p.Comment, &p.ExtAttrs, &options, &p.UseOptions, &p.ServerAssociationType, &p.FailoverAssociation, &member, &p.CloudApiCompatible, rec)
+	if lateInit {
+		p.Options = commonToNamespacedOptions(options)
+		p.Member = commonToNamespacedMember(member)
+	}
+
+	// Set Available condition — required in crossplane-runtime v2, not
+	// set automatically.
+	cr.SetConditions(xpv1.Available())
+
+	return managed.ExternalObservation{
+		ResourceExists:          true,
+		ResourceUpToDate:        isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, rec),
+		ResourceLateInitialized: lateInit,
+	}, nil
+}
+
+// Create provisions a new RangeTemplate and records the server-assigned
+// _ref as the external name.
+func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalCreation, error) {
+	p := cr.Spec.ForProvider
+	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, errCreateRangeTemplate)
+	}
+
+	meta.SetExternalName(cr, rec.Ref)
+	return managed.ExternalCreation{}, nil
+}
+
+// Update patches the mutable RangeTemplate fields. No immutable fields are
+// known for RangeTemplate — every ForProvider field is sent.
+func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalUpdate, error) {
+	p := cr.Spec.ForProvider
+	externalID := meta.GetExternalName(cr)
+
+	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateRangeTemplate)
+	}
+
+	// See clusterExternal.Update — UpdateRangeTemplate always returns the
+	// object's current _ref, and renaming changes the _ref.
+	if rec.Ref != "" && rec.Ref != externalID {
+		meta.SetExternalName(cr, rec.Ref)
+	}
+	return managed.ExternalUpdate{}, nil
+}
+
+// Delete removes the RangeTemplate. A 404 is treated as already-deleted
+// (idempotent).
+func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalDelete, error) {
+	externalID := meta.GetExternalName(cr)
+	if err := deleteRangeTemplate(e.objMgr, externalID); err != nil {
+		if isNotFound(err) {
+			return managed.ExternalDelete{}, nil
+		}
+		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteRangeTemplate)
+	}
+	return managed.ExternalDelete{}, nil
+}
+
+// Disconnect is a no-op — the WAPI Connector holds no persistent
+// connection that needs explicit teardown per reconcile.
+func (e *namespacedExternal) Disconnect(_ context.Context) error { return nil }
+
+// Ensure interface compliance at compile time.
+var (
+	_ managed.TypedExternalConnector[*namespacedv1alpha1.RangeTemplate] = &namespacedConnector{}
+	_ managed.TypedExternalClient[*namespacedv1alpha1.RangeTemplate]    = &namespacedExternal{}
+)
+
+// setupNamespacedRangeTemplate wires the namespaced RangeTemplate
+// reconciler with the controller-runtime manager. Called from SetupGated
+// (gate callback) and Setup (immediate path) in controller.go.
+func setupNamespacedRangeTemplate(mgr ctrl.Manager, o controller.Options) error {
+	name := namespacedControllerName
+
+	if o.MetricOptions != nil {
+		if err := mgr.Add(statemetrics.NewMRStateRecorder(
+			mgr.GetClient(),
+			o.Logger,
+			o.MetricOptions.MRStateMetrics,
+			&namespacedv1alpha1.RangeTemplateList{},
+			o.MetricOptions.PollStateMetricInterval,
+		)); err != nil {
+			return errors.Wrap(err, "cannot register namespaced RangeTemplate state recorder")
+		}
+	}
+
+	opts := []managed.ReconcilerOption{
+		managed.WithTypedExternalConnector[*namespacedv1alpha1.RangeTemplate](&namespacedConnector{
+			kube:  mgr.GetClient(),
+			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+		}),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
+		opts = append(opts, managed.WithManagementPolicies())
+	}
+	if o.ChangeLogOptions != nil && o.Features.Enabled(feature.EnableAlphaChangeLogs) {
+		opts = append(opts, managed.WithChangeLogger(o.ChangeLogOptions.ChangeLogger))
+	}
+	if o.MetricOptions != nil {
+		opts = append(opts, managed.WithMetricRecorder(o.MetricOptions.MRMetrics))
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(namespacedv1alpha1.SchemeGroupVersion.WithKind("RangeTemplate")),
+		opts...,
+	)
+
+	return ctrl.NewControllerManagedBy(mgr).
+		Named(name).
+		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
+		For(&namespacedv1alpha1.RangeTemplate{}).
+		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
+}

@@ -1,0 +1,52 @@
+# RangeTemplate is a cluster-scoped Infoblox NIOS DHCP range template (WAPI
+# object type rangetemplate). See range-template-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string from
+# Create (e.g. "rangetemplate/ZG5zLnJhbmdl...:my-range-template"); Crossplane
+# stores it in the crossplane.io/external-name annotation. Do not set that
+# annotation manually — the controller populates it.
+#
+# Required fields:
+#   name:              name of the range template object. Mutable (unlike
+#                       server-assigned resources whose identity fields are
+#                       immutable, RangeTemplate's Update call accepts every
+#                       Create parameter, including name).
+#   numberOfAddresses: number of addresses the range should contain when a
+#                       Range is instantiated from this template.
+#   offset:             start address offset within the parent network when
+#                       instantiated.
+#
+# Optional mutable fields: comment, extattrs, options, useOptions,
+# serverAssociationType, failoverAssociation, member, cloudApiCompatible,
+# msServer. No immutable fields are known for this resource — every Create
+# parameter is also accepted by Update.
+#
+# uptest.upbound.io/update-parameter is intentionally omitted — it has
+# known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+# comment field below is a safe mutable scalar for update coverage;
+# field-level update testing runs through the post-assert hook wiring and
+# the crossplane.io/update-test annotation below.
+apiVersion: rangetemplate.infobloxnios.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template
+  annotations:
+    meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template.sh
+    # comment is the only mutable scalar exercised here — the other mutable
+    # fields (extattrs, options, useOptions, serverAssociationType,
+    # failoverAssociation, member, cloudApiCompatible, msServer) are also
+    # mutable but comment alone is sufficient update coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: example-range-template
+    numberOfAddresses: 10
+    offset: 10
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

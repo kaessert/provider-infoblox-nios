@@ -43,8 +43,8 @@ func aRecord() ResourceDescriptor {
 		ExternalNameStrategy: StrategyServerAssigned,
 		Fields: []FieldDef{
 			{
-				Name:        "Name",
-				JSONName:    "name",
+				Name:        fieldNameGo,
+				JSONName:    fieldNameJSON,
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
 				Required:    true,
@@ -249,7 +249,7 @@ func aRecord() ResourceDescriptor {
 				Fields: []FieldDef{
 					{Name: "Ipv4Addr", JSONName: "ipv4addr", GoType: goTypeString, Description: "The IPv4 Address of the Grid Member."},
 					{Name: "Ipv6Addr", JSONName: "ipv6addr", GoType: goTypeString, Description: "The IPv6 Address of the Grid Member."},
-					{Name: "Name", JSONName: "name", GoType: goTypeString, Description: "The Grid member name"},
+					{Name: fieldNameGo, JSONName: fieldNameJSON, GoType: goTypeString, Description: "The Grid member name"},
 				},
 			},
 			{
