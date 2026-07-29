@@ -55,7 +55,7 @@ const (
 	goTypeStringMap  = "map[string]string"
 	groupSuffixCrd   = "infobloxnios.crossplane.io"
 	groupSuffixCrdNS = "infobloxnios.m.crossplane.io"
-// fieldNameGo/fieldNameJSON are the recurring Go/JSON names for a
+	// fieldNameGo/fieldNameJSON are the recurring Go/JSON names for a
 	// resource or nested type's "name" field (ARecord's Dhcpmember-derived
 	// nested types, RangeTemplate's top-level Name field and its
 	// Dhcpoption/Dhcpmember-derived nested types all carry one), factored
