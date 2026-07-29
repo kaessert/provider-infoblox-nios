@@ -111,6 +111,30 @@ func TestAliasRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordalias")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "recordalias")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 2 {
+		t.Errorf("response-scope field count = %d, want 2", resp)
+	}
+	if both != 9 {
+		t.Errorf("both-scope field count = %d, want 9", both)
+	}
+}
 
 // TestAllContainsNSRecord verifies the catalog's All() includes the
 // NSRecord resource with a non-empty field list and its supporting nested
@@ -162,11 +186,11 @@ func TestNSRecordFieldCounts(t *testing.T) {
 	if req != 0 {
 		t.Errorf("request-scope field count = %d, want 0", req)
 	}
-	if resp != 2 {
-		t.Errorf("response-scope field count = %d, want 2", resp)
+	if resp != 7 {
+		t.Errorf("response-scope field count = %d, want 7", resp)
 	}
-	if both != 9 {
-		t.Errorf("both-scope field count = %d, want 9", both)
+	if both != 5 {
+		t.Errorf("both-scope field count = %d, want 5", both)
 	}
 }
 
@@ -183,12 +207,7 @@ func TestAliasRecordImmutableFields(t *testing.T) {
 		wantImmutable := f.Name == "View" || f.Name == "Zone"
 		if f.Immutable != wantImmutable {
 			t.Errorf("field %s: Immutable = %v, want %v", f.Name, f.Immutable, wantImmutable)
-
-	if resp != 7 {
-		t.Errorf("response-scope field count = %d, want 7", resp)
-	}
-	if both != 5 {
-		t.Errorf("both-scope field count = %d, want 5", both)
+		}
 	}
 }
 

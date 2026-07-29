@@ -29,15 +29,21 @@
 # NS quirk: many Grids reject POST record:ns for any subdomain that is not
 # already registered as a delegated child zone — the rejection is a
 # Grid-wide DNS policy setting, not a per-zone one, so switching to a
-# different existing auth zone does not help. Live-verified against a
-# real Grid: `record:ns` creates failed uniformly across every top-level
-# auth zone present (multiple zones, both the Internal and External DNS
-# views, and the default view) with the same
-# "Cannot add a manual NS record with the name <n> in the zone <z>" WAPI
-# conflict — no `zone_delegated` child zones existed to attach a manual NS
-# record to. Before applying this example, either pre-create a delegated
-# child zone (`zone_delegated`) under the target auth zone, or have a
-# Grid administrator confirm manual NS record creation is permitted.
+# different existing auth zone does not help. Re-verified end-to-end
+# against a real Grid (via both the deployed controller and direct WAPI
+# calls): under a non-existent parent zone the create fails with
+# "The action is not allowed. A parent was not found."; under an existing
+# auth zone (e.g. example.com) it fails with "Cannot add a manual NS
+# record with the name <n> in the zone <z>"; and even a freshly
+# provisioned `zone_delegated` child zone rejects a manual record:ns
+# pointed at its own apex with "Cannot add an empty named record to the
+# zone <z>, which is not authoritative" (WAPI auto-manages NS delegation
+# records for `zone_delegated` — there is no manual attachment point).
+# No combination of pre-existing or freshly created zone was found where
+# manual record:ns creation succeeds on this Grid. Before applying this
+# example, have a Grid administrator confirm manual NS record creation is
+# permitted for the target zone/view, or use the resulting `zone_delegated`
+# object's auto-managed NS records instead of a standalone NSRecord.
 #
 # Optional mutable fields: msDelegationName. (addresses can also be
 # changed after creation, but as a list it is not a safe uptest
