@@ -12,6 +12,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// testNamespace is the namespace used across these tests for both
+// credentials Secrets and secretRef lookups.
+const testNamespace = "crossplane-system"
+
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -34,11 +38,11 @@ func credentialsSecret(ns, name, host, username, password string) *corev1.Secret
 
 func TestExtractCredentialsSuccess(t *testing.T) {
 	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "primary", "grid.example.com", "admin", "s3cr3t")
+	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
 	creds, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
 		t.Fatalf("ExtractCredentials: unexpected error: %v", err)
@@ -53,12 +57,12 @@ func TestExtractCredentialsSuccess(t *testing.T) {
 
 func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "primary", "grid.example.com", "admin", "s3cr3t")
+	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
 	creds, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
 		t.Fatalf("ExtractCredentials: unexpected error: %v", err)
@@ -72,7 +76,7 @@ func TestExtractCredentialsMissingSecret(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 
 	_, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "does-not-exist", Namespace: "crossplane-system"},
+		SecretReference: xpv1.SecretReference{Name: "does-not-exist", Namespace: testNamespace},
 	}, "")
 	if err == nil {
 		t.Fatal("expected an error for a missing readEndpoint credentials Secret, got nil")
@@ -82,13 +86,13 @@ func TestExtractCredentialsMissingSecret(t *testing.T) {
 func TestExtractCredentialsMissingKeys(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "incomplete", Namespace: "crossplane-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "incomplete", Namespace: testNamespace},
 		Data:       map[string][]byte{"host": []byte("grid.example.com")}, // missing username/password
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
 	_, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "incomplete", Namespace: "crossplane-system"},
+		SecretReference: xpv1.SecretReference{Name: "incomplete", Namespace: testNamespace},
 	}, "")
 	if err == nil {
 		t.Fatal("expected an error for a credentials Secret missing required keys, got nil")

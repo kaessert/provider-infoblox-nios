@@ -76,6 +76,21 @@ func TestClearPendingSerial(t *testing.T) {
 	}
 }
 
+func TestClearPendingSerialAnnotationKeyAbsent(t *testing.T) {
+	// Annotations map is non-nil and non-empty, but does not contain the
+	// pending-zone-serial key — must be a safe no-op that leaves the
+	// existing annotations untouched.
+	obj := newTestObj()
+	obj.SetAnnotations(map[string]string{"other/key": "value"})
+
+	ClearPendingSerial(obj)
+
+	ann := obj.GetAnnotations()
+	if len(ann) != 1 || ann["other/key"] != "value" {
+		t.Fatalf("ClearPendingSerial must not modify annotations when its key is absent, got %+v", ann)
+	}
+}
+
 func TestClearPendingSerialNoAnnotations(t *testing.T) {
 	// Must not panic on a nil annotations map.
 	obj := newTestObj()

@@ -50,12 +50,19 @@ func newTestClient(t *testing.T, srv *httptest.Server) *Client {
 
 func uint32Ptr(v uint32) *uint32 { return &v }
 
+// Shared literals reused across client_test.go and gate_test.go (same
+// package) to satisfy the goconst lint check.
+const (
+	testZoneAuthRef  = "zone_auth/xyz"
+	testCandidateFQN = "gmc.example.com"
+)
+
 func TestReadZoneSerialFound(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
 		if got := r.URL.Query().Get("fqdn"); got != "example.com" {
 			t.Fatalf("fqdn query param = %q, want example.com", got)
 		}
-		return []zoneAuthObject{{Ref: "zone_auth/xyz", SOASerialNumber: uint32Ptr(5)}}, http.StatusOK
+		return []zoneAuthObject{{Ref: testZoneAuthRef, SOASerialNumber: uint32Ptr(5)}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -74,7 +81,7 @@ func TestReadZoneSerialAbsentSOA(t *testing.T) {
 	// Zone with no grid_primary assigned: soa_serial_number key is
 	// entirely absent from the response.
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{Ref: "zone_auth/xyz"}}, http.StatusOK
+		return []zoneAuthObject{{Ref: testZoneAuthRef}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -109,10 +116,10 @@ func TestReadZoneSerialZoneNotFound(t *testing.T) {
 func TestReadMemberSerialsFound(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
 		return []zoneAuthObject{{
-			Ref: "zone_auth/xyz",
+			Ref: testZoneAuthRef,
 			MemberSOASerials: []MemberSerial{
 				{GridPrimary: "gm.example.com", Serial: 5},
-				{GridPrimary: "gmc.example.com", Serial: 4},
+				{GridPrimary: testCandidateFQN, Serial: 4},
 			},
 		}}, http.StatusOK
 	}}
@@ -124,7 +131,7 @@ func TestReadMemberSerialsFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMemberSerials: unexpected error: %v", err)
 	}
-	if len(members) != 2 || members[1].GridPrimary != "gmc.example.com" || members[1].Serial != 4 {
+	if len(members) != 2 || members[1].GridPrimary != testCandidateFQN || members[1].Serial != 4 {
 		t.Fatalf("ReadMemberSerials returned unexpected members: %+v", members)
 	}
 }
@@ -133,7 +140,7 @@ func TestReadMemberSerialsEmptyArray(t *testing.T) {
 	// Zone exists but has no grid_primary assigned: member_soa_serials is
 	// an empty (not absent) array.
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{Ref: "zone_auth/xyz", MemberSOASerials: []MemberSerial{}}}, http.StatusOK
+		return []zoneAuthObject{{Ref: testZoneAuthRef, MemberSOASerials: []MemberSerial{}}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -211,6 +218,36 @@ func TestZoneFQDNFromRecordName(t *testing.T) {
 				t.Fatalf("ZoneFQDNFromRecordName(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNewClientBuildsHTTPSBaseURL(t *testing.T) {
+	c := NewClient("grid.example.com", "443", "2.9.7", "admin", "s3cr3t", true)
+	if c.baseURL != "https://grid.example.com:443/wapi/2.9.7" {
+		t.Fatalf("baseURL = %q, want %q", c.baseURL, "https://grid.example.com:443/wapi/2.9.7")
+	}
+	if c.username != "admin" || c.password != "s3cr3t" {
+		t.Fatalf("unexpected client credentials: username=%q password=%q", c.username, c.password)
+	}
+	if c.httpClient.Transport.(*http.Transport).TLSClientConfig != nil {
+		t.Fatal("sslVerify=true must not install a custom TLSClientConfig")
+	}
+}
+
+func TestNewClientSslVerifyFalseSkipsCertValidation(t *testing.T) {
+	c := NewClient("grid.example.com", "443", "2.9.7", "admin", "s3cr3t", false)
+	tlsCfg := c.httpClient.Transport.(*http.Transport).TLSClientConfig
+	if tlsCfg == nil || !tlsCfg.InsecureSkipVerify {
+		t.Fatal("sslVerify=false must install a TLSClientConfig with InsecureSkipVerify=true")
+	}
+}
+
+func TestReadZoneSerialBuildRequestErrorPropagates(t *testing.T) {
+	c := NewClientWithScheme("http", "127.0.0.1", "0", "2.9.7", "admin", "s3cr3t", true)
+
+	//nolint:staticcheck // intentionally passing a nil context to exercise the request-build error path
+	if _, _, err := c.ReadZoneSerial(nil, "example.com", "Internal"); err == nil {
+		t.Fatal("expected an error when the underlying request cannot be built (nil context)")
 	}
 }
 

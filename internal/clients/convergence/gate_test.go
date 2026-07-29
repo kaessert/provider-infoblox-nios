@@ -26,6 +26,20 @@ func newObj(name string) *metav1.ObjectMeta {
 	return &metav1.ObjectMeta{Name: name}
 }
 
+// TestGateNowFallsBackToRealClockWhenZeroValue covers a Gate built via a
+// bare struct literal (clock left nil) rather than NewGate, which always
+// wires clock to time.Now. now() must still return a sane, current-ish
+// time rather than panicking or returning the zero time.Time.
+func TestGateNowFallsBackToRealClockWhenZeroValue(t *testing.T) {
+	g := &Gate{}
+	before := time.Now()
+	got := g.now()
+	after := time.Now()
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("Gate{}.now() = %v, want a value between %v and %v", got, before, after)
+	}
+}
+
 // ── EffectiveMode ────────────────────────────────────────────────────────
 
 func TestEffectiveModeNonIPAMUnaffected(t *testing.T) {
@@ -70,7 +84,7 @@ func TestReadRoutingConditionPrimary(t *testing.T) {
 func TestGateEvaluatePrimaryOnlyModeNoCandidateCall(t *testing.T) {
 	srv := poisonServer(t)
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), newObj("r1"), "example.com", "Internal", ModePrimaryOnly, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonPrimaryOnly {
@@ -92,7 +106,7 @@ func TestGateEvaluateCircuitBreakerOpenNoCandidateCall(t *testing.T) {
 	breaker := dualclient.NewCircuitBreaker(1, time.Minute)
 	breaker.RecordFailure() // opens at threshold 1
 
-	g := NewGate(nil, newTestClient(t, srv), breaker, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), breaker, testCandidateFQN)
 	d := g.Evaluate(context.Background(), newObj("r1"), "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonCandidateDegraded || !d.Warning {
 		t.Fatalf("unexpected decision: %+v", d)
@@ -104,7 +118,7 @@ func TestGateEvaluateCircuitBreakerOpenNoCandidateCall(t *testing.T) {
 func TestGateEvaluateNoPendingAnnotationRoutesToCandidate(t *testing.T) {
 	srv := poisonServer(t) // steady state must not need a candidate call
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), newObj("r1"), "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if !d.UseCandidate || d.Reason != ReasonCandidateReady {
@@ -115,7 +129,7 @@ func TestGateEvaluateNoPendingAnnotationRoutesToCandidate(t *testing.T) {
 func TestGateEvaluateCorruptAnnotationFallsBackToPrimary(t *testing.T) {
 	srv := poisonServer(t)
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	obj := newObj("r1")
 	obj.SetAnnotations(map[string]string{PendingZoneSerialAnnotation: "{not json"})
@@ -130,7 +144,7 @@ func TestGateEvaluateCorruptAnnotationFallsBackToPrimary(t *testing.T) {
 
 func TestGateRecordWriteSetsAnnotation(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{Ref: "zone_auth/xyz", SOASerialNumber: uint32Ptr(5)}}, http.StatusOK
+		return []zoneAuthObject{{Ref: testZoneAuthRef, SOASerialNumber: uint32Ptr(5)}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -148,6 +162,35 @@ func TestGateRecordWriteSetsAnnotation(t *testing.T) {
 	}
 	if pending.Serial != 5 || pending.Zone != "example.com/Internal" {
 		t.Fatalf("unexpected pending serial: %+v", pending)
+	}
+}
+
+func TestGateRecordWriteNoPrimaryConfiguredIsNoop(t *testing.T) {
+	g := NewGate(nil, nil, nil, "")
+	obj := newObj("r1")
+	if err := g.RecordWrite(context.Background(), obj, "example.com", "Internal"); err != nil {
+		t.Fatalf("RecordWrite with no primary configured: unexpected error: %v", err)
+	}
+	if _, ok, _ := GetPendingSerial(obj); ok {
+		t.Fatal("RecordWrite must not set an annotation when no primary client is configured")
+	}
+}
+
+func TestGateRecordWritePropagatesPrimaryError(t *testing.T) {
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		return map[string]string{"Error": "boom"}, http.StatusInternalServerError
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	g := NewGate(newTestClient(t, srv), nil, nil, "")
+	obj := newObj("r1")
+
+	if err := g.RecordWrite(context.Background(), obj, "example.com", "Internal"); err == nil {
+		t.Fatal("expected RecordWrite to surface a primary zone_auth read error")
+	}
+	if _, ok, _ := GetPendingSerial(obj); ok {
+		t.Fatal("RecordWrite must not set an annotation when the primary read fails")
 	}
 }
 
@@ -183,12 +226,12 @@ func gateWithPending(t *testing.T, candidateServer *httptest.Server, breaker *du
 
 func TestGateEvaluateCaughtUpClearsAnnotationAndRoutesToCandidate(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: "gmc.example.com", Serial: 5}}}}, http.StatusOK
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: testCandidateFQN, Serial: 5}}}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 	breaker := dualclient.NewCircuitBreaker(5, time.Minute)
-	g, obj := gateWithPending(t, srv, breaker, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, breaker, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if !d.UseCandidate || d.Reason != ReasonCandidateReady {
@@ -204,11 +247,11 @@ func TestGateEvaluateCaughtUpClearsAnnotationAndRoutesToCandidate(t *testing.T) 
 
 func TestGateEvaluateNotCaughtUpRoutesToPrimaryAndKeepsAnnotation(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: "gmc.example.com", Serial: 3}}}}, http.StatusOK
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: testCandidateFQN, Serial: 3}}}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	g, obj := gateWithPending(t, srv, nil, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonWaitingForReplication {
@@ -225,7 +268,7 @@ func TestGateEvaluateCandidateHostnameNotInMemberSerials(t *testing.T) {
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	g, obj := gateWithPending(t, srv, nil, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonWaitingForReplication {
@@ -242,7 +285,7 @@ func TestGateEvaluateZoneNotFoundGuard(t *testing.T) {
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	g, obj := gateWithPending(t, srv, nil, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonPrimaryOnly || !d.Warning {
@@ -258,7 +301,7 @@ func TestGateEvaluateNoGridPrimaryGuard(t *testing.T) {
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	g, obj := gateWithPending(t, srv, nil, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, nil, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonPrimaryOnly || !d.Warning {
@@ -273,7 +316,7 @@ func TestGateEvaluateCandidateHTTPErrorTripsBreaker(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 	breaker := dualclient.NewCircuitBreaker(5, time.Minute)
-	g, obj := gateWithPending(t, srv, breaker, "gmc.example.com")
+	g, obj := gateWithPending(t, srv, breaker, testCandidateFQN)
 
 	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if d.UseCandidate || d.Reason != ReasonCandidateDegraded || !d.Warning {
@@ -284,10 +327,56 @@ func TestGateEvaluateCandidateHTTPErrorTripsBreaker(t *testing.T) {
 	}
 }
 
+// TestGateEvaluateConsecutiveCandidateFailuresOpenBreakerEndToEnd drives N
+// consecutive candidate HTTP errors through Gate.Evaluate itself (not the
+// CircuitBreaker unit tested in isolation) and confirms the (N+1)th
+// Evaluate call trips the breaker and stops calling the candidate WAPI
+// entirely — proving the wiring between Evaluate and the breaker, not just
+// each piece independently.
+func TestGateEvaluateConsecutiveCandidateFailuresOpenBreakerEndToEnd(t *testing.T) {
+	const threshold = 3
+	var calls int
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		calls++
+		return map[string]string{"Error": "boom"}, http.StatusInternalServerError
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	breaker := dualclient.NewCircuitBreaker(threshold, time.Minute)
+
+	for i := 0; i < threshold; i++ {
+		g, obj := gateWithPending(t, srv, breaker, testCandidateFQN)
+		d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
+		if d.UseCandidate || d.Reason != ReasonCandidateDegraded {
+			t.Fatalf("failure #%d: unexpected decision: %+v", i+1, d)
+		}
+	}
+	if calls != threshold {
+		t.Fatalf("expected %d candidate WAPI calls before the breaker opened, got %d", threshold, calls)
+	}
+	if !breaker.IsOpen() {
+		t.Fatal("breaker must be open after reaching the failure threshold via Evaluate")
+	}
+
+	// The next Evaluate call must trip the structural (pre-call) guard and
+	// never touch the candidate WAPI again.
+	poison := poisonServer(t)
+	defer poison.Close()
+	g := NewGate(nil, newTestClient(t, poison), breaker, testCandidateFQN)
+	obj := newObj("r-final")
+	if err := SetPendingSerial(obj, "example.com", "Internal", 5, time.Now()); err != nil {
+		t.Fatalf("SetPendingSerial: unexpected error: %v", err)
+	}
+	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
+	if d.UseCandidate || d.Reason != ReasonCandidateDegraded || !d.Warning {
+		t.Fatalf("unexpected decision once the breaker is open: %+v", d)
+	}
+}
+
 func TestGateEvaluateConvergenceTimeoutClearsAnnotation(t *testing.T) {
 	srv := poisonServer(t) // timeout must short-circuit before calling the candidate
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	obj := newObj("r1")
 	staleSince := time.Now().Add(-2 * time.Minute)
@@ -304,11 +393,75 @@ func TestGateEvaluateConvergenceTimeoutClearsAnnotation(t *testing.T) {
 	}
 }
 
+func TestGateEvaluateZeroTimeoutUsesDefault(t *testing.T) {
+	srv := poisonServer(t) // a zero/negative timeout must still short-circuit via DefaultTimeout, not skip straight to the candidate
+	defer srv.Close()
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
+
+	obj := newObj("r1")
+	// Since is far enough in the past to exceed DefaultTimeout (60s) but the
+	// test asserts the zero-timeout path substitutes DefaultTimeout rather
+	// than treating <=0 as "never times out".
+	staleSince := time.Now().Add(-2 * time.Minute)
+	if err := SetPendingSerial(obj, "example.com", "Internal", 5, staleSince); err != nil {
+		t.Fatalf("SetPendingSerial: unexpected error: %v", err)
+	}
+
+	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, 0)
+	if d.UseCandidate || d.Reason != ReasonConvergenceTimeout {
+		t.Fatalf("unexpected decision with timeout=0 (must fall back to DefaultTimeout): %+v", d)
+	}
+}
+
+func TestGateEvaluateUsesInjectedClock(t *testing.T) {
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: testCandidateFQN, Serial: 3}}}}, http.StatusOK
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
+	fixed := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	g.clock = func() time.Time { return fixed }
+
+	obj := newObj("r1")
+	if err := SetPendingSerial(obj, "example.com", "Internal", 5, fixed.Add(-30*time.Second)); err != nil {
+		t.Fatalf("SetPendingSerial: unexpected error: %v", err)
+	}
+
+	// 30s elapsed per the injected clock, well under DefaultTimeout, so the
+	// gate must still be waiting (not have timed out) — proving g.now()
+	// consulted the injected clock rather than the real wall clock.
+	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
+	if d.Reason != ReasonWaitingForReplication {
+		t.Fatalf("unexpected decision with injected clock: %+v", d)
+	}
+}
+
+func TestGateEvaluateCandidateHostnameFoundAfterOtherMembers(t *testing.T) {
+	// member_soa_serials lists another grid member before the candidate's
+	// own hostname — the lookup loop must not stop at the first entry.
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{
+			{GridPrimary: "other-member.example.com", Serial: 1},
+			{GridPrimary: testCandidateFQN, Serial: 5},
+		}}}, http.StatusOK
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	g, obj := gateWithPending(t, srv, nil, testCandidateFQN)
+
+	d := g.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
+	if !d.UseCandidate || d.Reason != ReasonCandidateReady {
+		t.Fatalf("unexpected decision: %+v", d)
+	}
+}
+
 // ── Controller restart resumption ───────────────────────────────────────
 
 func TestGateEvaluateResumesAfterSimulatedRestart(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: "gmc.example.com", Serial: 5}}}}, http.StatusOK
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: testCandidateFQN, Serial: 5}}}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -323,7 +476,7 @@ func TestGateEvaluateResumesAfterSimulatedRestart(t *testing.T) {
 
 	// A brand-new Gate (simulating a controller restart — no in-memory
 	// state survives) picks the pending annotation straight back up.
-	g2 := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g2 := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 	d := g2.Evaluate(context.Background(), obj, "example.com", "Internal", ModeSOASerial, DefaultTimeout)
 	if !d.UseCandidate || d.Reason != ReasonCandidateReady {
 		t.Fatalf("unexpected decision after simulated restart: %+v", d)
@@ -334,11 +487,11 @@ func TestGateEvaluateResumesAfterSimulatedRestart(t *testing.T) {
 
 func TestGateEvaluateMultipleRecordsSameZoneBothClearOnConverge(t *testing.T) {
 	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
-		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: "gmc.example.com", Serial: 9}}}}, http.StatusOK
+		return []zoneAuthObject{{MemberSOASerials: []MemberSerial{{GridPrimary: testCandidateFQN, Serial: 9}}}}, http.StatusOK
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	obj1 := newObj("r1")
 	obj2 := newObj("r2")
@@ -368,7 +521,7 @@ func TestGateEvaluateMultipleRecordsSameZoneBothClearOnConverge(t *testing.T) {
 func TestGateEvaluateIPAMResourceAlwaysPrimary(t *testing.T) {
 	srv := poisonServer(t)
 	defer srv.Close()
-	g := NewGate(nil, newTestClient(t, srv), nil, "gmc.example.com")
+	g := NewGate(nil, newTestClient(t, srv), nil, testCandidateFQN)
 
 	mode, overridden := EffectiveMode(ModeSOASerial, true) // IPAM resource, configured soaSerial
 	if !overridden {
