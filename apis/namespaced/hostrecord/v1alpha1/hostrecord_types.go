@@ -71,6 +71,16 @@ type HostRecordParameters struct {
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"`
+	// CIDR of the IPv4 network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with static ipv4Addrs entries that specify an address.
+	Ipv4Cidr *string `json:"ipv4Cidr,omitempty"`
+	// CIDR of the IPv6 network from which to allocate the next available IP address. Create-time-only — ignored on Update. Mutually exclusive with static ipv6Addrs entries that specify an address.
+	Ipv6Cidr *string `json:"ipv6Cidr,omitempty"`
+	// Extensible attribute key/value filter for EA-based IP allocation via AllocateNextAvailableIp. Mutually exclusive with ipv4Cidr/ipv6Cidr. When set, ipAddressType is required.
+	// +optional
+	FilterParams map[string]string `json:"filterParams"`
+	// IP address type to allocate when using filterParams: "IPV4", "IPV6", or "Both". Required when filterParams is set; ignored otherwise.
+	// +kubebuilder:validation:Enum=IPV4;IPV6;Both
+	IpAddressType *string `json:"ipAddressType,omitempty"`
 }
 
 // HostRecordObservation holds the observed state of a HostRecord.
@@ -93,6 +103,7 @@ type HostRecordObservation struct {
 	// +optional
 	Ipv6Addrs []HostRecordIpv6Addr `json:"ipv6Addrs"` // atProvider
 	// Network view the host record resides in. Immutable after creation (live-verified: supports=rws, no u — corrects Phase 1 inventory).
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// DNS view in which the record resides. Mutable — changing it moves the record between DNS views and changes the _ref.
 	View *string `json:"view,omitempty"` // atProvider
@@ -112,9 +123,19 @@ type HostRecordObservation struct {
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
+	// CIDR of the IPv4 network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with static ipv4Addrs entries that specify an address.
+	Ipv4Cidr *string `json:"ipv4Cidr,omitempty"` // atProvider
+	// CIDR of the IPv6 network from which to allocate the next available IP address. Create-time-only — ignored on Update. Mutually exclusive with static ipv6Addrs entries that specify an address.
+	Ipv6Cidr *string `json:"ipv6Cidr,omitempty"` // atProvider
+	// Extensible attribute key/value filter for EA-based IP allocation via AllocateNextAvailableIp. Mutually exclusive with ipv4Cidr/ipv6Cidr. When set, ipAddressType is required.
+	// +optional
+	FilterParams map[string]string `json:"filterParams"` // atProvider
+	// IP address type to allocate when using filterParams: "IPV4", "IPV6", or "Both". Required when filterParams is set; ignored otherwise.
+	IpAddressType *string `json:"ipAddressType,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides. Derived from name/view by WAPI — not a CreateHostRecord parameter.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable after creation"
 	Zone *string `json:"zone,omitempty"` // atProvider
 	// Host name in punycode format (derived from name).
 	DNSName *string `json:"dnsName,omitempty"` // atProvider

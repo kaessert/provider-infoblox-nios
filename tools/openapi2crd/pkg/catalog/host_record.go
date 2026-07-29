@@ -141,6 +141,43 @@ func hostRecord() ResourceDescriptor {
 				Scope:       FieldScopeBoth,
 				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
 			},
+			// Create-time-only dynamic IP allocation hints (WAPI
+			// func:nextavailableip). These are accepted by
+			// CreateHostRecord/AllocateNextAvailableIp but are not part of
+			// the GetHostRecord response, so they are FieldScopeRequest —
+			// still mirrored to Observation via the full-mirror rule so an
+			// Observe-mode import can compare desired to applied allocation
+			// hints. The SDK's UpdateHostRecord ignores these parameters,
+			// so they have no effect after creation.
+			{
+				Name:        "Ipv4Cidr",
+				JSONName:    "ipv4Cidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "CIDR of the IPv4 network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with static ipv4Addrs entries that specify an address.",
+			},
+			{
+				Name:        "Ipv6Cidr",
+				JSONName:    "ipv6Cidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "CIDR of the IPv6 network from which to allocate the next available IP address. Create-time-only — ignored on Update. Mutually exclusive with static ipv6Addrs entries that specify an address.",
+			},
+			{
+				Name:        "FilterParams",
+				JSONName:    "filterParams",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeRequest,
+				Description: "Extensible attribute key/value filter for EA-based IP allocation via AllocateNextAvailableIp. Mutually exclusive with ipv4Cidr/ipv6Cidr. When set, ipAddressType is required.",
+			},
+			{
+				Name:        "IpAddressType",
+				JSONName:    "ipAddressType",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Enum:        []string{"IPV4", "IPV6", "Both"},
+				Description: "IP address type to allocate when using filterParams: \"IPV4\", \"IPV6\", or \"Both\". Required when filterParams is set; ignored otherwise.",
+			},
 			// Response-only fields
 			{
 				Name:        "Ref",
