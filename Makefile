@@ -106,25 +106,17 @@ UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespa
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
+UPTEST_MANIFESTS_DTC_POOL := examples/dtc-pool/dtc-pool.yaml,examples/dtc-pool/dtc-pool-namespaced.yaml
 
 # E2E manifest tiers
-# CORE: resources that only need NIOS Grid Manager API credentials (no
-# additional external infrastructure to provision).
-# TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
-# INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
-# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth,
-# IPv4SharedNetwork, NetworkContainer, FixedAddress, ZoneForward, Range, and AliasRecord are also tier:core.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE)
-# TXTRecord, NetworkView, HostRecord, Network, and DTCServer are tier:core —
-# only need API credentials (INFOBLOX_HOST, INFOBLOX_USER, INFOBLOX_PASS), no
-# external infrastructure beyond the NIOS Grid Manager itself.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_DTC_SERVER)
-# Grid Manager itself. HostRecord, Network, and RangeTemplate are also tier:core.
-# ExtensibleAttributeDef is also tier:core — only needs API credentials, no
-# external infrastructure beyond the NIOS Grid Manager itself.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
-# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth, IPv4SharedNetwork, NetworkContainer, and DNSView are also tier:core.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_DNS_VIEW)
+# CORE: resources that only need NIOS Grid Manager API credentials
+# (INFOBLOX_HOST, INFOBLOX_USER, INFOBLOX_PASS) — no additional external
+# infrastructure to provision. This is the full core-tier set: all record
+# types, HostRecord, Network(View/Container), RangeTemplate, ZoneAuth,
+# ZoneDelegated, ZoneForward, IPv4SharedNetwork, FixedAddress, Range,
+# DTCServer, DTCPool, and ExtensibleAttributeDef. DTCPool needs no external
+# prerequisites — its `servers` field is optional.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -220,6 +212,9 @@ e2e.extensible-attribute-def: e2e
 e2e.dns-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DNS_VIEW)
 e2e.dns-view: e2e
 
+e2e.dtc-pool: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_POOL)
+e2e.dtc-pool: e2e
+
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
 e2e-full: e2e-preflight e2e
@@ -228,10 +223,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e-full
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.dtc-server e2e-full
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.extensible-attribute-def e2e-full
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.dns-view e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -373,6 +365,14 @@ update-test.dns-view: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/dns-view/dns-view-namespaced.yaml
 
 .PHONY: update-test.dns-view
+
+update-test.dtc-pool: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/dtc-pool/dtc-pool.yaml
+	$(UPDATE_TESTER) run examples/dtc-pool/dtc-pool.yaml
+	$(UPDATE_TESTER) converge examples/dtc-pool/dtc-pool-namespaced.yaml
+	$(UPDATE_TESTER) run examples/dtc-pool/dtc-pool-namespaced.yaml
+
+.PHONY: update-test.dtc-pool
 
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration

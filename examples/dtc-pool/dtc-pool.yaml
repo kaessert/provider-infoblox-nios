@@ -1,0 +1,48 @@
+# DTCPool is a cluster-scoped Infoblox NIOS DTC (DNS Traffic Control) pool
+# (WAPI object type dtc:pool). See dtc-pool-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI POST returns an opaque `_ref` string
+# from Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it. Create is synchronous — WAPI's POST returns the `_ref`
+# immediately (200/201), so the default uptest timeout is sufficient.
+#
+# Required fields:
+#   name: DTC Pool display name.
+#   lbPreferredMethod: preferred load-balancing method used to select a
+#     server from the pool. ROUND_ROBIN is the simplest enum value and
+#     needs no companion settings (unlike TOPOLOGY or DYNAMIC_RATIO, which
+#     require a topology ruleset or monitor configuration respectively).
+#
+# The `servers` field (DTC Servers that are members of this pool) is
+# optional and intentionally omitted here — it references DTCServer
+# resources by external name, and this minimal example is meant to stand
+# alone without requiring a pre-existing DTCServer.
+#
+# Optional mutable fields: lbAlternateMethod, servers, availability,
+# quorum, comment, disable, ttl, useTtl, extAttrs, and more advanced
+# dynamic-ratio/topology settings — see the DTCPool CRD schema for the
+# full list.
+apiVersion: dtcpool.infobloxnios.crossplane.io/v1alpha1
+kind: DTCPool
+metadata:
+  name: example-dtcpool
+  annotations:
+    meta.upbound.io/example-id: dtcpool/v1alpha1/dtcpool
+    uptest.upbound.io/timeout: "600"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-pool.sh
+    # comment is a safe mutable scalar for update coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: test-dtc-pool
+    lbPreferredMethod: ROUND_ROBIN
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
