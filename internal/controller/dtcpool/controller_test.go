@@ -36,11 +36,13 @@ import (
 
 // Shared literals reused across many test cases (deduplicated for goconst).
 const (
-	nsDefault      = "default"
-	eaKeyEnv       = "env"
-	eaValProd      = "prod"
-	monitorRefHTTP = "dtc:monitor:http/ZG5z...:http"
-	serverRefA     = "dtc:server/ZG5z...serverA:my-dtc-server-a"
+	nsDefault       = "default"
+	eaKeyEnv        = "env"
+	eaValProd       = "prod"
+	monitorRefHTTP  = "dtc:monitor:http/ZG5z...:http"
+	serverRefA      = "dtc:server/ZG5z...serverA:my-dtc-server-a"
+	lbRoundRobin    = "ROUND_ROBIN"
+	unusedSecretKey = "unused"
 )
 
 func stringPtr(s string) *string { return &s }
@@ -93,7 +95,7 @@ func newClusterDTCPool(crName, externalName string) *clusterv1alpha1.DTCPool {
 			},
 			ForProvider: clusterv1alpha1.DTCPoolParameters{
 				Name:              stringPtr("my-dtc-pool"),
-				LBPreferredMethod: stringPtr("ROUND_ROBIN"),
+				LBPreferredMethod: stringPtr(lbRoundRobin),
 			},
 		},
 	}
@@ -113,7 +115,7 @@ func newNamespacedDTCPool(ns, crName, externalName, pcKind string) *namespacedv1
 			},
 			ForProvider: namespacedv1alpha1.DTCPoolParameters{
 				Name:              stringPtr("my-dtc-pool"),
-				LBPreferredMethod: stringPtr("ROUND_ROBIN"),
+				LBPreferredMethod: stringPtr(lbRoundRobin),
 			},
 		},
 	}
@@ -400,7 +402,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Comment:           stringPtr("hello"),
 		Disable:           boolPtr(false),
 		Ea:                ibclient.EA{eaKeyEnv: eaValProd},
@@ -559,7 +561,7 @@ func TestClusterObserveConsolidatedMonitorsAndHealth(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Servers: []*ibclient.DtcServerLink{
 			{Server: serverRefA, Ratio: 1},
 		},
@@ -686,7 +688,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Comment:           stringPtr("old comment"),
 	})
 
@@ -716,7 +718,7 @@ func TestUpdateSendsAllFields(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 	})
 
 	e := &clusterExternal{clients: newTestClients(t, srv)}
@@ -833,7 +835,7 @@ func TestClusterConnectSuccess(t *testing.T) {
 						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
 							SecretRef: &xpv1.SecretKeySelector{
 								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
+								Key:             unusedSecretKey,
 							},
 						},
 					},
@@ -880,7 +882,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 	})
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
@@ -905,7 +907,7 @@ func TestNamespacedObserveConsolidatedMonitorsAndHealth(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Monitors: []*ibclient.DtcMonitorHttp{
 			{Ref: monitorRefHTTP},
 		},
@@ -1048,7 +1050,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Comment:           stringPtr("old comment"),
 	})
 
@@ -1131,7 +1133,7 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
 							SecretRef: &xpv1.SecretKeySelector{
 								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
+								Key:             unusedSecretKey,
 							},
 						},
 					},
@@ -1171,7 +1173,7 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
 							SecretRef: &xpv1.SecretKeySelector{
 								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
+								Key:             unusedSecretKey,
 							},
 						},
 					},
@@ -1464,7 +1466,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 
 	rec := &ibclient.DtcPool{
 		Name:              stringPtr("pool-name"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 	}
 
 	_ = lateInitialize(&comment, &disable, &availability, &quorum, &ttl, &useTTL, &extAttrs, &lbAlternateMethod, &lbPreferredTopology, &lbAlternateTopology, &lbdrp, &lbdra, rec)
@@ -1476,7 +1478,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 func TestIsUpToDate(t *testing.T) {
 	base := &ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Comment:           stringPtr("hello"),
 		Disable:           boolPtr(false),
 		Servers: []*ibclient.DtcServerLink{
@@ -1549,7 +1551,7 @@ func TestIsUpToDate(t *testing.T) {
 func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
 	rec := &ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
-		LbPreferredMethod: "ROUND_ROBIN",
+		LbPreferredMethod: lbRoundRobin,
 		Ea:                nil,
 	}
 	if !isUpToDate(rec.Name, stringPtr(rec.LbPreferredMethod), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, map[string]string{}, rec) {
@@ -1564,7 +1566,7 @@ func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
 
 	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
 		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
+		Key:             unusedSecretKey,
 	}, "")
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
@@ -1582,7 +1584,7 @@ func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 
 	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
 		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
+		Key:             unusedSecretKey,
 	}, "")
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
@@ -1600,7 +1602,7 @@ func TestExtractCredentialsSslVerifyUnrecognizedValueDefaultsTrue(t *testing.T) 
 
 	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
 		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
+		Key:             unusedSecretKey,
 	}, "")
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
