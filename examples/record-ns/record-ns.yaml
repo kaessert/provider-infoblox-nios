@@ -26,24 +26,14 @@
 #               though it is optional in the underlying SDK's field
 #               table.
 #
-# NS quirk: many Grids reject POST record:ns for any subdomain that is not
-# already registered as a delegated child zone — the rejection is a
-# Grid-wide DNS policy setting, not a per-zone one, so switching to a
-# different existing auth zone does not help. Re-verified end-to-end
-# against a real Grid (via both the deployed controller and direct WAPI
-# calls): under a non-existent parent zone the create fails with
-# "The action is not allowed. A parent was not found."; under an existing
-# auth zone (e.g. example.com) it fails with "Cannot add a manual NS
-# record with the name <n> in the zone <z>"; and even a freshly
-# provisioned `zone_delegated` child zone rejects a manual record:ns
-# pointed at its own apex with "Cannot add an empty named record to the
-# zone <z>, which is not authoritative" (WAPI auto-manages NS delegation
-# records for `zone_delegated` — there is no manual attachment point).
-# No combination of pre-existing or freshly created zone was found where
-# manual record:ns creation succeeds on this Grid. Before applying this
-# example, have a Grid administrator confirm manual NS record creation is
-# permitted for the target zone/view, or use the resulting `zone_delegated`
-# object's auto-managed NS records instead of a standalone NSRecord.
+# NS quirk: Grid DNS policy rejects manual record:ns creation for
+# subdomains that are not already registered as a delegated child zone
+# ("Cannot add a manual NS record") — this is a Grid-wide policy, not a
+# per-zone one. Live-verified against a real Grid: a manual record:ns
+# whose `name` is the ZONE APEX itself (e.g. "peatestinglab.com", not a
+# subdomain of it) succeeds with full CRUD in the "Internal" view. Use a
+# zone-apex name here, not a subdomain, and confirm the target zone/view
+# permits manual NS records before applying this example elsewhere.
 #
 # Optional mutable fields: msDelegationName. (addresses can also be
 # changed after creation, but as a list it is not a safe uptest
@@ -68,11 +58,11 @@ metadata:
         value: "ns2.example.com"
 spec:
   forProvider:
-    name: subdomain.zone.com
+    name: peatestinglab.com
     nameserver: ns1.example.com
     addresses:
       - address: 192.0.2.53
         autoCreatePtr: false
-    view: default
+    view: Internal
   providerConfigRef:
     name: default

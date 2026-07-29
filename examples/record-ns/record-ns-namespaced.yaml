@@ -10,7 +10,9 @@
 #
 # Distinct identity: the delegated name below differs from record-ns.yaml's
 # so both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same (view, zone, name) WAPI identity.
+# without colliding on the same (view, zone, name) WAPI identity. Like
+# record-ns.yaml, `name` MUST be a zone-apex name, not a subdomain — see
+# record-ns.yaml's "NS quirk" note for why.
 apiVersion: recordns.infobloxnios.m.crossplane.io/v1alpha1
 kind: NSRecord
 metadata:
@@ -27,12 +29,12 @@ metadata:
         value: "ns2-ns.example.com"
 spec:
   forProvider:
-    name: subdomain-ns.zone.com
+    name: example.com
     nameserver: ns1.example.com
     addresses:
       - address: 192.0.2.54
         autoCreatePtr: false
-    view: default
+    view: Internal
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
