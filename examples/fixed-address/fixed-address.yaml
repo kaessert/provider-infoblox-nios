@@ -1,0 +1,64 @@
+# FixedAddress is a cluster-scoped Infoblox NIOS DHCP fixed address (WAPI
+# object type "fixedaddress", or "ipv6fixedaddress" when ipv6addr is set).
+# See fixed-address-namespaced.yaml for the namespace-scoped variant used by
+# namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI's AllocateIP call (the SDK's
+# non-standard name for Create on this object type) returns an opaque `_ref`
+# string from Create (e.g.
+# "fixedaddress/ZG5zLmZpeGVkX2FkZHJlc3Mk...:10.0.0.50/default"); Crossplane
+# stores it in the crossplane.io/external-name annotation. Do not set that
+# annotation manually — the controller populates it. The `_ref` is UNSTABLE:
+# changing ipv4addr/ipv6addr changes it.
+#
+# Required fields:
+#   ipv4addr or ipv6addr: exactly one of the two must be set (mutually
+#                          exclusive address families, enforced by a CRD
+#                          validation rule). This example uses ipv4addr with
+#                          a literal address rather than dynamic allocation
+#                          from a network CIDR, so it runs standalone
+#                          without creating a Network resource first.
+#
+# Create behavior: synchronous — the WAPI POST (AllocateIP) returns the
+# `_ref` immediately; no async polling is needed.
+#
+# Optional but notable fields:
+#   mac:         match key for MAC_ADDRESS/CIRCUIT_ID/REMOTE_ID match_client
+#                modes. Defaults to the zero MAC address when omitted and no
+#                matchClient is set.
+#   networkView: defaults to "default" when unset.
+#
+# No immutable fields are known for this resource — every Create parameter
+# is also accepted by Update.
+#
+# Optional mutable fields: mac, networkView (only prior to first apply —
+# see caveats above), name, matchClient, comment, extAttrs, disable,
+# agentCircuitId, agentRemoteId, clientIdentifierPrependZero,
+# dhcpClientIdentifier, options, useOptions.
+apiVersion: fixedaddress.infobloxnios.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing runs through the post-assert hook wiring
+    # and the crossplane.io/update-test annotation below.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address.sh
+    # comment is the only mutable scalar exercised here — the other mutable
+    # fields are also mutable but comment alone is sufficient update
+    # coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    ipv4addr: 10.0.0.50
+    mac: "00:00:00:00:00:00"
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

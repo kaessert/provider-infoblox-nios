@@ -100,18 +100,16 @@ UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/ipv4-shared
 # prepended here — same pattern as UPTEST_MANIFESTS_NETWORK above.
 UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
+UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that only need NIOS Grid Manager API credentials (no
 # additional external infrastructure to provision).
 # TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
 # INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
-# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth, IPv4SharedNetwork, and NetworkContainer are also tier:core.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER)
-# TXTRecord, PTRRecord and ZoneForward are tier:core — only need API
-# credentials (INFOBLOX_HOST, INFOBLOX_USER, INFOBLOX_PASS), no external
-# infrastructure beyond the NIOS Grid Manager itself.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_ZONE_FORWARD)
+# Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth,
+# IPv4SharedNetwork, NetworkContainer, FixedAddress, and ZoneForward are also tier:core.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -192,6 +190,9 @@ e2e.network-container: e2e
 e2e.zone-forward: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_FORWARD)
 e2e.zone-forward: e2e
 
+e2e.fixed-address: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS)
+e2e.fixed-address: e2e
+
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
 e2e-full: e2e-preflight e2e
@@ -200,8 +201,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e-full
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-txt e2e.zone-delegated e2e.zone-forward e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -296,14 +296,19 @@ update-test.network-container: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/network-container/network-container-namespaced.yaml
 	$(UPDATE_TESTER) run examples/network-container/network-container-namespaced.yaml
 
-.PHONY: update-test.record-aaaa update-test.record-txt update-test.zone-delegated update-test.host-record update-test.network update-test.range-template update-test.network-container
+update-test.fixed-address: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/fixed-address/fixed-address.yaml
+	$(UPDATE_TESTER) run examples/fixed-address/fixed-address.yaml
+	$(UPDATE_TESTER) converge examples/fixed-address/fixed-address-namespaced.yaml
+	$(UPDATE_TESTER) run examples/fixed-address/fixed-address-namespaced.yaml
+
 update-test.zone-forward: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/zone-forward/zone-forward.yaml
 	$(UPDATE_TESTER) run examples/zone-forward/zone-forward.yaml
 	$(UPDATE_TESTER) converge examples/zone-forward/zone-forward-namespaced.yaml
 	$(UPDATE_TESTER) run examples/zone-forward/zone-forward-namespaced.yaml
 
-.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated update-test.zone-forward
+.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated update-test.host-record update-test.network update-test.range-template update-test.network-container update-test.fixed-address update-test.zone-forward
 
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration
