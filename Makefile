@@ -82,6 +82,7 @@ space := $(empty) $(empty)
 # Per-resource manifest variables (comma pair of cluster + namespaced variants,
 # so `make e2e.<resource>` gates both scopes).
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml
@@ -94,6 +95,7 @@ UPTEST_MANIFESTS_RECORD_MX := examples/record-mx/record-mx.yaml,examples/record-
 # INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
 # Grid Manager itself.
 UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -134,6 +136,9 @@ e2e: e2e-preflight
 e2e.record-aaaa: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_AAAA)
 e2e.record-aaaa: e2e
 
+e2e.record-ptr: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_PTR)
+e2e.record-ptr: e2e
+
 e2e.record-txt: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_TXT)
 e2e.record-txt: e2e
 
@@ -155,6 +160,7 @@ e2e-full: e2e-preflight e2e
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-txt e2e.zone-delegated e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-ptr e2e.record-txt e2e.zone-delegated e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -164,8 +170,6 @@ local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 # uptest post-assert hook integration (which also runs update-tester as part
 # of the full `make e2e.<resource>` Create→Update→Import→Delete cycle) — use
 # these for a fast, standalone check against an already-deployed resource.
-
-
 UPDATE_TESTER := tools/update-tester/update-tester
 UPDATE_TESTER_SRC := $(wildcard tools/update-tester/*.go)
 
@@ -182,6 +186,12 @@ update-test.record-aaaa: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/record-aaaa/record-aaaa-namespaced.yaml
 	$(UPDATE_TESTER) run examples/record-aaaa/record-aaaa-namespaced.yaml
 
+update-test.record-ptr: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/record-ptr/record-ptr.yaml
+	$(UPDATE_TESTER) run examples/record-ptr/record-ptr.yaml
+	$(UPDATE_TESTER) converge examples/record-ptr/record-ptr-namespaced.yaml
+	$(UPDATE_TESTER) run examples/record-ptr/record-ptr-namespaced.yaml
+
 update-test.record-txt: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/record-txt/record-txt.yaml
 	$(UPDATE_TESTER) run examples/record-txt/record-txt.yaml
@@ -194,7 +204,7 @@ update-test.zone-delegated: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/zone-delegated/zone-delegated-namespaced.yaml
 	$(UPDATE_TESTER) run examples/zone-delegated/zone-delegated-namespaced.yaml
 
-.PHONY: update-test.record-aaaa update-test.record-txt update-test.zone-delegated
+.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated
 
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration
