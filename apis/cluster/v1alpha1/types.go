@@ -31,6 +31,14 @@ type ProviderConfigSpec struct {
 	// this field existed.
 	// +optional
 	ReadEndpoint *ReadEndpoint `json:"readEndpoint,omitempty"`
+
+	// SSLVerify controls whether the provider verifies the NIOS Grid
+	// Manager's TLS certificate for all endpoints (primary and read).
+	// Set to false only when the Grid Manager presents a self-signed
+	// certificate. Defaults to true (secure).
+	// +kubebuilder:default=true
+	// +optional
+	SSLVerify *bool `json:"sslVerify,omitempty"`
 }
 
 // ReadEndpoint configures an optional read-only NIOS endpoint (typically a

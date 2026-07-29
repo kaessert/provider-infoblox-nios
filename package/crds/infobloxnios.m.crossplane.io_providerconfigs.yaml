@@ -167,6 +167,14 @@ spec:
                 required:
                 - credentialsRef
                 type: object
+              sslVerify:
+                default: true
+                description: |-
+                  SSLVerify controls whether the provider verifies the NIOS Grid
+                  Manager's TLS certificate for all endpoints (primary and read).
+                  Set to false only when the Grid Manager presents a self-signed
+                  certificate. Defaults to true (secure).
+                type: boolean
             required:
             - credentials
             type: object
