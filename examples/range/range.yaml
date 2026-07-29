@@ -76,7 +76,7 @@ metadata:
 spec:
   forProvider:
     startAddr: 203.0.113.100
-    endAddr: 203.0.113.150
+    endAddr: 203.0.113.120
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:
