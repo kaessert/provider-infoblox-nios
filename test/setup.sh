@@ -3,15 +3,14 @@
 # cluster before uptest/chainsaw assertions run.
 #
 # This script creates:
-#   - infobloxnios-credentials Secret (host/username/password/ssl_verify) in
+#   - infobloxnios-credentials Secret (host/username/password) in
 #     crossplane-system, populated from the INFOBLOX_HOST, INFOBLOX_USER,
 #     and INFOBLOX_PASS environment variables (Hive nest secrets / CI
 #     secrets — see the credentials section of the provider blueprint).
-#     ssl_verify is set to "false" because the E2E Grid Manager presents a
-#     self-signed certificate whose SAN does not match the reachable host
-#     address.
 #   - ProviderConfig (cluster-scoped, group infobloxnios.crossplane.io) —
-#     used by cluster-scoped managed resources.
+#     used by cluster-scoped managed resources. spec.sslVerify is set to
+#     false because the E2E Grid Manager presents a self-signed
+#     certificate whose SAN does not match the reachable host address.
 #   - ProviderConfig (namespace-scoped, group infobloxnios.m.crossplane.io)
 #     in BOTH the crossplane-system and default namespaces — used by
 #     namespaced managed resources that reference a same-namespace
@@ -127,7 +126,6 @@ ${KUBECTL} create secret generic infobloxnios-credentials \
   --from-literal="host=${INFOBLOX_HOST}" \
   --from-literal="username=${INFOBLOX_USER}" \
   --from-literal="password=${INFOBLOX_PASS}" \
-  --from-literal=ssl_verify="false" \
   --dry-run=client -o yaml | ${KUBECTL} apply -f -
 
 echo "==> Creating cluster-scoped ProviderConfig (default)..."
@@ -138,6 +136,9 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  # sslVerify: false because the E2E Grid Manager presents a self-signed
+  # certificate whose SAN does not match the reachable host address.
+  sslVerify: false
   credentials:
     source: Secret
     secretRef:
@@ -155,6 +156,9 @@ metadata:
   name: default
   namespace: crossplane-system
 spec:
+  # sslVerify: false because the E2E Grid Manager presents a self-signed
+  # certificate whose SAN does not match the reachable host address.
+  sslVerify: false
   credentials:
     source: Secret
     secretRef:
@@ -172,6 +176,9 @@ metadata:
   name: default
   namespace: default
 spec:
+  # sslVerify: false because the E2E Grid Manager presents a self-signed
+  # certificate whose SAN does not match the reachable host address.
+  sslVerify: false
   credentials:
     source: Secret
     secretRef:
@@ -188,6 +195,9 @@ kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  # sslVerify: false because the E2E Grid Manager presents a self-signed
+  # certificate whose SAN does not match the reachable host address.
+  sslVerify: false
   credentials:
     source: Secret
     secretRef:
