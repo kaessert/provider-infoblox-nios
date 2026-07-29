@@ -21,6 +21,10 @@ metadata:
     uptest.upbound.io/timeout: "300"
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-ns.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns-namespaced.sh
+    crossplane.io/update-test: |
+      - field: nameserver
+        value: "ns2-ns.example.com"
 spec:
   forProvider:
     name: subdomain-ns.zone.com
