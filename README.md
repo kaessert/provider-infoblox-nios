@@ -32,6 +32,9 @@ resources declaratively using Kubernetes custom resources.
 - **ZoneForward** — create and manage Infoblox NIOS forward DNS zones
   (cluster-scoped and namespace-scoped)
 - **FixedAddress** — create and manage Infoblox NIOS DHCP fixed addresses
+- **RangeTemplate** — create and manage Infoblox NIOS DHCP range templates
+  (cluster-scoped and namespace-scoped)
+- **Range** — create and manage Infoblox NIOS DHCP address ranges
   (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
@@ -451,6 +454,45 @@ spec:
     name: default
 ```
 
+**Namespace-scoped** (`zonedelegated.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: zonedelegated.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneDelegated
+metadata:
+  name: example-zonedelegated-ns
+  namespace: default
+spec:
+  forProvider:
+    fqdn: delegated-ns.example.com
+    delegateTo:
+      - name: ns1.delegate.com
+        address: 10.0.1.1
+      - name: ns2.delegate.com
+        address: 10.0.1.2
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
+underlying SDK's update call has no parameters for them, and WAPI
+additionally rejects moving an existing zone between views at the data
+level.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/zone-delegated/zone-delegated.yaml
+kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
+```
+
 ### ZoneAuth
 
 Manage Infoblox NIOS authoritative DNS zones (WAPI object type `zone_auth`).
@@ -609,12 +651,8 @@ The `view` field is immutable after creation: WAPI ties a CNAME record's
 Apply the full set of example manifests:
 
 ```bash
-kubectl apply -f examples/zone-delegated/zone-delegated.yaml
-kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
 kubectl apply -f examples/record-cname/record-cname.yaml
 kubectl apply -f examples/record-cname/record-cname-namespaced.yaml
-kubectl apply -f examples/record-mx/record-mx.yaml
-kubectl apply -f examples/record-mx/record-mx-namespaced.yaml
 ```
 
 ### MXRecord
@@ -666,6 +704,13 @@ manually.
 The `view` field is immutable after creation: WAPI ties an MX record's
 `_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
 `view` parameter.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-mx/record-mx.yaml
+kubectl apply -f examples/record-mx/record-mx-namespaced.yaml
+```
 
 ### SRVRecord
 
@@ -962,6 +1007,28 @@ spec:
     name: default
 ```
 
+### Range
+
+Manage Infoblox NIOS DHCP address ranges (WAPI object type `range`) — a
+contiguous block of addresses within a network that DHCP can lease out.
+
+**Cluster-scoped** (`range.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: range.infobloxnios.crossplane.io/v1alpha1
+kind: Range
+metadata:
+  name: example-range
+spec:
+  forProvider:
+    startAddr: 203.0.113.100
+    endAddr: 203.0.113.120
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
 **Namespace-scoped** (`ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -975,6 +1042,25 @@ spec:
     name: example-shared-network-ns
     networks:
       - 203.0.113.128/25
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+**Namespace-scoped** (`range.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: range.infobloxnios.m.crossplane.io/v1alpha1
+kind: Range
+metadata:
+  name: example-range-ns
+  namespace: default
+spec:
+  forProvider:
+    startAddr: 203.0.113.160
+    endAddr: 203.0.113.180
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
@@ -999,11 +1085,21 @@ schema probing found the Grid Manager rejects changing it once the shared
 network is created. All other fields (`name`, `comment`, `extAttrs`,
 `disable`, `useOptions`, `options`) are mutable in place via WAPI PUT.
 
+`template` (the optional `RangeTemplate` to pre-populate settings from) is a
+create-only parameter: `UpdateNetworkRange` does not accept it, so it is
+excluded from drift comparison and has no `atProvider` mirror. `startAddr`,
+`endAddr`, `networkView`, `network`, `comment`, and `extAttrs` are all
+mutable in place via WAPI PUT. This example references the Grid's
+well-known "default" network view and omits the optional `network` field so
+it runs standalone without requiring a pre-existing `Network` object.
+
 Apply the full set of example manifests:
 
 ```bash
 kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network.yaml
 kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+kubectl apply -f examples/range/range.yaml
+kubectl apply -f examples/range/range-namespaced.yaml
 ```
 
 ### NetworkContainer
