@@ -486,7 +486,6 @@ func aliasRecord() ResourceDescriptor {
 	}
 }
 
-
 // cnameRecord returns the CNAMERecord resource descriptor.
 //
 // Source: tools/openapi/inventory.md, "### CNAMERecord" section (request=0,

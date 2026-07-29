@@ -575,6 +575,26 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+func TestClusterCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterAliasRecord("my-alias", "") // no external-name yet
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateAliasRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateAliasRecord)
+	}
+	if got := meta.GetExternalName(cr); got != cr.GetName() && got != "" {
+		t.Errorf("Create: external-name mutated on failed create, got %q", got)
+	}
+}
+
 func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -676,6 +696,40 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	m.mu.Unlock()
 	if stored.View == nil || *stored.View != testDefault {
 		t.Errorf("Update: stored view = %v, want unchanged %q", stored.View, testDefault)
+	}
+}
+
+// TestClusterUpdateRefChangeUpdatesExternalName proves that when the WAPI
+// PUT response carries a _ref different from the one the update was
+// issued against — as happens when name-mutating fields change the
+// object's identity server-side — the external-name annotation is
+// refreshed to the new _ref so the next reconcile does not 404 against a
+// stale reference.
+func TestClusterUpdateRefChangeUpdatesExternalName(t *testing.T) {
+	oldRef := "record:alias/test1:old.example.com/default"
+	newRef := "record:alias/test2:new.example.com/default"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.PathValue("ref"); got != oldRef {
+			t.Errorf("PUT: unexpected ref in request path: %q, want %q", got, oldRef)
+		}
+		writeJSON(w, http.StatusOK, newRef)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	cr := newClusterAliasRecord("my-alias", oldRef)
+	cr.Spec.ForProvider.Name = stringPtr("new.example.com")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	if got := meta.GetExternalName(cr); got != newRef {
+		t.Errorf("Update: external-name = %q, want refreshed to %q", got, newRef)
 	}
 }
 
@@ -1168,6 +1222,32 @@ func TestExtAttrsRoundTrip(t *testing.T) {
 	out := extAttrsFromEA(ea)
 	if !extAttrsEqual(in, out) {
 		t.Errorf("ExtAttrs round-trip: got %v, want %v", out, in)
+	}
+}
+
+// TestStringifyEAValue covers every branch of the extensible-attribute
+// value stringification helper: nil, a plain string, both states of the
+// SDK's ibclient.Bool type, a []string (multi-value EA), and the
+// default/numeric fallback.
+func TestStringifyEAValue(t *testing.T) {
+	cases := map[string]struct {
+		in   interface{}
+		want string
+	}{
+		"Nil":         {in: nil, want: ""},
+		"String":      {in: "platform-team", want: "platform-team"},
+		"BoolTrue":    {in: ibclient.Bool(true), want: "True"},
+		"BoolFalse":   {in: ibclient.Bool(false), want: "False"},
+		"StringSlice": {in: []string{"a", "b", "c"}, want: "a,b,c"},
+		"Default":     {in: 42, want: "42"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := stringifyEAValue(tc.in); got != tc.want {
+				t.Errorf("stringifyEAValue(%#v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
