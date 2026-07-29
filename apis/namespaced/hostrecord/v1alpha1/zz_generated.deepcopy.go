@@ -196,6 +196,28 @@ func (in *HostRecordObservation) DeepCopyInto(out *HostRecordObservation) {
 			(*out)[key] = val
 		}
 	}
+	if in.Ipv4Cidr != nil {
+		in, out := &in.Ipv4Cidr, &out.Ipv4Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.Ipv6Cidr != nil {
+		in, out := &in.Ipv6Cidr, &out.Ipv6Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.FilterParams != nil {
+		in, out := &in.FilterParams, &out.FilterParams
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.IpAddressType != nil {
+		in, out := &in.IpAddressType, &out.IpAddressType
+		*out = new(string)
+		**out = **in
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(string)
@@ -306,6 +328,28 @@ func (in *HostRecordParameters) DeepCopyInto(out *HostRecordParameters) {
 		for key, val := range *in {
 			(*out)[key] = val
 		}
+	}
+	if in.Ipv4Cidr != nil {
+		in, out := &in.Ipv4Cidr, &out.Ipv4Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.Ipv6Cidr != nil {
+		in, out := &in.Ipv6Cidr, &out.Ipv6Cidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.FilterParams != nil {
+		in, out := &in.FilterParams, &out.FilterParams
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.IpAddressType != nil {
+		in, out := &in.IpAddressType, &out.IpAddressType
+		*out = new(string)
+		**out = **in
 	}
 }
 

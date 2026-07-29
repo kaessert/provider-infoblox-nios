@@ -846,8 +846,10 @@ func TestFindResourceHostRecord(t *testing.T) {
 
 // TestHostRecordFieldCounts pins the field counts for HostRecord — the
 // ticket specifies ForProvider fields (settable) and AtProvider fields
-// (response-only). Field scopes: request=0 (mac_address/duid omitted —
-// see catalog doc), response=4, both=12.
+// (response-only). Field scopes: request=4 (ipv4Cidr, ipv6Cidr,
+// filterParams, ipAddressType — create-time-only dynamic IP allocation
+// hints; mac_address/duid remain omitted, see catalog doc), response=4,
+// both=12.
 func TestHostRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("hostrecord")
 	if !ok {
@@ -866,8 +868,8 @@ func TestHostRecordFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 0 {
-		t.Errorf("request-scope field count = %d, want 0", req)
+	if req != 4 {
+		t.Errorf("request-scope field count = %d, want 4", req)
 	}
 	if resp != 4 {
 		t.Errorf("response-scope field count = %d, want 4", resp)
