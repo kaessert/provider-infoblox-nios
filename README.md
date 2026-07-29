@@ -862,7 +862,7 @@ spec:
   forProvider:
     name: example-shared-network
     networks:
-      - 203.0.113.0/24
+      - 203.0.113.0/25
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:
