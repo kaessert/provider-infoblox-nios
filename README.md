@@ -143,6 +143,107 @@ spec:
       key: password
 ```
 
+### 3. Read/Write Endpoint Split (Optional)
+
+Production NIOS grids typically run a Grid Master (GM) as the primary and one
+or more Grid Master Candidates (GMC) as read replicas. You can offload
+Crossplane's reconcile-loop read traffic onto a candidate by configuring a
+`readEndpoint` in your ProviderConfig.
+
+When `readEndpoint` is configured:
+
+- **Writes** (Create / Update / Delete) always go to the **primary** Grid Master
+- **Reads** (Observe) go to the **candidate** — but only after the candidate has
+  caught up to the primary's latest write (SOA serial convergence gate)
+- **IPAM resources** always read from the primary (no SOA serial signal exists
+  for IPAM objects)
+
+When `readEndpoint` is omitted, all traffic goes to the primary — identical to
+the provider's default single-endpoint behavior.
+
+#### ProviderConfig with readEndpoint
+
+```yaml
+apiVersion: infobloxnios.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: infoblox-primary
+      key: password
+  readEndpoint:
+    credentialsRef:
+      name: infoblox-candidate
+      namespace: crossplane-system
+    convergence:
+      mode: soaSerial       # default for DNS; compare zone SOA serials
+      pollInterval: 2s      # how often to check the candidate's serial
+      timeout: 60s          # fall back to primary if not converged in time
+```
+
+The `readEndpoint.credentialsRef` secret uses the same format as the primary
+(keys: `host`, `username`, `password`), allowing a least-privilege read-only
+NIOS account for the candidate:
+
+```bash
+# Primary (read-write)
+kubectl create secret generic infoblox-primary \
+  --namespace crossplane-system \
+  --from-literal=host=gm.example.com \
+  --from-literal=username=admin \
+  --from-literal=password=<password>
+
+# Candidate (read-only)
+kubectl create secret generic infoblox-candidate \
+  --namespace crossplane-system \
+  --from-literal=host=gmc.example.com \
+  --from-literal=username=readonly-user \
+  --from-literal=password=<password>
+```
+
+#### How convergence works
+
+After a DNS write, the controller:
+
+1. Reads the zone's `soa_serial_number` from the primary
+2. Sets an annotation (`infobloxnios.crossplane.io/pending-zone-serial`) on the
+   managed resource with the expected serial
+3. On subsequent Observe calls, checks the candidate's `member_soa_serials` for
+   that zone — if the candidate's serial ≥ expected, reads from the candidate;
+   otherwise reads from the primary
+4. Reports routing state via a `ReadRouting` status condition on each resource
+
+#### Failure handling
+
+- If the candidate is unreachable or returns errors, that Observe falls back to
+  the primary and emits a Kubernetes Warning event
+- After 5 consecutive candidate failures, the circuit breaker opens and all
+  reads are pinned to the primary for 60 seconds (configurable)
+- If convergence does not complete within `timeout`, the controller falls back
+  to the primary and emits a Warning condition with the lag delta
+- A misconfigured `readEndpoint` (missing Secret, missing keys) fails
+  `Connect()` loudly — it never silently degrades to primary-only
+
+#### Convergence modes
+
+| Mode | Behavior | Default for |
+|------|----------|-------------|
+| `soaSerial` | Compare zone SOA serials between endpoints | DNS resources |
+| `primaryOnly` | Always read from primary | IPAM resources (automatic) |
+
+IPAM resources (`Network`, `FixedAddress`, etc.) are hardcoded to `primaryOnly`
+regardless of the configured mode — no SOA serial signal exists for IPAM
+objects.
+
+> **Note:** This feature requires a GM + GMC grid pair. The convergence gate
+> design has been validated against a single Grid Master. Replication behavior
+> across a real GM/GMC pair is the remaining validation gap before production
+> use.
+
 ## Resources
 
 ### ARecord

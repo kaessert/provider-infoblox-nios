@@ -1,0 +1,86 @@
+# Example ProviderConfig with Read/Write Endpoint Split
+#
+# Offloads Crossplane's reconcile-loop read traffic (Observe) onto a Grid
+# Master Candidate (GMC) while all writes (Create/Update/Delete) continue
+# going to the primary Grid Master (GM).
+#
+# When readEndpoint is omitted, all traffic goes to the primary — identical
+# to the default single-endpoint ProviderConfig in config.yaml.
+#
+# Prerequisites:
+#   - A NIOS Grid Master (GM) as the primary endpoint
+#   - A NIOS Grid Master Candidate (GMC) as the read endpoint
+#   - Two Secrets with the same key format (host, username, password)
+
+# Primary credentials (read-write — Grid Master)
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: crossplane-system
+  name: infoblox-primary
+type: Opaque
+stringData:
+  host: "gm.example.com"
+  username: "admin"
+  password: "change-me"
+---
+# Candidate credentials (read-only — Grid Master Candidate)
+# Supports least-privilege read-only NIOS accounts.
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: crossplane-system
+  name: infoblox-candidate
+type: Opaque
+stringData:
+  host: "gmc.example.com"
+  username: "readonly-user"
+  password: "change-me"
+---
+# Cluster-scoped ProviderConfig with read/write split
+apiVersion: infobloxnios.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: infoblox-primary
+      key: password
+  readEndpoint:
+    credentialsRef:
+      name: infoblox-candidate
+      namespace: crossplane-system
+    convergence:
+      # soaSerial (default): compare zone SOA serials between endpoints.
+      # After a DNS write, the controller gates reads on the primary until
+      # the candidate's serial catches up. IPAM resources always read from
+      # the primary regardless of this setting.
+      mode: soaSerial
+      # How often to check the candidate's serial during convergence.
+      pollInterval: 2s
+      # Fall back to primary if the candidate hasn't caught up in time.
+      timeout: 60s
+---
+# ClusterProviderConfig with read/write split (for namespaced MRs)
+apiVersion: infobloxnios.m.crossplane.io/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: infoblox-primary
+      key: password
+  readEndpoint:
+    credentialsRef:
+      name: infoblox-candidate
+      namespace: crossplane-system
+    convergence:
+      mode: soaSerial
+      pollInterval: 2s
+      timeout: 60s
