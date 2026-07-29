@@ -24,6 +24,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordsrv"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneauth"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,6 +47,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		recordptr.SetupGated,
 		recordsrv.SetupGated,
 		recordtxt.SetupGated,
+		zoneauth.SetupGated,
 		zonedelegated.SetupGated,
 	} {
 		if err := setup(mgr, o); err != nil {
@@ -72,6 +74,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		recordptr.Setup,
 		recordsrv.Setup,
 		recordtxt.Setup,
+		zoneauth.Setup,
 		zonedelegated.Setup,
 	} {
 		if err := setup(mgr, o); err != nil {

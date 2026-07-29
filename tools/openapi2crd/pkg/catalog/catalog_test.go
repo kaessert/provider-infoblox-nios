@@ -760,3 +760,82 @@ func TestRangeTemplateMsServerOmittedFromObservation(t *testing.T) {
 	}
 	t.Errorf("rangetemplate descriptor has no MsServer field")
 }
+
+// TestAllContainsZoneAuth verifies the catalog's All() includes ZoneAuth
+// with a non-empty field list and its two supporting nested types
+// (MemberServer, ExternalServer).
+func TestAllContainsZoneAuth(t *testing.T) {
+	found := false
+	for _, rd := range All() {
+		if rd.Slug != "zoneauth" {
+			continue
+		}
+		found = true
+		if len(rd.Fields) == 0 {
+			t.Errorf("ZoneAuth descriptor has zero fields")
+		}
+		if len(rd.NestedTypes) != 2 {
+			t.Errorf("ZoneAuth descriptor has %d nested types, want 2 (MemberServer, ExternalServer)", len(rd.NestedTypes))
+		}
+	}
+	if !found {
+		t.Errorf("All() does not contain the zoneauth resource")
+	}
+}
+
+// TestZoneAuthFieldCounts pins the request/response/both field counts for
+// ZoneAuth (request=0, response=1, both=16) — a regression guard against a
+// catalog authoring bug. Every ForProvider field is Scope=Both except the
+// server-assigned `ref`, which is response-only (never settable by the
+// controller).
+func TestZoneAuthFieldCounts(t *testing.T) {
+	rd, ok := FindResource("zoneauth")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneauth")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 1 {
+		t.Errorf("response-scope field count = %d, want 1", resp)
+	}
+	if both != 16 {
+		t.Errorf("both-scope field count = %d, want 16", both)
+	}
+}
+
+// TestZoneAuthImmutableFields verifies the three live-verified immutable
+// fields (fqdn, view, zoneFormat) carry Immutable=true, and that every
+// other field does not.
+func TestZoneAuthImmutableFields(t *testing.T) {
+	rd, ok := FindResource("zoneauth")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "zoneauth")
+	}
+
+	wantImmutable := map[string]bool{
+		"fqdn":       true,
+		"view":       true,
+		"zoneFormat": true,
+	}
+
+	for _, f := range rd.Fields {
+		want := wantImmutable[f.JSONName]
+		if f.Immutable != want {
+			t.Errorf("field %q Immutable = %v, want %v", f.JSONName, f.Immutable, want)
+		}
+	}
+}

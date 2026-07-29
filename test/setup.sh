@@ -37,9 +37,13 @@
 #     "External" and "Internal" views, not "default". Every example
 #     manifest that creates a DNS record uses view: default, so record
 #     creates fail with IB.Data.Conflict ("A parent was not found") unless
-#     this zone exists first. Created directly via a WAPI POST (there is
-#     no zone_auth managed resource/CRD in this provider), guarded by a
-#     GET so re-running setup.sh is a no-op once the zone exists.
+#     this zone exists first. Created directly via a WAPI POST (bypassing
+#     the ZoneAuth managed resource so this prerequisite zone is not
+#     coupled to any single resource's CRUD lifecycle), guarded by a GET
+#     so re-running setup.sh is a no-op once the zone exists. The ZoneAuth
+#     example manifests deliberately target a different fqdn
+#     (zoneauth-example.com) so their own Create calls never collide with
+#     this pre-provisioned example.com/default zone.
 #
 # Usage: test/setup.sh
 #   Requires a running kind cluster with Crossplane installed and
