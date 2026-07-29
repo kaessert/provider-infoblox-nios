@@ -15,6 +15,8 @@
 #               even though the underlying SDK's update call still
 #               accepts a name parameter.
 #   nameserver: FQDN of the authoritative server for the delegated zone.
+#               Mutable — not part of the record's (view, zone, name)
+#               identity, so changing it does not rotate the `_ref`.
 #   view:       the DNS view the record is created in. Live-verified hard
 #               immutable (CEL rule enforced) — the update call has no
 #               view parameter.
@@ -24,11 +26,18 @@
 #               though it is optional in the underlying SDK's field
 #               table.
 #
-# NS quirk: Grid policy may block manual NS record creation for zones it
-# does not consider delegated. This example targets a subdomain of a zone
-# that is expected to allow delegation NS records — adjust `name` and
-# `nameserver` to a zone/nameserver pair permitted by your Grid Manager
-# policy before applying.
+# NS quirk: many Grids reject POST record:ns for any subdomain that is not
+# already registered as a delegated child zone — the rejection is a
+# Grid-wide DNS policy setting, not a per-zone one, so switching to a
+# different existing auth zone does not help. Live-verified against a
+# real Grid: `record:ns` creates failed uniformly across every top-level
+# auth zone present (multiple zones, both the Internal and External DNS
+# views, and the default view) with the same
+# "Cannot add a manual NS record with the name <n> in the zone <z>" WAPI
+# conflict — no `zone_delegated` child zones existed to attach a manual NS
+# record to. Before applying this example, either pre-create a delegated
+# child zone (`zone_delegated`) under the target auth zone, or have a
+# Grid administrator confirm manual NS record creation is permitted.
 #
 # Optional mutable fields: msDelegationName. (addresses can also be
 # changed after creation, but as a list it is not a safe uptest
@@ -40,12 +49,17 @@ metadata:
   annotations:
     meta.upbound.io/example-id: recordns/v1alpha1/nsrecord
     uptest.upbound.io/timeout: "300"
-    # uptest.upbound.io/update-parameter is intentionally omitted: the
-    # only mutable fields are msDelegationName (rarely exercised) and the
-    # addresses list, which is not a safe scalar target for uptest's
-    # update-parameter (known uptest v2.2.0 shell-quoting bugs with JSON
-    # values). Field-level update testing is wired via post-assert-hook
-    # during the E2E ticket instead.
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
+    # Runs the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
+    # nameserver is the mutable scalar exercised here. It is intentionally
+    # NOT one of the record's identity fields (name, view) — changing
+    # either of those would rotate the WAPI `_ref` mid-test and
+    # destabilize the update-tester's convergence check.
+    crossplane.io/update-test: |
+      - field: nameserver
+        value: "ns2.example.com"
 spec:
   forProvider:
     name: subdomain.zone.com
