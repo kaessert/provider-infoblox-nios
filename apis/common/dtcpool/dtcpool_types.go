@@ -77,8 +77,8 @@ type DTCPoolParameters struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=ROUND_ROBIN;RATIO;TOPOLOGY;DYNAMIC_RATIO;GLOBAL_AVAILABILITY;SOURCE_IP_HASH
 	LBPreferredMethod *string `json:"lbPreferredMethod"`
-	// Fallback load balancing method used if lbPreferredMethod returns no results.
-	// +kubebuilder:validation:Enum=NONE;ROUND_ROBIN;RATIO;TOPOLOGY;DYNAMIC_RATIO
+	// Fallback load balancing method used if lbPreferredMethod returns no results. NONE is accepted here for backward compatibility with existing manifests, but the backend never accepts it as an explicit write value — it only appears on read-back as the server's default when the field is left unset, and the controller normalizes it to "unset" on both the read and write paths.
+	// +kubebuilder:validation:Enum=NONE;ROUND_ROBIN;RATIO;TOPOLOGY;DYNAMIC_RATIO;GLOBAL_AVAILABILITY;ALL_AVAILABLE
 	LBAlternateMethod *string `json:"lbAlternateMethod,omitempty"`
 	// DTC Servers that are members of this pool, each with a per-server ratio/weight.
 	// +optional
@@ -127,7 +127,7 @@ type DTCPoolObservation struct {
 	Name *string `json:"name,omitempty"` // atProvider
 	// Preferred load balancing method used to select a server from the pool.
 	LBPreferredMethod *string `json:"lbPreferredMethod,omitempty"` // atProvider
-	// Fallback load balancing method used if lbPreferredMethod returns no results.
+	// Fallback load balancing method used if lbPreferredMethod returns no results. NONE is accepted here for backward compatibility with existing manifests, but the backend never accepts it as an explicit write value — it only appears on read-back as the server's default when the field is left unset, and the controller normalizes it to "unset" on both the read and write paths.
 	LBAlternateMethod *string `json:"lbAlternateMethod,omitempty"` // atProvider
 	// DTC Servers that are members of this pool, each with a per-server ratio/weight.
 	// +optional

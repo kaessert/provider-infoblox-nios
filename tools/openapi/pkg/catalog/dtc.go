@@ -31,7 +31,7 @@ func dtcPool() model.Resource {
 			fEnum("lb_preferred_method", "string", model.FieldScopeBoth, false, false, "Preferred load balancing method.", "ROUND_ROBIN", "RATIO", "TOPOLOGY", "DYNAMIC_RATIO", "GLOBAL_AVAILABILITY", "SOURCE_IP_HASH"),
 			f("lb_preferred_topology", "*string", model.FieldScopeBoth, false, false, "Topology ruleset name (lb_preferred_method=TOPOLOGY)."),
 			f("lb_dynamic_ratio_preferred", "*SettingDynamicratio", model.FieldScopeBoth, false, false, "Dynamic-ratio settings (lb_preferred_method=DYNAMIC_RATIO)."),
-			fEnum("lb_alternate_method", "string", model.FieldScopeBoth, false, false, "Fallback load balancing method if the preferred method returns no results.", "NONE", "ROUND_ROBIN", "RATIO", "TOPOLOGY", "DYNAMIC_RATIO"),
+			fEnum("lb_alternate_method", "string", model.FieldScopeBoth, false, false, "Fallback load balancing method if the preferred method returns no results. NONE is accepted for backward compatibility with existing manifests, but the backend never accepts it as an explicit write value \u2014 it only appears on read-back as the server's default when the field is left unset; the controller normalizes it to \"unset\" on both the read and write paths.", "NONE", "ROUND_ROBIN", "RATIO", "TOPOLOGY", "DYNAMIC_RATIO", "GLOBAL_AVAILABILITY", "ALL_AVAILABLE"),
 			f("lb_alternate_topology", "*string", model.FieldScopeBoth, false, false, "Topology ruleset name (lb_alternate_method=TOPOLOGY)."),
 			f("lb_dynamic_ratio_alternate", "*SettingDynamicratio", model.FieldScopeBoth, false, false, "Dynamic-ratio settings (lb_alternate_method=DYNAMIC_RATIO)."),
 			f("servers", "[]*DtcServerLink", model.FieldScopeBoth, false, false, "DTC Servers that are members of this pool, with per-server ratio/weight."),
