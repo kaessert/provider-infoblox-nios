@@ -388,32 +388,6 @@ func TestPTRRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordptr")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "recordptr")
-// TestFindResourceHostRecord verifies FindResource returns the
-// HostRecord descriptor for its slug.
-func TestFindResourceHostRecord(t *testing.T) {
-	rd, ok := FindResource("hostrecord")
-	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "hostrecord")
-	}
-	if rd.Kind != "HostRecord" {
-		t.Errorf("Kind = %q, want HostRecord", rd.Kind)
-	}
-	if rd.ClusterGroup != "hostrecord.infobloxnios.crossplane.io" {
-		t.Errorf("ClusterGroup = %q, want hostrecord.infobloxnios.crossplane.io", rd.ClusterGroup)
-	}
-	if rd.NamespacedGroup != "hostrecord.infobloxnios.m.crossplane.io" {
-		t.Errorf("NamespacedGroup = %q, want hostrecord.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
-	}
-}
-
-// TestHostRecordFieldCounts pins the field counts for HostRecord — the
-// ticket specifies ForProvider fields (settable) and AtProvider fields
-// (response-only). Field scopes: request=0 (mac_address/duid omitted —
-// see catalog doc), response=4, both=12.
-func TestHostRecordFieldCounts(t *testing.T) {
-	rd, ok := FindResource("hostrecord")
-	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "hostrecord")
 	}
 
 	var req, resp, both int
@@ -571,6 +545,52 @@ func TestSRVRecordImmutableFields(t *testing.T) {
 		if !want[name] {
 			t.Errorf("unexpected immutable field %q", name)
 		}
+	}
+}
+
+// TestFindResourceHostRecord verifies FindResource returns the
+// HostRecord descriptor for its slug.
+func TestFindResourceHostRecord(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+	if rd.Kind != "HostRecord" {
+		t.Errorf("Kind = %q, want HostRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "hostrecord.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want hostrecord.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "hostrecord.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want hostrecord.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestHostRecordFieldCounts pins the field counts for HostRecord — the
+// ticket specifies ForProvider fields (settable) and AtProvider fields
+// (response-only). Field scopes: request=0 (mac_address/duid omitted —
+// see catalog doc), response=4, both=12.
+func TestHostRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
 	if resp != 4 {
 		t.Errorf("response-scope field count = %d, want 4", resp)
 	}
