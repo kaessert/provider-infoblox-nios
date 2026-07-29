@@ -36,6 +36,8 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **Range** — create and manage Infoblox NIOS DHCP address ranges
   (cluster-scoped and namespace-scoped)
+- **DTCServer** — create and manage Infoblox NIOS DTC (DNS Traffic Control)
+  servers (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -991,7 +993,6 @@ spec:
   forProvider:
     networkView: default
     network: 198.51.100.0/24
-    comment: Managed by Crossplane
   providerConfigRef:
     name: default
 ```
@@ -1056,6 +1057,23 @@ spec:
     networks:
       - 203.0.113.0/25
     networkView: default
+### DTCServer
+
+Manage Infoblox NIOS DTC (DNS Traffic Control) servers (WAPI object type
+`dtc:server`). A DTC Server represents a backend server (identified by
+address or FQDN) that DTC pools and LBDNs can distribute traffic to.
+
+**Cluster-scoped** (`dtcserver.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtcserver.infobloxnios.crossplane.io/v1alpha1
+kind: DTCServer
+metadata:
+  name: example-dtcserver
+spec:
+  forProvider:
+    name: example-server.example.com
+    host: 192.0.2.30
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
@@ -1098,6 +1116,18 @@ spec:
       - 203.0.113.128/25
     networkView: default
     comment: Managed by Crossplane (namespaced)
+**Namespace-scoped** (`dtcserver.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtcserver.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCServer
+metadata:
+  name: example-dtcserver-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-server-ns.example.com
+    host: 192.0.2.31
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
@@ -1205,6 +1235,13 @@ underlying SDK's update call has no parameters for either field.
 `networkViewRef`/`networkViewSelector` also available); this example uses
 the Grid's well-known "default" network view so it runs standalone without
 creating a NetworkView resource first.
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `dtc:server/ZG5zLmRfoi5zZXJ2ZXIkX2V4YW1wbGU:example-server`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+Create is synchronous: WAPI's POST returns the `_ref` immediately, so no
+special create-pending handling is required.
 
 Apply the full set of example manifests:
 
@@ -1275,6 +1312,8 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/fixed-address/fixed-address.yaml
 kubectl apply -f examples/fixed-address/fixed-address-namespaced.yaml
+kubectl apply -f examples/dtc-server/dtc-server.yaml
+kubectl apply -f examples/dtc-server/dtc-server-namespaced.yaml
 ```
 
 ## Development

@@ -259,6 +259,7 @@ func All() []ResourceDescriptor {
 		ipv4SharedNetwork(),
 		networkContainer(),
 		zoneForward(),
+		dtcServer(),
 	}
 }
 

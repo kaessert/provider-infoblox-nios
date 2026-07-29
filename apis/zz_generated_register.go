@@ -9,6 +9,7 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
+	clusterdtcserverv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1"
 	clusterfixedaddressv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	clusterhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	clusteripv4sharednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
@@ -29,6 +30,7 @@ import (
 	clusterzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	clusterzoneforwardv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
+	namespaceddtcserverv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
 	namespacedfixedaddressv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
 	namespacedhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacedipv4sharednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
@@ -59,6 +61,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced-scope ProviderConfig types.
 	AddToSchemes = append(AddToSchemes, namespacedinfobloxniosv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Dtcserver types.
+	AddToSchemes = append(AddToSchemes, clusterdtcserverv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Fixedaddress types.
 	AddToSchemes = append(AddToSchemes, clusterfixedaddressv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Hostrecord types.
@@ -97,6 +101,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zoneforward types.
 	AddToSchemes = append(AddToSchemes, clusterzoneforwardv1alpha1.SchemeBuilder.AddToScheme)
+	// Register namespaced Dtcserver types.
+	AddToSchemes = append(AddToSchemes, namespaceddtcserverv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Fixedaddress types.
 	AddToSchemes = append(AddToSchemes, namespacedfixedaddressv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Hostrecord types.
