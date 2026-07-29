@@ -1,0 +1,34 @@
+# Network is the namespace-scoped variant of the Infoblox NIOS network.
+# See network.yaml for the cluster-scoped variant and full field
+# documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the CIDR below differs from network.yaml's so both
+# examples can be applied to the same NIOS Grid Manager at once without
+# colliding on the same (network_view, network) WAPI identity.
+apiVersion: network.infobloxnios.m.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # network.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+spec:
+  forProvider:
+    networkView: default
+    network: 198.51.101.0/24
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
