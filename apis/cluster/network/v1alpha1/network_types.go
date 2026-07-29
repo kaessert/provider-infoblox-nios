@@ -22,6 +22,7 @@ type NetworkMember struct {
 }
 
 // NetworkParameters are the configurable fields of a Network.
+// +kubebuilder:validation:XValidation:rule="has(self.network) || has(self.parentCidr) || has(self.filterParams)",message="one of network, parentCidr, or filterParams is required"
 type NetworkParameters struct {
 	// Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.
 	// +kubebuilder:validation:Required
@@ -32,10 +33,18 @@ type NetworkParameters struct {
 	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
 	// +optional
 	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
-	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format.
-	// +kubebuilder:validation:Required
+	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
-	Network *string `json:"network"`
+	Network *string `json:"network,omitempty"`
+	// Parent CIDR from which to allocate a subnet, e.g. "10.0.0.0/8". Create-time-only — drives the AllocateNetwork SDK call. Mutually exclusive with network. When set, allocatePrefixLen is required.
+	ParentCidr *string `json:"parentCidr,omitempty"`
+	// Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Required when parentCidr or filterParams is set.
+	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"`
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// +optional
+	FilterParams map[string]string `json:"filterParams"`
+	// WAPI object type filter for AllocateNetworkByEA, e.g. "networkcontainer". Only valid when filterParams is set; ignored otherwise.
+	Object *string `json:"object,omitempty"`
 	// Comment for the network; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
@@ -57,9 +66,18 @@ type NetworkObservation struct {
 	// Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"` // atProvider
-	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format.
+	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
 	Network *string `json:"network,omitempty"` // atProvider
+	// Parent CIDR from which to allocate a subnet, e.g. "10.0.0.0/8". Create-time-only — drives the AllocateNetwork SDK call. Mutually exclusive with network. When set, allocatePrefixLen is required.
+	ParentCidr *string `json:"parentCidr,omitempty"` // atProvider
+	// Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Required when parentCidr or filterParams is set.
+	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"` // atProvider
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// +optional
+	FilterParams map[string]string `json:"filterParams"` // atProvider
+	// WAPI object type filter for AllocateNetworkByEA, e.g. "networkcontainer". Only valid when filterParams is set; ignored otherwise.
+	Object *string `json:"object,omitempty"` // atProvider
 	// Comment for the network; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).

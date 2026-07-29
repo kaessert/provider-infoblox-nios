@@ -120,6 +120,28 @@ func (in *NetworkObservation) DeepCopyInto(out *NetworkObservation) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.ParentCidr != nil {
+		in, out := &in.ParentCidr, &out.ParentCidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.AllocatePrefixLen != nil {
+		in, out := &in.AllocatePrefixLen, &out.AllocatePrefixLen
+		*out = new(uint)
+		**out = **in
+	}
+	if in.FilterParams != nil {
+		in, out := &in.FilterParams, &out.FilterParams
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.Object != nil {
+		in, out := &in.Object, &out.Object
+		*out = new(string)
+		**out = **in
+	}
 	if in.Comment != nil {
 		in, out := &in.Comment, &out.Comment
 		*out = new(string)
@@ -176,6 +198,28 @@ func (in *NetworkParameters) DeepCopyInto(out *NetworkParameters) {
 	}
 	if in.Network != nil {
 		in, out := &in.Network, &out.Network
+		*out = new(string)
+		**out = **in
+	}
+	if in.ParentCidr != nil {
+		in, out := &in.ParentCidr, &out.ParentCidr
+		*out = new(string)
+		**out = **in
+	}
+	if in.AllocatePrefixLen != nil {
+		in, out := &in.AllocatePrefixLen, &out.AllocatePrefixLen
+		*out = new(uint)
+		**out = **in
+	}
+	if in.FilterParams != nil {
+		in, out := &in.FilterParams, &out.FilterParams
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.Object != nil {
+		in, out := &in.Object, &out.Object
 		*out = new(string)
 		**out = **in
 	}

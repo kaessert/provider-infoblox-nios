@@ -52,6 +52,7 @@ const (
 	goTypeBool       = "*bool"
 	goTypeInt64      = "*int64"
 	goTypeUint32     = "*uint32"
+	goTypeUint       = "*uint"
 	goTypeStringMap  = "map[string]string"
 	groupSuffixCrd   = "infobloxnios.crossplane.io"
 	groupSuffixCrdNS = "infobloxnios.m.crossplane.io"

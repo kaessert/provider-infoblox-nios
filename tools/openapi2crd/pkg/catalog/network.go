@@ -40,6 +40,17 @@ package catalog
 // hand-marshaled union of a `dhcpmember` or `msdhcpserver` entry; this
 // catalog flattens both branches into named optional fields since the
 // generator emits plain structs (no custom JSON union marshaling).
+//
+// `parentCidr`, `allocatePrefixLen`, `filterParams`, and `object` are
+// create-time-only dynamic CIDR allocation parameters — they drive the
+// AllocateNetwork/AllocateNetworkByEA SDK calls (an alternate creation path
+// to the static CreateNetwork call driven by `network`) and are never
+// echoed back by the WAPI, so they are modeled as request-only fields.
+// `network` itself is now optional at the type level (one of `network`,
+// `parentCidr`, or `filterParams` is required — enforced by a struct-level
+// CEL rule) since dynamic allocation supplies the CIDR only after creation,
+// at which point the controller late-initializes `network` from the
+// allocated value so the resource has a stable identity going forward.
 func network() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "Network",
@@ -47,6 +58,12 @@ func network() ResourceDescriptor {
 		ClusterGroup:         clusterGroup("network"),
 		NamespacedGroup:      namespacedGroup("network"),
 		ExternalNameStrategy: StrategyServerAssigned,
+		ParameterValidations: []ValidationRule{
+			{
+				Rule:    "has(self.network) || has(self.parentCidr) || has(self.filterParams)",
+				Message: "one of network, parentCidr, or filterParams is required",
+			},
+		},
 		Fields: []FieldDef{
 			{
 				Name:        kindNetworkView,
@@ -67,9 +84,36 @@ func network() ResourceDescriptor {
 				JSONName:    "network",
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
-				Required:    true,
 				Immutable:   true,
-				Description: "CIDR of the network, e.g. \"10.0.0.0/24\" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format.",
+				Description: "CIDR of the network, e.g. \"10.0.0.0/24\" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.",
+			},
+			{
+				Name:        "ParentCidr",
+				JSONName:    "parentCidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "Parent CIDR from which to allocate a subnet, e.g. \"10.0.0.0/8\". Create-time-only — drives the AllocateNetwork SDK call. Mutually exclusive with network. When set, allocatePrefixLen is required.",
+			},
+			{
+				Name:        "AllocatePrefixLen",
+				JSONName:    "allocatePrefixLen",
+				GoType:      goTypeUint,
+				Scope:       FieldScopeRequest,
+				Description: "Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Required when parentCidr or filterParams is set.",
+			},
+			{
+				Name:        "FilterParams",
+				JSONName:    "filterParams",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeRequest,
+				Description: "Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.",
+			},
+			{
+				Name:        "Object",
+				JSONName:    "object",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "WAPI object type filter for AllocateNetworkByEA, e.g. \"networkcontainer\". Only valid when filterParams is set; ignored otherwise.",
 			},
 			{
 				Name:        "Comment",
