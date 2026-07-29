@@ -839,6 +839,53 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveMinimalResponse mirrors
+// TestClusterObserveMinimalResponse for the namespaced scope: a WAPI
+// response carrying only the object's _ref and every other field at its
+// Go zero value must not panic and must produce a valid observation with
+// nil-safe AtProvider fields.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneForward{})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Fqdn != nil {
+		t.Errorf("AtProvider.Fqdn = %v, want nil", ap.Fqdn)
+	}
+	if ap.View != nil {
+		t.Errorf("AtProvider.View = %v, want nil", ap.View)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ForwardTo != nil {
+		t.Errorf("AtProvider.ForwardTo = %v, want nil", ap.ForwardTo)
+	}
+	if ap.ForwardingServers != nil {
+		t.Errorf("AtProvider.ForwardingServers = %v, want nil", ap.ForwardingServers)
+	}
+	if ap.Extattrs != nil {
+		t.Errorf("AtProvider.Extattrs = %v, want nil", ap.Extattrs)
+	}
+}
+
 // ── namespaced: Create/Update/Delete ─────────────────────────────────────
 
 func TestNamespacedCreateSuccess(t *testing.T) {
