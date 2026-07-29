@@ -239,6 +239,7 @@ func All() []ResourceDescriptor {
 		networkView(),
 		rangeTemplate(),
 		ipv4SharedNetwork(),
+		networkContainer(),
 	}
 }
 

@@ -212,3 +212,60 @@ func fieldNames(fields []FieldData) map[string]bool {
 	}
 	return m
 }
+
+// networkContainerDescriptor returns the NetworkContainer catalog entry for
+// use in tests. NetworkContainer is the first cataloged resource with a
+// cross-resource reference field (networkView -> NetworkView), so it
+// exercises the reference three-field pattern end-to-end.
+func networkContainerDescriptor(t *testing.T) catalog.ResourceDescriptor {
+	t.Helper()
+	rd, ok := catalog.FindResource("networkcontainer")
+	if !ok {
+		t.Fatalf("catalog.FindResource(%q): not found", "networkcontainer")
+	}
+	return *rd
+}
+
+// TestReferenceFieldRendersThreeFieldPattern verifies that a catalog field
+// with a Reference descriptor (NetworkContainer's networkView) renders the
+// full three-field cross-resource reference pattern: the value field with
+// its +crossplane:generate:reference:type marker, plus companion Ref and
+// Selector fields, in both cluster and namespaced scopes.
+func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
+	rd := networkContainerDescriptor(t)
+
+	clusterSrc, err := RenderScopeTypes(BuildScopeData(rd, true))
+	if err != nil {
+		t.Fatalf("RenderScopeTypes(cluster): %v", err)
+	}
+	cs := string(clusterSrc)
+
+	if !strings.Contains(cs, "// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView") {
+		t.Errorf("expected cluster reference type marker targeting NetworkView, got:\n%s", cs)
+	}
+	if !strings.Contains(cs, "NetworkViewRef *xpv1.Reference") {
+		t.Errorf("expected cluster NetworkViewRef *xpv1.Reference field, got:\n%s", cs)
+	}
+	if !strings.Contains(cs, "NetworkViewSelector *xpv1.Selector") {
+		t.Errorf("expected cluster NetworkViewSelector *xpv1.Selector field, got:\n%s", cs)
+	}
+
+	namespacedSrc, err := RenderScopeTypes(BuildScopeData(rd, false))
+	if err != nil {
+		t.Fatalf("RenderScopeTypes(namespaced): %v", err)
+	}
+	ns := string(namespacedSrc)
+
+	if !strings.Contains(ns, "NetworkViewRef *xpv1.NamespacedReference") {
+		t.Errorf("expected namespaced NetworkViewRef *xpv1.NamespacedReference field, got:\n%s", ns)
+	}
+	if !strings.Contains(ns, "NetworkViewSelector *xpv1.NamespacedSelector") {
+		t.Errorf("expected namespaced NetworkViewSelector *xpv1.NamespacedSelector field, got:\n%s", ns)
+	}
+
+	// The value field itself must also carry the immutability CEL rule
+	// (network_view is immutable — absent from UpdateNetworkContainer).
+	if !strings.Contains(cs, `message="networkView is immutable after creation"`) {
+		t.Errorf("expected CEL immutability rule for networkView field, got:\n%s", cs)
+	}
+}

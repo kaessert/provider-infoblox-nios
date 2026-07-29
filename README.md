@@ -27,6 +27,9 @@ resources declaratively using Kubernetes custom resources.
   (cluster-scoped and namespace-scoped)
 - **Network** — create and manage Infoblox NIOS networks and IPv6 networks
   (cluster-scoped and namespace-scoped)
+- **NetworkContainer** — create and manage Infoblox NIOS network containers,
+  reserving a CIDR block for later child networks and ranges
+  (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -659,6 +662,49 @@ spec:
     weight: 20
     port: 5060
     view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordsrv.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: _sip._tcp.ns.example.com
+    target: sipserver-ns.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `view` field is immutable after creation: WAPI ties an SRV record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-srv/record-srv.yaml
+kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+```
+
 ### RangeTemplate
 
 Manage Infoblox NIOS DHCP range templates (WAPI object type `rangetemplate`).
@@ -682,22 +728,6 @@ spec:
     name: default
 ```
 
-**Namespace-scoped** (`recordsrv.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
-kind: SRVRecord
-metadata:
-  name: example-srvrecord-ns
-  namespace: default
-spec:
-  forProvider:
-    name: _sip._tcp.ns.example.com
-    target: sipserver-ns.example.com
-    priority: 10
-    weight: 20
-    port: 5060
-    view: default
 **Namespace-scoped** (`rangetemplate.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -717,13 +747,6 @@ spec:
 ```
 
 External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default`). Crossplane
-stores this in the `crossplane.io/external-name` annotation — do not set it
-manually.
-
-The `view` field is immutable after creation: WAPI ties an SRV record's
-`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
-`view` parameter.
 (e.g. `rangetemplate/ZG5zLnJhbmdl...:my-range-template`). Crossplane stores
 this in the `crossplane.io/external-name` annotation — do not set it
 manually.
@@ -735,8 +758,8 @@ the update call, including `name`.
 Apply the full set of example manifests:
 
 ```bash
-kubectl apply -f examples/record-srv/record-srv.yaml
-kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+kubectl apply -f examples/range-template/range-template.yaml
+kubectl apply -f examples/range-template/range-template-namespaced.yaml
 ```
 
 ### NetworkView
@@ -911,6 +934,63 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network.yaml
 kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+```
+
+### NetworkContainer
+
+Manage Infoblox NIOS network containers (WAPI object type
+`networkcontainer`). A network container reserves a CIDR block from which
+child networks and DHCP ranges can later be carved.
+
+**Cluster-scoped** (`networkcontainer.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: networkcontainer.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkContainer
+metadata:
+  name: example-network-container
+spec:
+  forProvider:
+    networkView: default
+    network: 172.25.0.0/16
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`networkcontainer.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: networkcontainer.infobloxnios.m.crossplane.io/v1alpha1
+kind: NetworkContainer
+metadata:
+  name: example-network-container-ns
+  namespace: default
+spec:
+  forProvider:
+    networkView: default
+    network: 172.26.0.0/16
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+Both `networkView` and `network` are immutable after creation: the
+underlying SDK's update call has no parameters for either field.
+`networkView` is a cross-resource reference to a NetworkView (by name, with
+`networkViewRef`/`networkViewSelector` also available); this example uses
+the Grid's well-known "default" network view so it runs standalone without
+creating a NetworkView resource first.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/network-container/network-container.yaml
+kubectl apply -f examples/network-container/network-container-namespaced.yaml
 ```
 
 ## Development

@@ -2,6 +2,12 @@ package catalog
 
 import "testing"
 
+// testKindNetworkView is the shared literal for the NetworkView resource's
+// Kind, reused across several catalog test files (catalog_test.go,
+// network_test.go, network_view_test.go) that assert on cross-resource
+// Reference descriptors and Kind values pointing at NetworkView.
+const testKindNetworkView = "NetworkView"
+
 // TestFindResource verifies FindResource returns the ARecord descriptor for
 // its slug and reports false for an unknown slug.
 func TestFindResource(t *testing.T) {
@@ -685,7 +691,7 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 		if f.Reference == nil {
 			t.Fatalf("networkView field has nil Reference")
 		}
-		if f.Reference.TargetKind != "NetworkView" {
+		if f.Reference.TargetKind != testKindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {
@@ -837,5 +843,91 @@ func TestZoneAuthImmutableFields(t *testing.T) {
 		if f.Immutable != want {
 			t.Errorf("field %q Immutable = %v, want %v", f.JSONName, f.Immutable, want)
 		}
+	}
+}
+
+// TestFindResourceNetworkContainer verifies NetworkContainer's descriptor is
+// registered in the catalog with the expected slug and API groups.
+func TestFindResourceNetworkContainer(t *testing.T) {
+	rd, ok := FindResource("networkcontainer")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "networkcontainer")
+	}
+	if rd.Kind != "NetworkContainer" {
+		t.Errorf("Kind = %q, want NetworkContainer", rd.Kind)
+	}
+	if rd.ClusterGroup != "networkcontainer.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want networkcontainer.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "networkcontainer.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want networkcontainer.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestNetworkContainerFieldCounts pins the request/response/both field
+// counts documented in tools/openapi/inventory.md's "### NetworkContainer"
+// section (request=0, response=1, both=4).
+func TestNetworkContainerFieldCounts(t *testing.T) {
+	rd, ok := FindResource("networkcontainer")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "networkcontainer")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 1 {
+		t.Errorf("response-scope field count = %d, want 1", resp)
+	}
+	if both != 4 {
+		t.Errorf("both-scope field count = %d, want 4", both)
+	}
+}
+
+// TestNetworkContainerNetworkViewReference verifies the networkView field
+// carries a cross-resource reference targeting NetworkView (cluster-scoped),
+// per the blueprint's cross-resource reference table.
+func TestNetworkContainerNetworkViewReference(t *testing.T) {
+	rd, ok := FindResource("networkcontainer")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "networkcontainer")
+	}
+
+	var found bool
+	for _, f := range rd.Fields {
+		if f.Name != testKindNetworkView {
+			continue
+		}
+		found = true
+		if f.Reference == nil {
+			t.Fatalf("NetworkView field has no Reference descriptor")
+		}
+		if f.Reference.TargetKind != testKindNetworkView {
+			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
+		}
+		if f.Reference.TargetSlug != "networkview" {
+			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != "cluster" {
+			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
+		}
+		if !f.Immutable {
+			t.Errorf("NetworkView field must be Immutable (network_view is absent from UpdateNetworkContainer)")
+		}
+	}
+	if !found {
+		t.Fatalf("NetworkContainer descriptor has no NetworkView field")
 	}
 }
