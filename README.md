@@ -1,5 +1,10 @@
 # provider-infobloxnios
 
+> **Migrating from the Upjet provider?** This provider replaces
+> [`crossplane-contrib/provider-infoblox-nios`](https://github.com/crossplane-contrib/provider-infoblox-nios)
+> (v0.3.0). The credential format, API groups, and resource kinds have all
+> changed. See **[MIGRATION.md](MIGRATION.md)** for a step-by-step guide.
+
 `provider-infobloxnios` is a [Crossplane](https://crossplane.io/) Provider for
 [Infoblox NIOS](https://www.infoblox.com/products/nios/), built on the
 Crossplane v2 runtime. It manages Infoblox NIOS DDI (DNS, DHCP, IPAM)
