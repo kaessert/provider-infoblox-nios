@@ -214,26 +214,24 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	}
 
 	observed := fieldsFromZoneAuth(rec)
-	cr.Status.AtProvider = namespacedv1alpha1.ZoneAuthObservation{
-		ID:                  externalID,
-		FQDN:                strPtrOrNil(observed.FQDN),
-		View:                observed.View,
-		ZoneFormat:          strPtrOrNil(observed.ZoneFormat),
-		Comment:             observed.Comment,
-		Disable:             observed.Disable,
-		SoaDefaultTTL:       observed.SoaDefaultTTL,
-		SoaExpire:           observed.SoaExpire,
-		SoaNegativeTTL:      observed.SoaNegativeTTL,
-		SoaRefresh:          observed.SoaRefresh,
-		SoaRetry:            observed.SoaRetry,
-		NsGroup:             observed.NsGroup,
-		ExtAttrs:            observed.ExtAttrs,
-		GridPrimary:         namespacedMemberServersFromValues(observed.GridPrimary),
-		GridSecondaries:     namespacedMemberServersFromValues(observed.GridSecondaries),
-		ExternalPrimaries:   namespacedExternalServersFromValues(observed.ExternalPrimaries),
-		ExternalSecondaries: namespacedExternalServersFromValues(observed.ExternalSecondaries),
-		Ref:                 strPtrOrNil(rec.Ref),
-	}
+	cr.Status.AtProvider.ID = externalID
+	cr.Status.AtProvider.FQDN = strPtrOrNil(observed.FQDN)
+	cr.Status.AtProvider.View = observed.View
+	cr.Status.AtProvider.ZoneFormat = strPtrOrNil(observed.ZoneFormat)
+	cr.Status.AtProvider.Comment = observed.Comment
+	cr.Status.AtProvider.Disable = observed.Disable
+	cr.Status.AtProvider.SoaDefaultTTL = observed.SoaDefaultTTL
+	cr.Status.AtProvider.SoaExpire = observed.SoaExpire
+	cr.Status.AtProvider.SoaNegativeTTL = observed.SoaNegativeTTL
+	cr.Status.AtProvider.SoaRefresh = observed.SoaRefresh
+	cr.Status.AtProvider.SoaRetry = observed.SoaRetry
+	cr.Status.AtProvider.NsGroup = observed.NsGroup
+	cr.Status.AtProvider.ExtAttrs = observed.ExtAttrs
+	cr.Status.AtProvider.GridPrimary = namespacedMemberServersFromValues(observed.GridPrimary)
+	cr.Status.AtProvider.GridSecondaries = namespacedMemberServersFromValues(observed.GridSecondaries)
+	cr.Status.AtProvider.ExternalPrimaries = namespacedExternalServersFromValues(observed.ExternalPrimaries)
+	cr.Status.AtProvider.ExternalSecondaries = namespacedExternalServersFromValues(observed.ExternalSecondaries)
+	cr.Status.AtProvider.Ref = strPtrOrNil(rec.Ref)
 
 	p := &cr.Spec.ForProvider
 	desired := namespacedFieldsFromSpec(p)
