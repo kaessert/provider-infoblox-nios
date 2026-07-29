@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -699,6 +700,25 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteServerError verifies that a 5xx response from the WAPI
+// delete endpoint is propagated (wrapped, not swallowed) rather than being
+// treated as a not-found/already-deleted success.
+func TestClusterDeleteServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/test1:example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteZoneAuth) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteZoneAuth)
+	}
+}
+
 // ── cluster: Connect ──────────────────────────────────────────────────────
 
 func TestClusterConnectSuccess(t *testing.T) {
@@ -884,6 +904,25 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Errorf("Delete: expected nil error for already-deleted resource (404), got %v", err)
+	}
+}
+
+// TestNamespacedDeleteServerError verifies that a 5xx response from the
+// WAPI delete endpoint is propagated (wrapped, not swallowed) rather than
+// being treated as a not-found/already-deleted success.
+func TestNamespacedDeleteServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/test1:example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteZoneAuth) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteZoneAuth)
 	}
 }
 
