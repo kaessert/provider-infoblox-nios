@@ -86,6 +86,99 @@ func TestARecordFieldCounts(t *testing.T) {
 	}
 }
 
+// TestFindResourceAliasRecord verifies FindResource returns the AliasRecord
+// descriptor for its slug with the expected cluster/namespaced API groups.
+func TestFindResourceAliasRecord(t *testing.T) {
+	rd, ok := FindResource("recordalias")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordalias")
+	}
+	if rd.Kind != "AliasRecord" {
+		t.Errorf("Kind = %q, want AliasRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "recordalias.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want recordalias.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "recordalias.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want recordalias.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestAliasRecordFieldCounts pins the field-scope distribution live-verified
+// against a real NIOS Grid Manager appliance (request=0, response=2,
+// both=9) — a regression guard against catalog authoring drift.
+func TestAliasRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("recordalias")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordalias")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 2 {
+		t.Errorf("response-scope field count = %d, want 2", resp)
+	}
+	if both != 9 {
+		t.Errorf("both-scope field count = %d, want 9", both)
+	}
+}
+
+// TestAliasRecordImmutableFields verifies the view field is marked
+// Immutable (soft-immutable per live WAPI probing) while the remaining
+// settable fields are not.
+func TestAliasRecordImmutableFields(t *testing.T) {
+	rd, ok := FindResource("recordalias")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordalias")
+	}
+
+	for _, f := range rd.Fields {
+		wantImmutable := f.Name == "View" || f.Name == "Zone"
+		if f.Immutable != wantImmutable {
+			t.Errorf("field %s: Immutable = %v, want %v", f.Name, f.Immutable, wantImmutable)
+		}
+	}
+}
+
+// TestAliasRecordTargetTypeEnum verifies the target_type field carries the
+// live-verified enum of record types an alias may resolve to.
+func TestAliasRecordTargetTypeEnum(t *testing.T) {
+	rd, ok := FindResource("recordalias")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordalias")
+	}
+
+	want := []string{"A", "AAAA", "MX", "NAPTR", "PTR", "SPF", "SRV", "TXT"}
+	for _, f := range rd.Fields {
+		if f.Name != "TargetType" {
+			continue
+		}
+		if len(f.Enum) != len(want) {
+			t.Fatalf("TargetType enum = %v, want %v", f.Enum, want)
+		}
+		for i, v := range want {
+			if f.Enum[i] != v {
+				t.Errorf("TargetType enum[%d] = %q, want %q", i, f.Enum[i], v)
+			}
+		}
+		return
+	}
+	t.Fatalf("AliasRecord descriptor has no TargetType field")
+}
+
 // TestAllContainsTXTRecord verifies the catalog's All() includes TXTRecord
 // with a non-empty field list and nested types (AwsRte53RecordInfo,
 // CloudInfo, MsAdUserData — a zero-field or zero-nested-type descriptor

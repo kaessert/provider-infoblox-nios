@@ -242,6 +242,7 @@ func All() []ResourceDescriptor {
 	return []ResourceDescriptor{
 		aRecord(),
 		aaaaRecord(),
+		aliasRecord(),
 		cnameRecord(),
 		hostRecord(),
 		mxRecord(),

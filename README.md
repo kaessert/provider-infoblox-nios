@@ -251,6 +251,60 @@ kubectl apply -f examples/record-aaaa/record-aaaa.yaml
 kubectl apply -f examples/record-aaaa/record-aaaa-namespaced.yaml
 ```
 
+### AliasRecord
+
+Manage Infoblox NIOS DNS "Alias" records (WAPI object type `record:alias`).
+An alias record resolves queries for its own name to another target name of
+a specified record type (A, AAAA, MX, NAPTR, PTR, SPF, SRV, or TXT).
+
+**Cluster-scoped** (`recordalias.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordalias.infobloxnios.crossplane.io/v1alpha1
+kind: AliasRecord
+metadata:
+  name: example-aliasrecord
+spec:
+  forProvider:
+    name: alias-test.example.com
+    targetName: target.example.com
+    targetType: A
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordalias.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordalias.infobloxnios.m.crossplane.io/v1alpha1
+kind: AliasRecord
+metadata:
+  name: example-aliasrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: alias-test-ns.example.com
+    targetName: target-ns.example.com
+    targetType: A
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:alias/ZG5zLmJpbmRfYWxpYXMk:alias-test.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `view` field is soft-immutable: the WAPI schema advertises it as
+updatable, but a live update attempt is rejected at the data level, so it is
+treated as fixed at creation (CEL rule enforced). `targetName` and
+`targetType` are mutable — updating them does not change the record's
+`_ref`.
+
 ### PTRRecord
 
 Manage Infoblox NIOS DNS "PTR" records (WAPI object type `record:ptr`).

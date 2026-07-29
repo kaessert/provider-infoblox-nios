@@ -1,0 +1,51 @@
+# AliasRecord is a cluster-scoped Infoblox NIOS DNS "Alias" record (WAPI
+# object type record:alias). See record-alias-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:alias/ZG5zLmJpbmRfYWxpYXMk:alias-test.example.com/default")
+# from Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   name:       alias name in FQDN format. WAPI ties the record's `_ref` to
+#               (view, zone, name); the controller re-syncs the annotation
+#               if a rename changes the `_ref`.
+#   targetName: target name in FQDN format that this alias resolves to.
+#               Live-verified: updating this field does not change the
+#               record's `_ref`.
+#   targetType: record type the alias resolves to. One of A, AAAA, MX,
+#               NAPTR, PTR, SPF, SRV, TXT.
+#   view:       the DNS view the record is created in. Soft-immutable — the
+#               WAPI schema advertises this field as updatable, but a live
+#               update attempt is rejected at the data level, so it is
+#               treated as fixed at creation (CEL rule enforced).
+#
+# Optional mutable fields: comment, disable, ttl, useTtl, extAttrs.
+apiVersion: recordalias.infobloxnios.crossplane.io/v1alpha1
+kind: AliasRecord
+metadata:
+  name: example-aliasrecord
+  annotations:
+    meta.upbound.io/example-id: recordalias/v1alpha1/aliasrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-alias.sh
+    # comment is the mutable scalar exercised here. targetName is also
+    # live-verified mutable (does not rotate the WAPI `_ref`), but comment
+    # keeps this update check minimal and stable.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: alias-test.example.com
+    targetName: target.example.com
+    targetType: A
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

@@ -82,6 +82,7 @@ space := $(empty) $(empty)
 # Per-resource manifest variables (comma pair of cluster + namespaced variants,
 # so `make e2e.<resource>` gates both scopes).
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
@@ -109,8 +110,8 @@ UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespa
 # TXTRecord is tier:core — only needs API credentials (INFOBLOX_HOST,
 # INFOBLOX_USER, INFOBLOX_PASS), no external infrastructure beyond the NIOS
 # Grid Manager itself. HostRecord, Network, RangeTemplate, ZoneAuth,
-# IPv4SharedNetwork, NetworkContainer, FixedAddress, ZoneForward, and Range are also tier:core.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE)
+# IPv4SharedNetwork, NetworkContainer, FixedAddress, ZoneForward, Range, and AliasRecord are also tier:core.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -150,6 +151,9 @@ e2e: e2e-preflight
 # Per-resource E2E targets
 e2e.record-aaaa: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_AAAA)
 e2e.record-aaaa: e2e
+
+e2e.record-alias: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_ALIAS)
+e2e.record-alias: e2e
 
 e2e.record-ptr: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_PTR)
 e2e.record-ptr: e2e
@@ -204,7 +208,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -229,6 +233,12 @@ update-test.record-aaaa: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/record-aaaa/record-aaaa.yaml
 	$(UPDATE_TESTER) converge examples/record-aaaa/record-aaaa-namespaced.yaml
 	$(UPDATE_TESTER) run examples/record-aaaa/record-aaaa-namespaced.yaml
+
+update-test.record-alias: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/record-alias/record-alias.yaml
+	$(UPDATE_TESTER) run examples/record-alias/record-alias.yaml
+	$(UPDATE_TESTER) converge examples/record-alias/record-alias-namespaced.yaml
+	$(UPDATE_TESTER) run examples/record-alias/record-alias-namespaced.yaml
 
 update-test.record-ptr: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/record-ptr/record-ptr.yaml
@@ -266,7 +276,7 @@ update-test.ipv4-shared-network: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 
-.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network
+.PHONY: update-test.record-aaaa update-test.record-alias update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network
 
 update-test.network-view: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/network-view/network-view.yaml
