@@ -31,6 +31,8 @@ resources declaratively using Kubernetes custom resources.
   reserving a CIDR block for later child networks and ranges
 - **ZoneForward** — create and manage Infoblox NIOS forward DNS zones
   (cluster-scoped and namespace-scoped)
+- **FixedAddress** — create and manage Infoblox NIOS DHCP fixed addresses
+  (cluster-scoped and namespace-scoped)
 - Dual-scope managed resources: cluster-scoped (`infobloxnios.crossplane.io`)
   and namespace-scoped (`infobloxnios.m.crossplane.io`)
 - Standard Crossplane management policies, usage tracking, and connection
@@ -1061,6 +1063,68 @@ kubectl apply -f examples/network-container/network-container.yaml
 kubectl apply -f examples/network-container/network-container-namespaced.yaml
 kubectl apply -f examples/zone-forward/zone-forward.yaml
 kubectl apply -f examples/zone-forward/zone-forward-namespaced.yaml
+```
+
+### FixedAddress
+
+Manage Infoblox NIOS DHCP fixed addresses (WAPI object type `fixedaddress`,
+or `ipv6fixedaddress` for an IPv6 address). A fixed address reserves a
+specific IP for a specific client, identified by MAC address, DHCP client
+identifier, or circuit/remote ID, depending on `matchClient`.
+
+**Cluster-scoped** (`fixedaddress.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: fixedaddress.infobloxnios.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address
+spec:
+  forProvider:
+    ipv4addr: 10.0.0.50
+    mac: "00:00:00:00:00:00"
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`fixedaddress.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: fixedaddress.infobloxnios.m.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-ns
+  namespace: default
+spec:
+  forProvider:
+    ipv4addr: 10.0.0.51
+    mac: "00:00:00:00:00:00"
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI's `AllocateIP` call (the SDK's non-standard name for
+Create on this object type) returns an opaque `_ref` reference
+(e.g. `fixedaddress/ZG5zLmZpeGVkX2FkZHJlc3Mk...:10.0.0.50/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually. The `_ref` is unstable: changing `ipv4addr`/`ipv6addr`
+changes it.
+
+Exactly one of `ipv4addr` or `ipv6addr` must be set (mutually exclusive
+address families, enforced by a CRD validation rule). No immutable fields
+are known for this resource — every parameter accepted by the WAPI create
+call is also accepted by the update call.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/fixed-address/fixed-address.yaml
+kubectl apply -f examples/fixed-address/fixed-address-namespaced.yaml
 ```
 
 ## Development

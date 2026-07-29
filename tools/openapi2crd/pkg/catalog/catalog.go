@@ -71,6 +71,13 @@ const (
 	// IPv4SharedNetwork.networks resolves to the referenced Network's
 	// spec.forProvider.network CIDR, not its crossplane.io/external-name.
 	extractFieldFuncPath = "github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField"
+	// fieldNameName/jsonNameName are the same recurring "Name"/"name"
+	// FieldDef.Name/JSONName pair, used both by top-level resource fields
+	// (e.g. ARecord.Name, NetworkView.Name) and by nested Grid-member-style
+	// types (e.g. ARecordCloudInfoDelegatedMember.Name,
+	// FixedAddressCloudInfoDelegatedMember.Name).
+	fieldNameName = "Name"
+	jsonNameName  = "name"
 )
 
 // FieldDef describes one field of a resource or nested type.
@@ -237,6 +244,7 @@ func All() []ResourceDescriptor {
 		zoneDelegated(),
 		network(),
 		networkView(),
+		fixedAddress(),
 		rangeTemplate(),
 		ipv4SharedNetwork(),
 		networkContainer(),

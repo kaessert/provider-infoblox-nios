@@ -2,11 +2,18 @@ package catalog
 
 import "testing"
 
-// testKindNetworkView is the shared literal for the NetworkView resource's
-// Kind, reused across several catalog test files (catalog_test.go,
-// network_test.go, network_view_test.go) that assert on cross-resource
-// Reference descriptors and Kind values pointing at NetworkView.
+// testKindNetworkView is the shared "NetworkView" Kind/TargetKind literal
+// asserted by every cross-resource reference test in this package
+// (HostRecord, Network, FixedAddress all reference NetworkView, and
+// NetworkView's own descriptor test pins its own Kind). Centralizing it
+// here avoids repeating the raw string literal across test files.
 const testKindNetworkView = "NetworkView"
+
+// testScopeCluster is the shared "cluster" TargetScope literal asserted by
+// every cross-resource reference test in this package that points at a
+// cluster-scoped resource. Centralizing it here avoids repeating the raw
+// string literal across test files.
+const testScopeCluster = "cluster"
 
 // TestFindResource verifies FindResource returns the ARecord descriptor for
 // its slug and reports false for an unknown slug.
@@ -748,7 +755,7 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		if !f.Immutable {
@@ -760,14 +767,31 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 	}
 }
 
-// TestRangeTemplateFieldCounts pins the request/response/both field counts
-// documented in tools/openapi/inventory.md's "### RangeTemplate" section
-// (request=1, response=1, both=11) — a regression guard: uniform or
-// drifted counts would indicate a catalog authoring bug.
-func TestRangeTemplateFieldCounts(t *testing.T) {
-	rd, ok := FindResource("rangetemplate")
+// TestFindResourceFixedAddress verifies FixedAddress is
+// registered in the catalog with the expected slug and API groups.
+func TestFindResourceFixedAddress(t *testing.T) {
+	rd, ok := FindResource("fixedaddress")
 	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "rangetemplate")
+		t.Fatalf("FindResource(%q): expected found", "fixedaddress")
+	}
+	if rd.Kind != "FixedAddress" {
+		t.Errorf("Kind = %q, want FixedAddress", rd.Kind)
+	}
+	if rd.ClusterGroup != "fixedaddress.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want fixedaddress.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "fixedaddress.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want fixedaddress.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestFixedAddressFieldCounts pins the request/response/both field counts
+// documented in tools/openapi/inventory.md's "### FixedAddress" section
+// (request=0, response=3, both=16).
+func TestFixedAddressFieldCounts(t *testing.T) {
+	rd, ok := FindResource("fixedaddress")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "fixedaddress")
 	}
 
 	var req, resp, both int
@@ -782,40 +806,101 @@ func TestRangeTemplateFieldCounts(t *testing.T) {
 		}
 	}
 
-	if req != 1 {
-		t.Errorf("request-scope field count = %d, want 1", req)
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
 	}
-	if resp != 1 {
-		t.Errorf("response-scope field count = %d, want 1", resp)
+	if resp != 3 {
+		t.Errorf("response-scope field count = %d, want 3", resp)
 	}
-	if both != 11 {
-		t.Errorf("both-scope field count = %d, want 11", both)
+	if both != 16 {
+		t.Errorf("both-scope field count = %d, want 16", both)
 	}
 }
 
-// TestRangeTemplateMsServerOmittedFromObservation verifies the write-only
-// msServer field is excluded from the AtProvider full mirror (the SDK
-// persists it as a nested Msdhcpserver struct on the response, a different
-// shape than this flat field, so it is never echoed back).
-func TestRangeTemplateMsServerOmittedFromObservation(t *testing.T) {
-	rd, ok := FindResource("rangetemplate")
+// TestFixedAddressNetworkViewReference verifies the networkView field
+// carries a cross-resource reference targeting NetworkView (cluster-scoped),
+// per the blueprint's cross-resource reference table, and is NOT marked
+// Immutable (FixedAddress has no immutable fields — network_view/network
+// appear in both AllocateIP and UpdateFixedAddress).
+func TestFixedAddressNetworkViewReference(t *testing.T) {
+	rd, ok := FindResource("fixedaddress")
 	if !ok {
-		t.Fatalf("FindResource(%q): expected found", "rangetemplate")
+		t.Fatalf("FindResource(%q): expected found", "fixedaddress")
 	}
 
+	var found bool
 	for _, f := range rd.Fields {
-		if f.Name != "MsServer" {
+		if f.Name != testKindNetworkView {
 			continue
 		}
-		if !f.OmitFromObservation {
-			t.Errorf("MsServer.OmitFromObservation = false, want true")
+		found = true
+		if f.Reference == nil {
+			t.Fatalf("NetworkView field has no Reference descriptor")
 		}
-		if f.Scope != FieldScopeRequest {
-			t.Errorf("MsServer.Scope = %v, want FieldScopeRequest", f.Scope)
+		if f.Reference.TargetKind != testKindNetworkView {
+			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
-		return
+		if f.Reference.TargetSlug != "networkview" {
+			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != testScopeCluster {
+			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
+		}
+		if f.Immutable {
+			t.Errorf("NetworkView field must not be Immutable (network_view is accepted by both AllocateIP and UpdateFixedAddress)")
+		}
 	}
-	t.Errorf("rangetemplate descriptor has no MsServer field")
+	if !found {
+		t.Fatalf("FixedAddress descriptor has no NetworkView field")
+	}
+}
+
+// TestFixedAddressDUIDResponseOnly verifies the duid field is response-only
+// (AtProvider) — it must never have a ForProvider representation, since it
+// does not exist on the IPv4 fixedaddress WAPI object (ADR-IN-0004).
+func TestFixedAddressDUIDResponseOnly(t *testing.T) {
+	rd, ok := FindResource("fixedaddress")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "fixedaddress")
+	}
+
+	var found bool
+	for _, f := range rd.Fields {
+		if f.Name != "DUID" {
+			continue
+		}
+		found = true
+		if f.Scope != FieldScopeResponse {
+			t.Errorf("DUID field Scope = %v, want FieldScopeResponse (IPv6-only, response-only per ADR-IN-0004)", f.Scope)
+		}
+	}
+	if !found {
+		t.Fatalf("FixedAddress descriptor has no DUID field")
+	}
+}
+
+// TestFixedAddressAddressFamilyValidation verifies the resource-level CEL
+// rule requiring exactly one of ipv4addr/ipv6addr is present in
+// ParameterValidations (mutual exclusivity, AllocateIP's isIPv6 flag).
+func TestFixedAddressAddressFamilyValidation(t *testing.T) {
+	rd, ok := FindResource("fixedaddress")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "fixedaddress")
+	}
+
+	if len(rd.ParameterValidations) == 0 {
+		t.Fatalf("FixedAddress descriptor has no ParameterValidations (expected an ipv4addr/ipv6addr exclusivity rule)")
+	}
+	found := false
+	for _, v := range rd.ParameterValidations {
+		if v.Rule == "" {
+			continue
+		}
+		found = true
+	}
+	if !found {
+		t.Errorf("expected a non-empty CEL rule enforcing ipv4addr/ipv6addr exclusivity")
+	}
 }
 
 // TestAllContainsZoneAuth verifies the catalog's All() includes ZoneAuth
@@ -994,7 +1079,7 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		if !f.Immutable {

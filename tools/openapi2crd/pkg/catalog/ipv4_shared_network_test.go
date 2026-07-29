@@ -177,8 +177,8 @@ func TestIPv4SharedNetworkNetworksReference(t *testing.T) {
 		if f.Reference.TargetSlug != "network" {
 			t.Errorf("networks Reference.TargetSlug = %q, want %q", f.Reference.TargetSlug, "network")
 		}
-		if f.Reference.TargetScope != "cluster" {
-			t.Errorf("networks Reference.TargetScope = %q, want %q", f.Reference.TargetScope, "cluster")
+		if f.Reference.TargetScope != testScopeCluster {
+			t.Errorf("networks Reference.TargetScope = %q, want %q", f.Reference.TargetScope, testScopeCluster)
 		}
 		wantExtractor := extractFieldFuncPath + `("spec.forProvider.network")`
 		if f.Reference.Extractor != wantExtractor {

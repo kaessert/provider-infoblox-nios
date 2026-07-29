@@ -1,0 +1,542 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: fixedaddresses.fixedaddress.infobloxnios.m.crossplane.io
+spec:
+  group: fixedaddress.infobloxnios.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - infobloxnios
+    kind: FixedAddress
+    listKind: FixedAddressList
+    plural: fixedaddresses
+    singular: fixedaddress
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: FixedAddress is the Namespaced-scoped managed resource representing
+          an Infoblox NIOS FixedAddress.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: FixedAddressSpec defines the desired state of FixedAddress.
+            properties:
+              forProvider:
+                description: ForProvider holds the user-supplied parameters for this
+                  FixedAddress.
+                properties:
+                  agentCircuitId:
+                    description: Agent circuit ID. Required by WAPI when matchClient
+                      is CIRCUIT_ID (business rule, not CRD-enforced).
+                    type: string
+                  agentRemoteId:
+                    description: Agent remote ID. Required by WAPI when matchClient
+                      is REMOTE_ID (business rule, not CRD-enforced).
+                    type: string
+                  clientIdentifierPrependZero:
+                    description: Whether a leading zero is prepended to the client
+                      identifier.
+                    type: boolean
+                  comment:
+                    description: Comment for the fixed address.
+                    type: string
+                  dhcpClientIdentifier:
+                    description: DHCP client identifier. Required by WAPI when matchClient
+                      is CLIENT_ID (business rule, not CRD-enforced).
+                    type: string
+                  disable:
+                    description: Whether the fixed address is disabled.
+                    type: boolean
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  ipv4addr:
+                    description: IPv4 address of the fixed address. Mutually exclusive
+                      with ipv6addr — exactly one of the two must be set. May be set
+                      statically or allocated dynamically from a CIDR (network) at
+                      create time. Changing this value changes the record's _ref (UNSTABLE
+                      external name, ADR-IN-0004).
+                    type: string
+                  ipv6addr:
+                    description: IPv6 address of the fixed address. Mutually exclusive
+                      with ipv4addr — exactly one of the two must be set. Selects
+                      the ipv6fixedaddress WAPI object type.
+                    type: string
+                  mac:
+                    description: MAC address for MAC_ADDRESS/CIRCUIT_ID/REMOTE_ID
+                      match_client modes (IPv4 only — for IPv6 this field carries
+                      the DHCP unique identifier and AllocateIP rejects an empty value).
+                      For IPv4, the SDK defaults this to the zero MAC address (00:00:00:00:00:00)
+                      when omitted and no match_client is set, so it is not catalog-Required.
+                    type: string
+                  matchClient:
+                    description: How the fixed IP is matched to a requesting client.
+                      CIRCUIT_ID requires agentCircuitId; REMOTE_ID requires agentRemoteId;
+                      CLIENT_ID requires dhcpClientIdentifier (business-rule constraints
+                      enforced by WAPI at apply time, not by CRD schema validation).
+                    enum:
+                    - MAC_ADDRESS
+                    - CLIENT_ID
+                    - RESERVED
+                    - CIRCUIT_ID
+                    - REMOTE_ID
+                    type: string
+                  name:
+                    description: Display name of the fixed address.
+                    type: string
+                  network:
+                    description: CIDR used to resolve a dynamically-allocated address
+                      at create time, e.g. "10.0.0.0/24". Only meaningful when ipv4addr/ipv6addr
+                      is not a literal address.
+                    type: string
+                  networkView:
+                    description: Network view the fixed address belongs to. Defaults
+                      to "default" when unset. Identifies a NetworkView by name.
+                    type: string
+                  networkViewRef:
+                    description: A NamespacedReference to a named object.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        type: string
+                      namespace:
+                        description: Namespace of the referenced object
+                        type: string
+                      policy:
+                        description: Policies for referencing.
+                        properties:
+                          resolution:
+                            default: Required
+                            description: |-
+                              Resolution specifies whether resolution of this reference is required.
+                              The default is 'Required', which means the reconcile will fail if the
+                              reference cannot be resolved. 'Optional' means this reference will be
+                              a no-op if it cannot be resolved.
+                            enum:
+                            - Required
+                            - Optional
+                            type: string
+                          resolve:
+                            description: |-
+                              Resolve specifies when this reference should be resolved. The default
+                              is 'IfNotPresent', which will attempt to resolve the reference only when
+                              the corresponding field is not present. Use 'Always' to resolve the
+                              reference on every reconcile.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            type: string
+                        type: object
+                    required:
+                    - name
+                    type: object
+                  networkViewSelector:
+                    description: NamespacedSelector selects a namespaced object.
+                    properties:
+                      matchControllerRef:
+                        description: |-
+                          MatchControllerRef ensures an object with the same controller reference
+                          as the selecting object is selected.
+                        type: boolean
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: MatchLabels ensures an object with matching labels
+                          is selected.
+                        type: object
+                      namespace:
+                        description: Namespace for the selector
+                        type: string
+                      policy:
+                        description: Policies for selection.
+                        properties:
+                          resolution:
+                            default: Required
+                            description: |-
+                              Resolution specifies whether resolution of this reference is required.
+                              The default is 'Required', which means the reconcile will fail if the
+                              reference cannot be resolved. 'Optional' means this reference will be
+                              a no-op if it cannot be resolved.
+                            enum:
+                            - Required
+                            - Optional
+                            type: string
+                          resolve:
+                            description: |-
+                              Resolve specifies when this reference should be resolved. The default
+                              is 'IfNotPresent', which will attempt to resolve the reference only when
+                              the corresponding field is not present. Use 'Always' to resolve the
+                              reference on every reconcile.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            type: string
+                        type: object
+                    type: object
+                  options:
+                    description: DHCP options for the fixed address.
+                    items:
+                      description: FixedAddressDhcpOption is one DHCP option entry
+                        for a FixedAddress (mirrors the SDK's Dhcpoption struct).
+                      properties:
+                        name:
+                          description: Name of the DHCP option.
+                          type: string
+                        num:
+                          description: The code of the DHCP option.
+                          format: int64
+                          type: integer
+                        useOption:
+                          description: Only applies to special options that are displayed
+                            separately from other options and have a use flag.
+                          type: boolean
+                        value:
+                          description: Value of the DHCP option.
+                          type: string
+                        vendorClass:
+                          description: The name of the space this DHCP option is associated
+                            to.
+                          type: string
+                      type: object
+                    type: array
+                  useOptions:
+                    description: Use flag for options.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of ipv4addr or ipv6addr must be set (mutually
+                    exclusive address families)
+                  rule: (has(self.ipv4addr) && !has(self.ipv6addr)) || (!has(self.ipv4addr)
+                    && has(self.ipv6addr))
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: FixedAddressStatus defines the observed state of FixedAddress.
+            properties:
+              atProvider:
+                description: AtProvider holds the observed values from the Infoblox
+                  NIOS WAPI.
+                properties:
+                  agentCircuitId:
+                    description: Agent circuit ID. Required by WAPI when matchClient
+                      is CIRCUIT_ID (business rule, not CRD-enforced).
+                    type: string
+                  agentRemoteId:
+                    description: Agent remote ID. Required by WAPI when matchClient
+                      is REMOTE_ID (business rule, not CRD-enforced).
+                    type: string
+                  clientIdentifierPrependZero:
+                    description: Whether a leading zero is prepended to the client
+                      identifier.
+                    type: boolean
+                  cloudInfo:
+                    description: Cloud API related information for this object (cloud-managed
+                      fixed addresses only).
+                    properties:
+                      authorityType:
+                        description: Type of authority over the object.
+                        type: string
+                      delegatedMember:
+                        description: The Cloud Platform Appliance to which authority
+                          of the object is delegated.
+                        properties:
+                          ipv4addr:
+                            description: The IPv4 Address of the Grid Member.
+                            type: string
+                          ipv6addr:
+                            description: The IPv6 Address of the Grid Member.
+                            type: string
+                          name:
+                            description: The Grid member name
+                            type: string
+                        type: object
+                      delegatedRoot:
+                        description: Indicates the root of the delegation if delegated_scope
+                          is SUBTREE or RECLAIMING. This is not set otherwise.
+                        type: string
+                      delegatedScope:
+                        description: 'Indicates the scope of delegation for the object.
+                          This can be one of the following: NONE (outside any delegation),
+                          ROOT (the delegation point), SUBTREE (within the scope of
+                          a delegation), RECLAIMING (within the scope of a delegation
+                          being reclaimed, either as the delegation point or in the
+                          subtree).'
+                        type: string
+                      mgmtPlatform:
+                        description: Indicates the specified cloud management platform.
+                        type: string
+                      ownedByAdaptor:
+                        description: Determines whether the object was created by
+                          the cloud adapter or not.
+                        type: boolean
+                      tenant:
+                        description: Reference to the tenant object associated with
+                          the object, if any.
+                        type: string
+                      usage:
+                        description: Indicates the cloud origin of the object.
+                        type: string
+                    type: object
+                  comment:
+                    description: Comment for the fixed address.
+                    type: string
+                  dhcpClientIdentifier:
+                    description: DHCP client identifier. Required by WAPI when matchClient
+                      is CLIENT_ID (business rule, not CRD-enforced).
+                    type: string
+                  disable:
+                    description: Whether the fixed address is disabled.
+                    type: boolean
+                  duid:
+                    description: DHCP unique identifier. IPv6 only — this field exists
+                      on the shared Go SDK struct but is only ever populated by WAPI
+                      for the ipv6fixedaddress object type, not the IPv4 fixedaddress
+                      object type (ADR-IN-0004, live-verified).
+                    type: string
+                  extAttrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
+                  ipv4addr:
+                    description: IPv4 address of the fixed address. Mutually exclusive
+                      with ipv6addr — exactly one of the two must be set. May be set
+                      statically or allocated dynamically from a CIDR (network) at
+                      create time. Changing this value changes the record's _ref (UNSTABLE
+                      external name, ADR-IN-0004).
+                    type: string
+                  ipv6addr:
+                    description: IPv6 address of the fixed address. Mutually exclusive
+                      with ipv4addr — exactly one of the two must be set. Selects
+                      the ipv6fixedaddress WAPI object type.
+                    type: string
+                  mac:
+                    description: MAC address for MAC_ADDRESS/CIRCUIT_ID/REMOTE_ID
+                      match_client modes (IPv4 only — for IPv6 this field carries
+                      the DHCP unique identifier and AllocateIP rejects an empty value).
+                      For IPv4, the SDK defaults this to the zero MAC address (00:00:00:00:00:00)
+                      when omitted and no match_client is set, so it is not catalog-Required.
+                    type: string
+                  matchClient:
+                    description: How the fixed IP is matched to a requesting client.
+                      CIRCUIT_ID requires agentCircuitId; REMOTE_ID requires agentRemoteId;
+                      CLIENT_ID requires dhcpClientIdentifier (business-rule constraints
+                      enforced by WAPI at apply time, not by CRD schema validation).
+                    type: string
+                  name:
+                    description: Display name of the fixed address.
+                    type: string
+                  network:
+                    description: CIDR used to resolve a dynamically-allocated address
+                      at create time, e.g. "10.0.0.0/24". Only meaningful when ipv4addr/ipv6addr
+                      is not a literal address.
+                    type: string
+                  networkView:
+                    description: Network view the fixed address belongs to. Defaults
+                      to "default" when unset. Identifies a NetworkView by name.
+                    type: string
+                  options:
+                    description: DHCP options for the fixed address.
+                    items:
+                      description: FixedAddressDhcpOption is one DHCP option entry
+                        for a FixedAddress (mirrors the SDK's Dhcpoption struct).
+                      properties:
+                        name:
+                          description: Name of the DHCP option.
+                          type: string
+                        num:
+                          description: The code of the DHCP option.
+                          format: int64
+                          type: integer
+                        useOption:
+                          description: Only applies to special options that are displayed
+                            separately from other options and have a use flag.
+                          type: boolean
+                        value:
+                          description: Value of the DHCP option.
+                          type: string
+                        vendorClass:
+                          description: The name of the space this DHCP option is associated
+                            to.
+                          type: string
+                      type: object
+                    type: array
+                  ref:
+                    description: Server-assigned opaque object reference (WAPI `_ref`).
+                      Mirrors the crossplane.io/external-name annotation for observability
+                      and uptest import verification. UNSTABLE — changes when ipv4addr
+                      changes (ADR-IN-0004).
+                    type: string
+                  useOptions:
+                    description: Use flag for options.
+                    type: boolean
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

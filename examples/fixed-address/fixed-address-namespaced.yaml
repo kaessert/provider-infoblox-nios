@@ -1,0 +1,35 @@
+# FixedAddress is the namespace-scoped variant of the Infoblox NIOS DHCP
+# fixed address. See fixed-address.yaml for the cluster-scoped variant and
+# full field documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the ipv4addr below differs from fixed-address.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once without
+# colliding on the same address.
+apiVersion: fixedaddress.infobloxnios.m.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address-namespaced.sh
+    # comment is the only mutable scalar exercised here — see
+    # fixed-address.yaml for full field documentation.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    ipv4addr: 10.0.0.51
+    mac: "00:00:00:00:00:00"
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

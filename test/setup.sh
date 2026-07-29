@@ -56,6 +56,18 @@
 #     any /25 subnet already registered within it), so the two member
 #     networks used by the cluster-scoped and namespaced examples MUST
 #     NOT be a superset/subset pair of each other.
+#   - Network 10.0.0.0/24 in the "default" network view — the FixedAddress
+#     example manifests allocate literal addresses (10.0.0.50, 10.0.0.51)
+#     via WAPI's AllocateIP path, which unconditionally requires a parent
+#     Network object covering the address (unlike HostRecord's DNS
+#     registration path, which can bypass this via configureForDns).
+#     Created directly via a WAPI POST (bypassing the Network managed
+#     resource so this prerequisite network is not coupled to any single
+#     resource's CRUD lifecycle), guarded by a GET so re-running setup.sh
+#     is a no-op once the network exists. The Network example manifests
+#     deliberately target a different CIDR (TEST-NET-2, 198.51.100.0/24)
+#     so their own Create/Delete lifecycle never collides with this
+#     pre-provisioned 10.0.0.0/24/default network.
 #
 # Usage: test/setup.sh
 #   Requires a running kind cluster with Crossplane installed and
@@ -226,6 +238,22 @@ for NETWORK_CIDR in "203.0.113.0/25" "203.0.113.128/25"; do
     echo "    Network ${NETWORK_CIDR} already exists in view default — skipping."
   fi
 done
+
+echo "==> Ensuring the 10.0.0.0/24 network exists in the default network view..."
+
+NETWORK_LOOKUP=$(curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+  "${WAPI_BASE}/network?network=10.0.0.0/24&network_view=default")
+
+if [ "${NETWORK_LOOKUP}" = "[]" ]; then
+  echo "    Network 10.0.0.0/24 not found in view default — creating it..."
+  curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+    -X POST "${WAPI_BASE}/network" \
+    -H "Content-Type: application/json" \
+    -d '{"network": "10.0.0.0/24", "network_view": "default"}' >/dev/null
+  echo "    Created network 10.0.0.0/24/default."
+else
+  echo "    Network 10.0.0.0/24 already exists in view default — skipping."
+fi
 
 echo "==> E2E setup complete."
 echo "    NIOS Grid Manager: ${INFOBLOX_HOST}"
