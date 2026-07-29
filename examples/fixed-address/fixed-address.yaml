@@ -16,8 +16,12 @@
 #                          exclusive address families, enforced by a CRD
 #                          validation rule). This example uses ipv4addr with
 #                          a literal address rather than dynamic allocation
-#                          from a network CIDR, so it runs standalone
-#                          without creating a Network resource first.
+#                          from a network CIDR. AllocateIP unconditionally
+#                          requires a parent Network object covering the
+#                          address (unlike HostRecord, which can bypass
+#                          this via configureForDns) — test/setup.sh
+#                          provisions 10.0.0.0/24 in the default network
+#                          view as a prerequisite before this example runs.
 #
 # Create behavior: synchronous — the WAPI POST (AllocateIP) returns the
 # `_ref` immediately; no async polling is needed.
