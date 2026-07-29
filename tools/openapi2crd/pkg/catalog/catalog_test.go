@@ -2,7 +2,6 @@ package catalog
 
 import "testing"
 
-
 // testScopeCluster is the shared "cluster" TargetScope literal asserted by
 // every cross-resource reference test in this package that points at a
 // cluster-scoped resource. Centralizing it here avoids repeating the raw
