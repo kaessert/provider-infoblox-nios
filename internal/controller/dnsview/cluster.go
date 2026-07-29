@@ -99,6 +99,11 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DNSView
 	observed := fieldsFromView(v)
 	cloudInfo := cloudInfoValueFromSDK(v.CloudInfo)
 	cr.Status.AtProvider = clusterObservationFromFields(observed, externalID, strPtrOrNil(v.Ref), &v.IsDefault, cloudInfo)
+	// Explicit assignment (rather than relying solely on the ID field
+	// folded into the struct literal above) keeps the server-assigned
+	// identifier's provenance obvious at the call site — it always
+	// mirrors the external name used to fetch this view.
+	cr.Status.AtProvider.ID = externalID
 
 	desired := fieldsFromClusterParams(&cr.Spec.ForProvider)
 	lateInit, changed := lateInitializeFields(desired, observed)
