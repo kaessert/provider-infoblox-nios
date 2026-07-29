@@ -7,12 +7,8 @@
 #   username: WAPI username
 #   password: WAPI password
 #
-# Optional key:
-#   ssl_verify: (optional) "false" to disable TLS certificate verification
-#     for Grid Managers presenting a self-signed certificate whose SAN does
-#     not match the reachable host address. Defaults to "true" (verify)
-#     when the key is absent or set to any value other than exactly
-#     "false".
+# TLS certificate verification is controlled by spec.sslVerify on the
+# ProviderConfig / ClusterProviderConfig below, not by a Secret key.
 #
 # To create from the E2E credential env vars (INFOBLOX_HOST, INFOBLOX_USER,
 # INFOBLOX_PASS):
@@ -38,6 +34,10 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  # sslVerify: set to false only when the Grid Manager presents a
+  # self-signed certificate whose SAN does not match the reachable host
+  # address. Defaults to true (verify) when omitted.
+  sslVerify: true
   credentials:
     source: Secret
     secretRef:
@@ -55,6 +55,10 @@ metadata:
   name: default
   namespace: default
 spec:
+  # sslVerify: set to false only when the Grid Manager presents a
+  # self-signed certificate whose SAN does not match the reachable host
+  # address. Defaults to true (verify) when omitted.
+  sslVerify: true
   credentials:
     source: Secret
     secretRef:
@@ -69,6 +73,10 @@ kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  # sslVerify: set to false only when the Grid Manager presents a
+  # self-signed certificate whose SAN does not match the reachable host
+  # address. Defaults to true (verify) when omitted.
+  sslVerify: true
   credentials:
     source: Secret
     secretRef:
