@@ -1,0 +1,331 @@
+package zoneforward
+
+import (
+	"context"
+
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
+	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneforward/v1alpha1"
+)
+
+const namespacedControllerName = "namespaced-zoneforward.infobloxnios.m.crossplane.io"
+
+// ── Namespaced controller ────────────────────────────────────────────────
+
+// +kubebuilder:rbac:groups=zoneforward.infobloxnios.m.crossplane.io,resources=zoneforwards,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=zoneforward.infobloxnios.m.crossplane.io,resources=zoneforwards/status,verbs=get;update;patch
+
+// namespacedConnector implements managed.TypedExternalConnector[*namespacedv1alpha1.ZoneForward].
+// The Kind field on providerConfigRef selects which config type to fetch:
+//   - "ProviderConfig" → namespace-scoped config (same namespace as the CR)
+//   - "ClusterProviderConfig" → cluster-scoped config
+//
+// Per the dual-scope resource-spec convention, there is no IsNotFound
+// fallback between the two — the Kind field explicitly declares intent
+// and an unsupported Kind is a hard error.
+type namespacedConnector struct {
+	kube  k8sclient.Client
+	usage *resource.ProviderConfigUsageTracker
+}
+
+// Connect tracks ProviderConfig usage, resolves the referenced
+// ProviderConfig or ClusterProviderConfig by Kind, and returns an
+// authenticated WAPI ObjectManager.
+func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.TypedExternalClient[*namespacedv1alpha1.ZoneForward], error) {
+	if err := c.usage.Track(ctx, cr); err != nil {
+		return nil, errors.Wrap(err, errTrackPCUsage)
+	}
+
+	ref := cr.GetProviderConfigReference()
+	if ref == nil {
+		return nil, errors.New(errGetPC + ": no ProviderConfigReference set")
+	}
+
+	var creds *nioCredentials
+	switch ref.Kind {
+	case "ProviderConfig":
+		pc := &apisv1alpha1.ProviderConfig{}
+		if err := c.kube.Get(ctx, k8sclient.ObjectKey{Name: ref.Name, Namespace: cr.GetNamespace()}, pc); err != nil {
+			return nil, errors.Wrap(err, errGetPC)
+		}
+		var err error
+		creds, err = extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace())
+		if err != nil {
+			return nil, err
+		}
+
+	case "ClusterProviderConfig":
+		cpc := &apisv1alpha1.ClusterProviderConfig{}
+		if err := c.kube.Get(ctx, k8sclient.ObjectKey{Name: ref.Name}, cpc); err != nil {
+			return nil, errors.Wrap(err, errGetClusterPC)
+		}
+		var err error
+		creds, err = extractCredentials(ctx, c.kube, cpc.Spec.Credentials.Source, cpc.Spec.Credentials.SecretRef, "")
+		if err != nil {
+			return nil, err
+		}
+
+	default:
+		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
+	}
+
+	objMgr, err := newObjectManager(creds)
+	if err != nil {
+		return nil, err
+	}
+
+	return &namespacedExternal{objMgr: objMgr}, nil
+}
+
+// namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.ZoneForward].
+type namespacedExternal struct {
+	objMgr ibclient.IBObjectManager
+}
+
+// namespacedNameServersToSDK converts the CRD's NameServer list into the
+// SDK's []ibclient.NameServer shape.
+func namespacedNameServersToSDK(in []namespacedv1alpha1.NameServer) []ibclient.NameServer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ibclient.NameServer, len(in))
+	for i, ns := range in {
+		out[i] = ibclient.NameServer{Name: strOrEmpty(ns.Name), Address: strOrEmpty(ns.Address)}
+	}
+	return out
+}
+
+// namespacedNameServersFromSDK converts the SDK's []ibclient.NameServer
+// shape back into the CRD's NameServer list.
+func namespacedNameServersFromSDK(in []ibclient.NameServer) []namespacedv1alpha1.NameServer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]namespacedv1alpha1.NameServer, len(in))
+	for i, ns := range in {
+		name := ns.Name
+		addr := ns.Address
+		out[i] = namespacedv1alpha1.NameServer{Name: &name, Address: &addr}
+	}
+	return out
+}
+
+// namespacedForwardingServersToSDK converts the CRD's ForwardingServer
+// list into the SDK's []*ibclient.Forwardingmemberserver shape.
+func namespacedForwardingServersToSDK(in []namespacedv1alpha1.ForwardingServer) []*ibclient.Forwardingmemberserver {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*ibclient.Forwardingmemberserver, len(in))
+	for i, fs := range in {
+		out[i] = &ibclient.Forwardingmemberserver{
+			Name:                  strOrEmpty(fs.Name),
+			ForwardersOnly:        boolOrFalse(fs.ForwardersOnly),
+			ForwardTo:             ibclient.NullableNameServers{NameServers: namespacedNameServersToSDK(fs.ForwardTo)},
+			UseOverrideForwarders: boolOrFalse(fs.UseOverrideForwarders),
+		}
+	}
+	return out
+}
+
+// namespacedForwardingServersFromSDK converts the SDK's
+// []*ibclient.Forwardingmemberserver shape back into the CRD's
+// ForwardingServer list.
+func namespacedForwardingServersFromSDK(in []*ibclient.Forwardingmemberserver) []namespacedv1alpha1.ForwardingServer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]namespacedv1alpha1.ForwardingServer, 0, len(in))
+	for _, fs := range in {
+		if fs == nil {
+			continue
+		}
+		name := fs.Name
+		forwardersOnly := fs.ForwardersOnly
+		useOverride := fs.UseOverrideForwarders
+		out = append(out, namespacedv1alpha1.ForwardingServer{
+			Name:                  &name,
+			ForwardersOnly:        &forwardersOnly,
+			ForwardTo:             namespacedNameServersFromSDK(fs.ForwardTo.NameServers),
+			UseOverrideForwarders: &useOverride,
+		})
+	}
+	return out
+}
+
+// Observe fetches the ZoneForward from the WAPI by its _ref external name
+// and compares it against the desired spec.
+func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalObservation, error) {
+	externalID := meta.GetExternalName(cr)
+
+	// Pre-create guard (server-assigned external-name strategy) — see
+	// clusterExternal.Observe for the full rationale.
+	if externalID == cr.GetName() {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
+	rec, err := e.objMgr.GetZoneForwardByRef(externalID)
+	if err != nil {
+		if isNotFound(err) {
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
+		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneForward)
+	}
+
+	o := observeFromZoneForward(externalID, rec)
+	cr.Status.AtProvider = namespacedv1alpha1.ZoneForwardObservation{
+		Fqdn:              o.Fqdn,
+		ForwardTo:         namespacedNameServersFromSDK(rec.ForwardTo.NameServers),
+		View:              o.View,
+		ZoneFormat:        o.ZoneFormat,
+		Comment:           o.Comment,
+		Disable:           o.Disable,
+		ForwardersOnly:    o.ForwardersOnly,
+		NsGroup:           o.NsGroup,
+		ExternalNsGroup:   o.ExternalNsGroup,
+		ForwardingServers: namespacedForwardingServersFromSDK(nullableForwardingServersSlice(rec.ForwardingServers)),
+		Extattrs:          o.ExtAttrs,
+		Ref:               o.Ref,
+	}
+	// Explicit assignment (rather than folding ID into the struct literal
+	// above) keeps the server-assigned identifier's provenance obvious at
+	// the call site — it always mirrors the external name used to fetch
+	// this record, not a field returned inside the WAPI response body.
+	cr.Status.AtProvider.ID = o.ID
+
+	p := &cr.Spec.ForProvider
+	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.Extattrs, &p.View, &p.ZoneFormat, rec)
+
+	// Set Available condition — required in crossplane-runtime v2, not
+	// set automatically.
+	cr.SetConditions(xpv1.Available())
+
+	return managed.ExternalObservation{
+		ResourceExists: true,
+		ResourceUpToDate: isUpToDate(
+			namespacedNameServersToSDK(p.ForwardTo),
+			namespacedForwardingServersToSDK(p.ForwardingServers),
+			p.Comment, p.NsGroup, p.ExternalNsGroup,
+			p.Disable, p.ForwardersOnly,
+			p.Extattrs,
+			rec,
+		),
+		ResourceLateInitialized: lateInit,
+	}, nil
+}
+
+// Create provisions a new ZoneForward and records the server-assigned
+// _ref as the external name.
+func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalCreation, error) {
+	p := cr.Spec.ForProvider
+	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneForward)
+	}
+
+	meta.SetExternalName(cr, rec.Ref)
+	return managed.ExternalCreation{}, nil
+}
+
+// Update patches the mutable ZoneForward fields. fqdn, view, and
+// zoneFormat (immutable) are never sent — see updateZoneForward.
+func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalUpdate, error) {
+	p := cr.Spec.ForProvider
+	externalID := meta.GetExternalName(cr)
+
+	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneForward)
+	}
+
+	if rec.Ref != "" && rec.Ref != externalID {
+		meta.SetExternalName(cr, rec.Ref)
+	}
+	return managed.ExternalUpdate{}, nil
+}
+
+// Delete removes the ZoneForward. A 404 is treated as already-deleted
+// (idempotent).
+func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalDelete, error) {
+	externalID := meta.GetExternalName(cr)
+	if err := deleteZoneForward(e.objMgr, externalID); err != nil {
+		if isNotFound(err) {
+			return managed.ExternalDelete{}, nil
+		}
+		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteZoneForward)
+	}
+	return managed.ExternalDelete{}, nil
+}
+
+// Disconnect is a no-op — the WAPI Connector holds no persistent
+// connection that needs explicit teardown per reconcile.
+func (e *namespacedExternal) Disconnect(_ context.Context) error { return nil }
+
+// Ensure interface compliance at compile time.
+var (
+	_ managed.TypedExternalConnector[*namespacedv1alpha1.ZoneForward] = &namespacedConnector{}
+	_ managed.TypedExternalClient[*namespacedv1alpha1.ZoneForward]    = &namespacedExternal{}
+)
+
+// setupNamespacedZoneForward wires the namespaced ZoneForward reconciler
+// with the controller-runtime manager. Called from SetupGated (gate
+// callback) and Setup (immediate path) in controller.go.
+func setupNamespacedZoneForward(mgr ctrl.Manager, o controller.Options) error {
+	name := namespacedControllerName
+
+	if o.MetricOptions != nil {
+		if err := mgr.Add(statemetrics.NewMRStateRecorder(
+			mgr.GetClient(),
+			o.Logger,
+			o.MetricOptions.MRStateMetrics,
+			&namespacedv1alpha1.ZoneForwardList{},
+			o.MetricOptions.PollStateMetricInterval,
+		)); err != nil {
+			return errors.Wrap(err, "cannot register namespaced ZoneForward state recorder")
+		}
+	}
+
+	opts := []managed.ReconcilerOption{
+		managed.WithTypedExternalConnector[*namespacedv1alpha1.ZoneForward](&namespacedConnector{
+			kube:  mgr.GetClient(),
+			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+		}),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
+		opts = append(opts, managed.WithManagementPolicies())
+	}
+	if o.ChangeLogOptions != nil && o.Features.Enabled(feature.EnableAlphaChangeLogs) {
+		opts = append(opts, managed.WithChangeLogger(o.ChangeLogOptions.ChangeLogger))
+	}
+	if o.MetricOptions != nil {
+		opts = append(opts, managed.WithMetricRecorder(o.MetricOptions.MRMetrics))
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(namespacedv1alpha1.SchemeGroupVersion.WithKind("ZoneForward")),
+		opts...,
+	)
+
+	return ctrl.NewControllerManagedBy(mgr).
+		Named(name).
+		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
+		For(&namespacedv1alpha1.ZoneForward{}).
+		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
+}

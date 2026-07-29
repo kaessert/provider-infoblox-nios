@@ -1,0 +1,39 @@
+# ZoneForward is the namespace-scoped variant of the Infoblox NIOS forward
+# DNS zone. See zone-forward.yaml for the cluster-scoped variant and full
+# field documentation — this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the fqdn below differs from zone-forward.yaml's so
+# both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, fqdn) WAPI identity.
+apiVersion: zoneforward.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneForward
+metadata:
+  name: example-zoneforward-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: zoneforward/v1alpha1/zoneforward
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # zone-forward.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-forward-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+spec:
+  forProvider:
+    fqdn: forward-ns.example.com
+    forwardTo:
+      - name: ns1.forwarder.com
+        address: 10.0.1.1
+      - name: ns2.forwarder.com
+        address: 10.0.1.2
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

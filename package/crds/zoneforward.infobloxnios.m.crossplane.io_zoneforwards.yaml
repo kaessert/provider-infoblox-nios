@@ -1,0 +1,410 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: zoneforwards.zoneforward.infobloxnios.m.crossplane.io
+spec:
+  group: zoneforward.infobloxnios.m.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - infobloxnios
+    kind: ZoneForward
+    listKind: ZoneForwardList
+    plural: zoneforwards
+    singular: zoneforward
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ZoneForward is the Namespaced-scoped managed resource representing
+          an Infoblox NIOS ZoneForward.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ZoneForwardSpec defines the desired state of ZoneForward.
+            properties:
+              forProvider:
+                description: ForProvider holds the user-supplied parameters for this
+                  ZoneForward.
+                properties:
+                  comment:
+                    description: Comment for the zone; maximum 256 characters.
+                    type: string
+                  disable:
+                    description: Determines whether the zone is disabled. When false,
+                      the zone is enabled.
+                    type: boolean
+                  extattrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  externalNsGroup:
+                    description: A forward stub server name server group name.
+                    type: string
+                  forwardTo:
+                    description: The remote name servers to which the Infoblox appliance
+                      forwards queries for this zone.
+                    items:
+                      description: NameServer identifies an external DNS server used
+                        as a forwarding target.
+                      properties:
+                        address:
+                          description: The IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: A resolvable domain name for the external DNS
+                            server.
+                          type: string
+                      type: object
+                    type: array
+                  forwardersOnly:
+                    description: Determines if the appliance sends queries to the
+                      servers in forwardTo only, and not to other internal or Internet
+                      root servers.
+                    type: boolean
+                  forwardingServers:
+                    description: Per-Grid-member forwarding server overrides for this
+                      zone.
+                    items:
+                      description: ForwardingServer overrides the forwarders used
+                        by a specific Grid member for this zone.
+                      properties:
+                        forwardTo:
+                          description: The remote name servers to which this Grid
+                            member forwards queries for this zone, overriding the
+                            zone-level forwardTo list.
+                          items:
+                            description: NameServer identifies an external DNS server
+                              used as a forwarding target.
+                            properties:
+                              address:
+                                description: The IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: A resolvable domain name for the external
+                                  DNS server.
+                                type: string
+                            type: object
+                          type: array
+                        forwardersOnly:
+                          description: Determines if this Grid member sends queries
+                            to forwardTo only, and not to other internal or Internet
+                            root servers.
+                          type: boolean
+                        name:
+                          description: The name of this Grid member in FQDN format.
+                          type: string
+                        useOverrideForwarders:
+                          description: Use flag for forwardTo — when false this Grid
+                            member uses the zone-level forwarders instead of the override.
+                          type: boolean
+                      type: object
+                    type: array
+                  fqdn:
+                    description: The name of this DNS zone in FQDN format. Fixed at
+                      creation — confirmed absent from the UpdateZoneForward SDK method
+                      signature.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: fqdn is immutable after creation
+                      rule: self == oldSelf
+                  nsGroup:
+                    description: A forwarding stub server name server group name.
+                    type: string
+                  view:
+                    description: The name of the DNS view in which the zone resides,
+                      e.g. "external". Fixed at creation — confirmed absent from the
+                      UpdateZoneForward SDK method signature; the WAPI additionally
+                      rejects a view change at the data level with "Cannot move zones
+                      between views".
+                    type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
+                  zoneFormat:
+                    description: Determines the format of this zone (e.g. FORWARD,
+                      IPV4, IPV6). Fixed at creation — confirmed absent from the UpdateZoneForward
+                      SDK method signature.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: zoneFormat is immutable after creation
+                      rule: self == oldSelf
+                required:
+                - forwardTo
+                - fqdn
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  kind: ClusterProviderConfig
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  kind:
+                    description: Kind of the referenced object.
+                    type: string
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: ZoneForwardStatus defines the observed state of ZoneForward.
+            properties:
+              atProvider:
+                description: AtProvider holds the observed values from the Infoblox
+                  NIOS WAPI.
+                properties:
+                  comment:
+                    description: Comment for the zone; maximum 256 characters.
+                    type: string
+                  disable:
+                    description: Determines whether the zone is disabled. When false,
+                      the zone is enabled.
+                    type: boolean
+                  extattrs:
+                    additionalProperties:
+                      type: string
+                    description: 'Extensible attributes (arbitrary key/value metadata
+                      defined in Grid Manager). The WAPI wire format wraps each value
+                      as {"value": ...}; this map is the simplified string-valued
+                      CRD representation (the controller translates to/from the SDK''s
+                      EA map[string]interface{} type).'
+                    type: object
+                  externalNsGroup:
+                    description: A forward stub server name server group name.
+                    type: string
+                  forwardTo:
+                    description: The remote name servers to which the Infoblox appliance
+                      forwards queries for this zone.
+                    items:
+                      description: NameServer identifies an external DNS server used
+                        as a forwarding target.
+                      properties:
+                        address:
+                          description: The IPv4 or IPv6 address of the server.
+                          type: string
+                        name:
+                          description: A resolvable domain name for the external DNS
+                            server.
+                          type: string
+                      type: object
+                    type: array
+                  forwardersOnly:
+                    description: Determines if the appliance sends queries to the
+                      servers in forwardTo only, and not to other internal or Internet
+                      root servers.
+                    type: boolean
+                  forwardingServers:
+                    description: Per-Grid-member forwarding server overrides for this
+                      zone.
+                    items:
+                      description: ForwardingServer overrides the forwarders used
+                        by a specific Grid member for this zone.
+                      properties:
+                        forwardTo:
+                          description: The remote name servers to which this Grid
+                            member forwards queries for this zone, overriding the
+                            zone-level forwardTo list.
+                          items:
+                            description: NameServer identifies an external DNS server
+                              used as a forwarding target.
+                            properties:
+                              address:
+                                description: The IPv4 or IPv6 address of the server.
+                                type: string
+                              name:
+                                description: A resolvable domain name for the external
+                                  DNS server.
+                                type: string
+                            type: object
+                          type: array
+                        forwardersOnly:
+                          description: Determines if this Grid member sends queries
+                            to forwardTo only, and not to other internal or Internet
+                            root servers.
+                          type: boolean
+                        name:
+                          description: The name of this Grid member in FQDN format.
+                          type: string
+                        useOverrideForwarders:
+                          description: Use flag for forwardTo — when false this Grid
+                            member uses the zone-level forwarders instead of the override.
+                          type: boolean
+                      type: object
+                    type: array
+                  fqdn:
+                    description: The name of this DNS zone in FQDN format. Fixed at
+                      creation — confirmed absent from the UpdateZoneForward SDK method
+                      signature.
+                    type: string
+                  id:
+                    description: |-
+                      Server-assigned external identifier for this resource, set by Observe()
+                      from the resource's external name. Used by import testing to confirm
+                      the controller re-discovers the resource after a restart.
+                    type: string
+                  nsGroup:
+                    description: A forwarding stub server name server group name.
+                    type: string
+                  ref:
+                    description: Server-assigned opaque object reference (WAPI `_ref`).
+                      Mirrors the crossplane.io/external-name annotation for observability
+                      and uptest import verification.
+                    type: string
+                  view:
+                    description: The name of the DNS view in which the zone resides,
+                      e.g. "external". Fixed at creation — confirmed absent from the
+                      UpdateZoneForward SDK method signature; the WAPI additionally
+                      rejects a view change at the data level with "Cannot move zones
+                      between views".
+                    type: string
+                  zoneFormat:
+                    description: Determines the format of this zone (e.g. FORWARD,
+                      IPV4, IPV6). Fixed at creation — confirmed absent from the UpdateZoneForward
+                      SDK method signature.
+                    type: string
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
