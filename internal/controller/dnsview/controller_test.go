@@ -579,6 +579,24 @@ func TestClusterCreateCapturesServerAssignedRef(t *testing.T) {
 	}
 }
 
+// TestClusterCreateError verifies a WAPI POST failure (500) surfaces as a
+// wrapped error and leaves the external-name annotation unset (no ref was
+// ever assigned).
+func TestClusterCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", "")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q after failed Create, want empty", got)
+	}
+}
+
 // ── cluster: Update ─────────────────────────────────────────────────────
 
 func TestClusterUpdateSuccess(t *testing.T) {
@@ -641,6 +659,24 @@ func TestClusterUpdateRefChangesOnRename(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateError verifies a WAPI PUT failure (500) surfaces as a
+// wrapped error and leaves the external-name annotation unchanged.
+func TestClusterUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", "view/test1:my-view/false")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "view/test1:my-view/false" {
+		t.Errorf("Update: external-name = %q after failed Update, want unchanged", got)
+	}
+}
+
 // ── cluster: Delete ─────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {
@@ -675,6 +711,20 @@ func TestClusterDeleteNotFound(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Errorf("Delete: expected nil error for already-deleted resource (404), got %v", err)
+	}
+}
+
+// TestClusterDeleteError verifies a non-404 WAPI DELETE failure (500)
+// surfaces as a wrapped error rather than being swallowed like a 404.
+func TestClusterDeleteError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", "view/test1:my-view/false")
+
+	if _, err := e.Delete(context.Background(), cr); err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
 	}
 }
 
@@ -859,6 +909,23 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateError verifies a WAPI POST failure (500) surfaces as
+// a wrapped error and leaves the external-name annotation unset.
+func TestNamespacedCreateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedDNSView("default", "my-dnsview", "", "ProviderConfig")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q after failed Create, want empty", got)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -879,6 +946,24 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if rec.Comment == nil || *rec.Comment != "new" {
 		t.Errorf("Update: Comment = %v, want 'new'", rec.Comment)
+	}
+}
+
+// TestNamespacedUpdateError verifies a WAPI PUT failure (500) surfaces as a
+// wrapped error and leaves the external-name annotation unchanged.
+func TestNamespacedUpdateError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedDNSView("default", "my-dnsview", "view/test1:my-view/false", "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("new")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "view/test1:my-view/false" {
+		t.Errorf("Update: external-name = %q after failed Update, want unchanged", got)
 	}
 }
 
@@ -913,6 +998,20 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Errorf("Delete: expected nil error for already-deleted resource (404), got %v", err)
+	}
+}
+
+// TestNamespacedDeleteError verifies a non-404 WAPI DELETE failure (500)
+// surfaces as a wrapped error rather than being swallowed like a 404.
+func TestNamespacedDeleteError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedDNSView("default", "my-dnsview", "view/test1:my-view/false", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err == nil {
+		t.Fatal("Delete: expected error for 500, got nil")
 	}
 }
 
