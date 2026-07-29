@@ -104,6 +104,7 @@ UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,example
 UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
 UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
+UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that only need NIOS Grid Manager API credentials (no
@@ -117,6 +118,10 @@ UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECOR
 # only need API credentials (INFOBLOX_HOST, INFOBLOX_USER, INFOBLOX_PASS), no
 # external infrastructure beyond the NIOS Grid Manager itself.
 UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_DTC_SERVER)
+# Grid Manager itself. HostRecord, Network, and RangeTemplate are also tier:core.
+# ExtensibleAttributeDef is also tier:core — only needs API credentials, no
+# external infrastructure beyond the NIOS Grid Manager itself.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -206,6 +211,8 @@ e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
 e2e.range: e2e
 e2e.dtc-server: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_SERVER)
 e2e.dtc-server: e2e
+e2e.extensible-attribute-def: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
+e2e.extensible-attribute-def: e2e
 
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
@@ -217,6 +224,7 @@ local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e-full
 .PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.dtc-server e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-aaaa e2e.record-cname e2e.record-mx e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.extensible-attribute-def e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -292,6 +300,13 @@ update-test.dtc-server: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/dtc-server/dtc-server-namespaced.yaml
 
 .PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-delegated update-test.dtc-server
+update-test.extensible-attribute-def: $(UPDATE_TESTER)
+	$(UPDATE_TESTER) converge examples/extensible-attribute-def/extensible-attribute-def.yaml
+	$(UPDATE_TESTER) run examples/extensible-attribute-def/extensible-attribute-def.yaml
+	$(UPDATE_TESTER) converge examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+	$(UPDATE_TESTER) run examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+
+.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-delegated update-test.extensible-attribute-def
 
 update-test.network-view: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) converge examples/network-view/network-view.yaml
@@ -357,7 +372,6 @@ update-test.range: $(UPDATE_TESTER)
 # 	@KIND_NODE_IMAGE_TAG=${KIND_NODE_IMAGE_TAG} $(ROOT_DIR)/cluster/local/integration_tests.sh || $(FAIL)
 # 	@$(OK) integration tests passed
 
-# Update the submodules, such as the common build scripts.
 submodules:
 	@git submodule sync
 	@git submodule update --init --recursive
