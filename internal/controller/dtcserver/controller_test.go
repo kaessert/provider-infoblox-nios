@@ -34,6 +34,14 @@ import (
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
+// Shared literals reused across many test cases (deduplicated for goconst).
+const (
+	nsDefault      = "default"
+	eaKeyEnv       = "env"
+	eaValProd      = "prod"
+	monitorRefSNMP = "dtc:monitor:snmp/ZG5z...:snmp"
+)
+
 func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
 
@@ -79,7 +87,7 @@ func newClusterDTCServer(crName, externalName string) *clusterv1alpha1.DTCServer
 		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
 		Spec: clusterv1alpha1.DTCServerSpec{
 			ResourceSpec: xpv1.ResourceSpec{
-				ProviderConfigReference: &xpv1.Reference{Name: "default"},
+				ProviderConfigReference: &xpv1.Reference{Name: nsDefault},
 			},
 			ForProvider: clusterv1alpha1.DTCServerParameters{
 				Name: stringPtr("my-dtc-server"),
@@ -99,7 +107,7 @@ func newNamespacedDTCServer(ns, crName, externalName, pcKind string) *namespaced
 		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
 		Spec: namespacedv1alpha1.DTCServerSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
-				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
+				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: nsDefault},
 			},
 			ForProvider: namespacedv1alpha1.DTCServerParameters{
 				Name: stringPtr("my-dtc-server"),
@@ -320,7 +328,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Comment:              stringPtr("hello"),
 		Disable:              boolPtr(false),
 		AutoCreateHostRecord: boolPtr(true),
-		Ea:                   ibclient.EA{"env": "prod"},
+		Ea:                   ibclient.EA{eaKeyEnv: eaValProd},
 	})
 
 	e := &clusterExternal{clients: newTestClients(t, srv)}
@@ -328,7 +336,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
 	cr.Spec.ForProvider.AutoCreateHostRecord = boolPtr(true)
-	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{eaKeyEnv: eaValProd}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -482,7 +490,7 @@ func TestClusterObserveMonitorsAndHealth(t *testing.T) {
 		Name: stringPtr("my-dtc-server"),
 		Host: stringPtr("2.3.4.5"),
 		Monitors: []*ibclient.DtcServerMonitor{
-			{Monitor: "dtc:monitor:snmp/ZG5z...:snmp", Host: "2.3.4.5"},
+			{Monitor: monitorRefSNMP, Host: "2.3.4.5"},
 		},
 		Health: &ibclient.DtcHealth{
 			Availability: "GREEN",
@@ -494,7 +502,7 @@ func TestClusterObserveMonitorsAndHealth(t *testing.T) {
 	e := &clusterExternal{clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 	cr.Spec.ForProvider.Monitors = []clusterv1alpha1.DTCServerMonitor{
-		{Monitor: stringPtr("dtc:monitor:snmp/ZG5z...:snmp"), Host: stringPtr("2.3.4.5")},
+		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
 	}
 
 	got, err := e.Observe(context.Background(), cr)
@@ -506,7 +514,7 @@ func TestClusterObserveMonitorsAndHealth(t *testing.T) {
 	}
 
 	ap := cr.Status.AtProvider
-	if len(ap.Monitors) != 1 || ap.Monitors[0].Monitor == nil || *ap.Monitors[0].Monitor != "dtc:monitor:snmp/ZG5z...:snmp" {
+	if len(ap.Monitors) != 1 || ap.Monitors[0].Monitor == nil || *ap.Monitors[0].Monitor != monitorRefSNMP {
 		t.Errorf("AtProvider.Monitors = %+v, want one entry with the seeded monitor ref", ap.Monitors)
 	}
 	if ap.Health == nil || ap.Health.Availability == nil || *ap.Health.Availability != "GREEN" {
@@ -524,7 +532,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	e := &clusterExternal{clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "") // no external-name yet
 	cr.Spec.ForProvider.Monitors = []clusterv1alpha1.DTCServerMonitor{
-		{Monitor: stringPtr("dtc:monitor:snmp/ZG5z...:snmp"), Host: stringPtr("2.3.4.5")},
+		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
 	}
 
 	_, err := e.Create(context.Background(), cr)
@@ -543,12 +551,41 @@ func TestClusterCreateSuccess(t *testing.T) {
 	if stored == nil {
 		t.Fatal("Create: record not stored on mock server")
 	}
-	if len(stored.Monitors) != 1 || stored.Monitors[0].Monitor != "dtc:monitor:snmp/ZG5z...:snmp" {
+	if len(stored.Monitors) != 1 || stored.Monitors[0].Monitor != monitorRefSNMP {
 		t.Errorf("Create: stored monitors = %+v, want the ref passed through untouched (no name+type lookup)", stored.Monitors)
 	}
 }
 
+// TestClusterCreateServerError pins the error-propagation path when the
+// WAPI backend rejects the create POST outright (e.g. transient 500s).
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{clients: newTestClients(t, srv)}
+	cr := newClusterDTCServer("my-dtcserver", "")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name set to %q despite failed create", got)
+	}
+}
+
 // ── cluster: Update ─────────────────────────────────────────────────────
+
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{clients: newTestClients(t, srv)}
+	cr := newClusterDTCServer("my-dtcserver", "dtc:server/test1:my-dtc-server")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+}
 
 func TestClusterUpdateSuccess(t *testing.T) {
 	m := newMockDtcServerServer()
@@ -693,7 +730,7 @@ func TestClusterConnectSuccess(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&clusterpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: nsDefault},
 				Spec: clusterpcv1alpha1.ProviderConfigSpec{
 					Credentials: clusterpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -751,7 +788,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	})
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", ref, "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -765,13 +802,57 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveMonitorsAndHealth pins the namespaced-scope monitor
+// and health conversion path (monitorsFromNamespaced/monitorPairsToNamespaced/
+// healthToNamespaced), mirroring the cluster-scope coverage above.
+func TestNamespacedObserveMonitorsAndHealth(t *testing.T) {
+	m := newMockDtcServerServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name: stringPtr("my-dtc-server"),
+		Host: stringPtr("2.3.4.5"),
+		Monitors: []*ibclient.DtcServerMonitor{
+			{Monitor: monitorRefSNMP, Host: "2.3.4.5"},
+		},
+		Health: &ibclient.DtcHealth{
+			Availability: "GREEN",
+			Description:  "healthy",
+			EnabledState: "ENABLED",
+		},
+	})
+
+	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Monitors = []namespacedv1alpha1.DTCServerMonitor{
+		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
+	}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if len(ap.Monitors) != 1 || ap.Monitors[0].Monitor == nil || *ap.Monitors[0].Monitor != monitorRefSNMP {
+		t.Errorf("AtProvider.Monitors = %+v, want one entry with the seeded monitor ref", ap.Monitors)
+	}
+	if ap.Health == nil || ap.Health.Availability == nil || *ap.Health.Availability != "GREEN" {
+		t.Errorf("AtProvider.Health = %+v, want Availability=GREEN", ap.Health)
+	}
+}
+
 func TestNamespacedObserveNotFound(t *testing.T) {
 	m := newMockDtcServerServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -787,7 +868,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
 	got, err := e.Observe(context.Background(), cr)
@@ -804,7 +885,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 500, got nil")
@@ -816,7 +897,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
@@ -831,7 +912,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -840,6 +921,33 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name set to %q despite failed create", got)
+	}
+}
+
+func TestNamespacedUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
 	}
 }
 
@@ -854,7 +962,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	})
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", ref, "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Host = stringPtr("2.3.4.6")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -877,7 +985,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.DtcServer{Name: stringPtr("my-dtc-server")})
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", ref, "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: unexpected error: %v", err)
@@ -890,7 +998,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
@@ -905,7 +1013,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	e := &namespacedExternal{clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
@@ -920,7 +1028,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 
 func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 	const (
-		ns     = "default"
+		ns     = nsDefault
 		secret = "infobloxnios-api-key"
 	)
 
@@ -930,7 +1038,7 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
+				ObjectMeta: metav1.ObjectMeta{Name: nsDefault, Namespace: ns},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -970,7 +1078,7 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 		WithObjects(
 			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ClusterProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: nsDefault},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv1.CredentialsSourceSecret,
@@ -1009,7 +1117,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
 	}
 
-	cr := newNamespacedDTCServer("default", "my-dtcserver", "", "SomeOtherKind")
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "SomeOtherKind")
 	if _, err := conn.Connect(context.Background(), cr); err == nil {
 		t.Fatal("Connect: expected error for unsupported provider config kind, got nil")
 	}
@@ -1025,11 +1133,62 @@ func TestNamespacedDisconnectIsNoop(t *testing.T) {
 // ── shared helper unit tests ─────────────────────────────────────────────
 
 func TestExtAttrsRoundTrip(t *testing.T) {
-	in := map[string]string{"env": "prod", "owner": "platform-team"}
+	in := map[string]string{eaKeyEnv: eaValProd, "owner": "platform-team"}
 	ea := buildEA(in)
 	out := extAttrsFromEA(ea)
 	if !extAttrsEqual(in, out) {
 		t.Errorf("ExtAttrs round-trip: got %v, want %v", out, in)
+	}
+}
+
+// TestStringifyEAValue pins every branch of the extensible-attribute value
+// coercion — WAPI can hand back strings, ibclient.Bool, string slices (from
+// EA.UnmarshalJSON), or arbitrary values needing a fallback %v render.
+func TestStringifyEAValue(t *testing.T) {
+	cases := map[string]struct {
+		reason string
+		in     interface{}
+		want   string
+	}{
+		"Nil": {
+			reason: "a nil EA value renders as empty string",
+			in:     nil,
+			want:   "",
+		},
+		"String": {
+			reason: "string values pass through unchanged",
+			in:     eaValProd,
+			want:   eaValProd,
+		},
+		"BoolTrue": {
+			reason: "ibclient.Bool(true) renders as the WAPI-style 'True'",
+			in:     ibclient.Bool(true),
+			want:   "True",
+		},
+		"BoolFalse": {
+			reason: "ibclient.Bool(false) renders as the WAPI-style 'False'",
+			in:     ibclient.Bool(false),
+			want:   "False",
+		},
+		"StringSlice": {
+			reason: "multi-value EAs (decoded as []string) join on comma",
+			in:     []string{"a", "b", "c"},
+			want:   "a,b,c",
+		},
+		"IntFallback": {
+			reason: "unexpected scalar types fall back to fmt.Sprintf(%v)",
+			in:     42,
+			want:   "42",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := stringifyEAValue(tc.in)
+			if got != tc.want {
+				t.Errorf("%s: stringifyEAValue() = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1044,7 +1203,7 @@ func TestExtAttrsEqualTreatsNilAndEmptyAsEqual(t *testing.T) {
 
 func TestMonitorsRoundTrip(t *testing.T) {
 	in := []monitorPair{
-		{Monitor: stringPtr("dtc:monitor:snmp/ZG5z...:snmp"), Host: stringPtr("2.3.4.5")},
+		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
 	}
 	sdk := buildMonitors(in)
 	out := monitorPairsFromSDK(sdk)
@@ -1102,9 +1261,9 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 		SniHostname:          stringPtr("sni.example.com"),
 		UseSniHostname:       boolPtr(true),
 		Monitors: []*ibclient.DtcServerMonitor{
-			{Monitor: "dtc:monitor:snmp/ZG5z...:snmp", Host: "2.3.4.5"},
+			{Monitor: monitorRefSNMP, Host: "2.3.4.5"},
 		},
-		Ea: ibclient.EA{"env": "prod"},
+		Ea: ibclient.EA{eaKeyEnv: eaValProd},
 	}
 
 	changed := lateInitialize(&comment, &disable, &autoCreateHostRecord, &useSniHostname, &sniHostname, &monitors, &extAttrs, rec)
@@ -1129,7 +1288,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	if len(monitors) != 1 {
 		t.Errorf("monitors = %+v, want one entry", monitors)
 	}
-	if len(extAttrs) != 1 || extAttrs["env"] != "prod" {
+	if len(extAttrs) != 1 || extAttrs[eaKeyEnv] != eaValProd {
 		t.Errorf("extAttrs = %v, want {env: prod}", extAttrs)
 	}
 }
@@ -1140,7 +1299,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	autoCreateHostRecord := boolPtr(false)
 	sniHostname := stringPtr("user-sni.example.com")
 	useSniHostname := boolPtr(true)
-	monitors := []monitorPair{{Monitor: stringPtr("dtc:monitor:snmp/ZG5z...:snmp"), Host: stringPtr("2.3.4.5")}}
+	monitors := []monitorPair{{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")}}
 	extAttrs := map[string]string{"owner": "user-team"}
 
 	rec := &ibclient.DtcServer{
@@ -1152,7 +1311,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 		Monitors: []*ibclient.DtcServerMonitor{
 			{Monitor: "dtc:monitor:http/ZG5z...:http", Host: "2.3.4.6"},
 		},
-		Ea: ibclient.EA{"env": "prod"},
+		Ea: ibclient.EA{eaKeyEnv: eaValProd},
 	}
 
 	changed := lateInitialize(&comment, &disable, &autoCreateHostRecord, &useSniHostname, &sniHostname, &monitors, &extAttrs, rec)
@@ -1168,7 +1327,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	if *sniHostname != "user-sni.example.com" {
 		t.Errorf("sniHostname = %q, want unchanged", *sniHostname)
 	}
-	if len(monitors) != 1 || strOrEmpty(monitors[0].Monitor) != "dtc:monitor:snmp/ZG5z...:snmp" {
+	if len(monitors) != 1 || strOrEmpty(monitors[0].Monitor) != monitorRefSNMP {
 		t.Errorf("monitors overwritten by lateInitialize: %+v", monitors)
 	}
 	if extAttrs["owner"] != "user-team" {
@@ -1207,12 +1366,12 @@ func TestIsUpToDate(t *testing.T) {
 		SniHostname:          stringPtr("sni.example.com"),
 		UseSniHostname:       boolPtr(true),
 		Monitors: []*ibclient.DtcServerMonitor{
-			{Monitor: "dtc:monitor:snmp/ZG5z...:snmp", Host: "2.3.4.5"},
+			{Monitor: monitorRefSNMP, Host: "2.3.4.5"},
 		},
-		Ea: ibclient.EA{"env": "prod"},
+		Ea: ibclient.EA{eaKeyEnv: eaValProd},
 	}
-	baseMonitors := []monitorPair{{Monitor: stringPtr("dtc:monitor:snmp/ZG5z...:snmp"), Host: stringPtr("2.3.4.5")}}
-	baseExtAttrs := map[string]string{"env": "prod"}
+	baseMonitors := []monitorPair{{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")}}
+	baseExtAttrs := map[string]string{eaKeyEnv: eaValProd}
 
 	cases := map[string]struct {
 		mutate func() (name, host, comment, sniHostname *string, disable, autoCreateHostRecord, useSniHostname *bool, monitors []monitorPair, extAttrs map[string]string)
@@ -1251,7 +1410,7 @@ func TestIsUpToDate(t *testing.T) {
 		},
 		"ExtAttrsDiffer": {
 			mutate: func() (*string, *string, *string, *string, *bool, *bool, *bool, []monitorPair, map[string]string) {
-				return stringPtr("my-dtc-server"), stringPtr("2.3.4.5"), stringPtr("hello"), stringPtr("sni.example.com"), boolPtr(false), boolPtr(true), boolPtr(true), baseMonitors, map[string]string{"env": "dev"}
+				return stringPtr("my-dtc-server"), stringPtr("2.3.4.5"), stringPtr("hello"), stringPtr("sni.example.com"), boolPtr(false), boolPtr(true), boolPtr(true), baseMonitors, map[string]string{eaKeyEnv: "dev"}
 			},
 			want: false,
 		},
