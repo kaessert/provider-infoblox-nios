@@ -111,7 +111,7 @@ func TestNetworkNetworkViewHasReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("NetworkView.Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("NetworkView.Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		return

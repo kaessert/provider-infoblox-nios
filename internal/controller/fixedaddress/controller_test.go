@@ -463,6 +463,59 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse pins nil-safety in Observe: a WAPI
+// response carrying only the object's _ref (the resource identifier) and
+// every other field at its Go zero value (empty strings, nil pointers, a
+// nil Ea map, a nil Options slice) must not panic and must produce a
+// valid observation with nil-safe AtProvider fields.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterFixedAddress("my-fixedaddress", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.IPv4Addr != nil {
+		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
+	}
+	if ap.IPv6Addr != nil {
+		t.Errorf("AtProvider.IPv6Addr = %v, want nil", ap.IPv6Addr)
+	}
+	if ap.MAC != nil {
+		t.Errorf("AtProvider.MAC = %v, want nil", ap.MAC)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Options != nil {
+		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
+	}
+	if ap.CloudInfo != nil {
+		t.Errorf("AtProvider.CloudInfo = %v, want nil", ap.CloudInfo)
+	}
+}
+
 // TestObservePreCreateState verifies that Observe short-circuits (no HTTP
 // call) when the external-name still equals the CR's Kubernetes name —
 // the pre-create state for a server-assigned external-name strategy.
@@ -897,6 +950,58 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false for 404, got true")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse is the namespaced-scope counterpart
+// of TestClusterObserveMinimalResponse: pins nil-safety in Observe when a
+// WAPI response carries only the object's _ref and every other field at
+// its Go zero value.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.IPv4Addr != nil {
+		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
+	}
+	if ap.IPv6Addr != nil {
+		t.Errorf("AtProvider.IPv6Addr = %v, want nil", ap.IPv6Addr)
+	}
+	if ap.MAC != nil {
+		t.Errorf("AtProvider.MAC = %v, want nil", ap.MAC)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Options != nil {
+		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
+	}
+	if ap.CloudInfo != nil {
+		t.Errorf("AtProvider.CloudInfo = %v, want nil", ap.CloudInfo)
 	}
 }
 

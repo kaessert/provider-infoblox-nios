@@ -9,6 +9,12 @@ import "testing"
 // here avoids repeating the raw string literal across test files.
 const testKindNetworkView = "NetworkView"
 
+// testScopeCluster is the shared "cluster" TargetScope literal asserted by
+// every cross-resource reference test in this package that points at a
+// cluster-scoped resource. Centralizing it here avoids repeating the raw
+// string literal across test files.
+const testScopeCluster = "cluster"
+
 // TestFindResource verifies FindResource returns the ARecord descriptor for
 // its slug and reports false for an unknown slug.
 func TestFindResource(t *testing.T) {
@@ -749,7 +755,7 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		if !f.Immutable {
@@ -837,7 +843,7 @@ func TestFixedAddressNetworkViewReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		if f.Immutable {
@@ -1073,7 +1079,7 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 		if f.Reference.TargetSlug != "networkview" {
 			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "cluster" {
+		if f.Reference.TargetScope != testScopeCluster {
 			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
 		}
 		if !f.Immutable {
