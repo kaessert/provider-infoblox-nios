@@ -177,6 +177,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 	}
 
 	o := observeFromHostRecord(externalID, rec)
+	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = clusterv1alpha1.HostRecordObservation{
 		Name:            o.Name,
 		Ipv4Addrs:       clusterIpv4AddrsFromValues(o.Ipv4Addrs),
@@ -194,6 +195,13 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 		Zone:            o.Zone,
 		DNSName:         o.DNSName,
 		DNSAliases:      o.DNSAliases,
+		// ipv4Cidr/ipv6Cidr/filterParams/ipAddressType are create-time-only
+		// allocation parameters WAPI never returns from GetHostRecordByRef
+		// — echoed from spec for observability rather than left unpopulated.
+		Ipv4Cidr:      p.Ipv4Cidr,
+		Ipv6Cidr:      p.Ipv6Cidr,
+		FilterParams:  p.FilterParams,
+		IpAddressType: p.IpAddressType,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
 	// above) keeps the server-assigned identifier's provenance obvious at
@@ -201,10 +209,11 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
+	localIpv4 := clusterIpv4AddrsToValues(p.Ipv4Addrs)
 	localIpv6 := clusterIpv6AddrsToValues(p.Ipv6Addrs)
-	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, &p.View, &p.ConfigureForDNS, &p.Disable, &p.Aliases, &localIpv6, rec)
+	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, &p.View, &p.ConfigureForDNS, &p.Disable, &p.Aliases, &localIpv4, &localIpv6, rec)
 	if lateInit {
+		p.Ipv4Addrs = clusterIpv4AddrsFromValues(localIpv4)
 		p.Ipv6Addrs = clusterIpv6AddrsFromValues(localIpv6)
 	}
 
@@ -220,10 +229,11 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 }
 
 // Create provisions a new HostRecord and records the server-assigned _ref
-// as the external name.
+// as the external name. Dispatches to one of three provisioning
+// strategies — see provisionHostRecord.
 func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalCreation, error) {
 	p := &cr.Spec.ForProvider
-	rec, err := createHostRecord(e.client.objMgr, clusterCompareFields(p), p.NetworkView)
+	rec, err := provisionHostRecord(e.client.objMgr, clusterCompareFields(p), p.NetworkView, p.Ipv4Cidr, p.Ipv6Cidr, p.FilterParams, p.IpAddressType)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateHostRecord)
 	}

@@ -49,6 +49,12 @@ const (
 	errCreateHostRecord  = "cannot create HostRecord"
 	errUpdateHostRecord  = "cannot update HostRecord"
 	errDeleteHostRecord  = "cannot delete HostRecord"
+
+	errIpv4CidrWithStaticAddr   = "ipv4Cidr cannot be combined with a static ipv4Addrs address"
+	errIpv6CidrWithStaticAddr   = "ipv6Cidr cannot be combined with a static ipv6Addrs address"
+	errFilterParamsWithCidr     = "filterParams cannot be combined with ipv4Cidr or ipv6Cidr"
+	errFilterParamsRequiresType = "ipAddressType is required when filterParams is set"
+	errUnexpectedAllocationType = "unexpected response type from AllocateNextAvailableIp"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -267,6 +273,31 @@ func firstIpv6AddrAndDuid(addrs []ipv6AddrValue) (addr, duid string) {
 		return "", ""
 	}
 	return addrs[0].Ipv6Addr, strOrEmpty(addrs[0].Duid)
+}
+
+// anyIpv4AddrSet reports whether any entry in addrs carries a non-empty
+// static address. Used by validateHostRecordAllocation to reject
+// ipv4Cidr when combined with a static address — even though only the
+// first entry is ever forwarded to WAPI (see ipv4AddrsEqual), a static
+// address anywhere in the list signals user intent that conflicts with
+// dynamic allocation.
+func anyIpv4AddrSet(addrs []ipv4AddrValue) bool {
+	for _, a := range addrs {
+		if a.Ipv4Addr != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// anyIpv6AddrSet is the ipv6 counterpart of anyIpv4AddrSet.
+func anyIpv6AddrSet(addrs []ipv6AddrValue) bool {
+	for _, a := range addrs {
+		if a.Ipv6Addr != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func firstConfigureForDHCPv4(addrs []ipv4AddrValue) bool {
@@ -565,6 +596,24 @@ func lateInitAliases(dst *[]string, observed []string) bool {
 	return true
 }
 
+// lateInitIpv4Addrs back-fills dst from the observed Ipv4Addrs list when
+// dst is empty. Returns true if dst changed. Only reached when Create
+// used dynamic allocation (ipv4Cidr or filterParams) — the CRD's
+// Required marker on Ipv4Addrs only requires the field be present, and
+// an empty list satisfies it, so a user provisioning via CIDR/EA-filter
+// allocation legitimately submits ipv4Addrs: [].
+func lateInitIpv4Addrs(dst *[]ipv4AddrValue, observed []ibclient.HostRecordIpv4Addr) bool {
+	if len(*dst) != 0 {
+		return false
+	}
+	fromRec := ipv4AddrValuesFromSDK(observed)
+	if len(fromRec) == 0 {
+		return false
+	}
+	*dst = fromRec
+	return true
+}
+
 // lateInitIpv6Addrs back-fills dst from the observed Ipv6Addrs list when
 // dst is empty. Returns true if dst changed.
 func lateInitIpv6Addrs(dst *[]ipv6AddrValue, observed []ibclient.HostRecordIpv6Addr) bool {
@@ -581,10 +630,15 @@ func lateInitIpv6Addrs(dst *[]ipv6AddrValue, observed []ibclient.HostRecordIpv6A
 
 // lateInitialize back-fills server-defaulted optional fields — comment,
 // ttl, useTtl, extAttrs, view, configureForDns, disable, aliases, and
-// ipv6Addrs — from the observed HostRecord into spec so isUpToDate does
-// not see phantom drift on the next reconcile. Required fields (name,
-// ipv4Addrs) and the immutable networkView field are never
-// late-initialized. Returns true if any field was changed.
+// ipv4Addrs/ipv6Addrs — from the observed HostRecord into spec so
+// isUpToDate does not see phantom drift on the next reconcile. The
+// required Name field and the immutable networkView field are never
+// late-initialized. Ipv4Addrs/Ipv6Addrs are late-initialized only when
+// still empty in spec — the case where Create used dynamic allocation
+// (ipv4Cidr, ipv6Cidr, or filterParams) instead of a static address, so
+// the WAPI-assigned address is captured back into spec for a stable
+// comparison on every later reconcile. Returns true if any field was
+// changed.
 func lateInitialize(
 	comment **string,
 	ttl **uint32,
@@ -594,6 +648,7 @@ func lateInitialize(
 	configureForDNS **bool,
 	disable **bool,
 	aliases *[]string,
+	ipv4Addrs *[]ipv4AddrValue,
 	ipv6Addrs *[]ipv6AddrValue,
 	rec *ibclient.HostRecord,
 ) bool {
@@ -605,6 +660,7 @@ func lateInitialize(
 	changed = lateInitBool(configureForDNS, rec.EnableDns) || changed
 	changed = lateInitBool(disable, rec.Disable) || changed
 	changed = lateInitAliases(aliases, rec.Aliases) || changed
+	changed = lateInitIpv4Addrs(ipv4Addrs, rec.Ipv4Addrs) || changed
 	changed = lateInitIpv6Addrs(ipv6Addrs, rec.Ipv6Addrs) || changed
 	return changed
 }
@@ -695,14 +751,45 @@ func observeFromHostRecord(externalID string, rec *ibclient.HostRecord) observed
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
+// validateHostRecordAllocation enforces the mutual-exclusivity rules
+// between HostRecord's IP-provisioning strategies: static
+// ipv4Addrs/ipv6Addrs entries, CIDR-based next-available-IP allocation
+// (ipv4Cidr/ipv6Cidr, routed through CreateHostRecord), and EA-filter-based
+// next-available-IP allocation (filterParams + ipAddressType, routed
+// through AllocateNextAvailableIp). Called by provisionHostRecord before
+// dispatching to either SDK call.
+func validateHostRecordAllocation(p hostRecordCompareFields, ipv4Cidr, ipv6Cidr *string, filterParams map[string]string, ipAddressType *string) error {
+	v4Cidr := strOrEmpty(ipv4Cidr)
+	v6Cidr := strOrEmpty(ipv6Cidr)
+
+	if v4Cidr != "" && anyIpv4AddrSet(p.Ipv4Addrs) {
+		return errors.New(errIpv4CidrWithStaticAddr)
+	}
+	if v6Cidr != "" && anyIpv6AddrSet(p.Ipv6Addrs) {
+		return errors.New(errIpv6CidrWithStaticAddr)
+	}
+	if len(filterParams) > 0 {
+		if v4Cidr != "" || v6Cidr != "" {
+			return errors.New(errFilterParamsWithCidr)
+		}
+		if strOrEmpty(ipAddressType) == "" {
+			return errors.New(errFilterParamsRequiresType)
+		}
+	}
+	return nil
+}
+
 // createHostRecord issues the WAPI create call. Only the first entry of
 // Ipv4Addrs/Ipv6Addrs is forwarded — see ipv4AddrsEqual's doc comment for
-// the SDK limitation this works around. ipv4cidr/ipv6cidr (dynamic
-// next-available-IP allocation) are always empty, mirroring the ARecord
-// controller's static-IP-only scope. networkView is a create-time-only
+// the SDK limitation this works around. When ipv4Cidr/ipv6Cidr is
+// non-empty and the corresponding static address is empty, the SDK's
+// CreateHostRecord substitutes a func:nextavailableip expression for that
+// address internally — this is the CIDR-based dynamic allocation path
+// (mutually exclusive with a static address of the same family; see
+// validateHostRecordAllocation). networkView is a create-time-only
 // parameter — it is immutable, so it is passed here but never again on
 // Update.
-func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView *string) (*ibclient.HostRecord, error) {
+func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string) (*ibclient.HostRecord, error) {
 	ipv4Addr, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
 	ipv6Addr, duid := firstIpv6AddrAndDuid(p.Ipv6Addrs)
 	enableDhcp := firstConfigureForDHCPv4(p.Ipv4Addrs) || firstConfigureForDHCPv6(p.Ipv6Addrs)
@@ -713,8 +800,8 @@ func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields
 		strOrEmpty(p.Name),
 		strOrEmpty(networkView),
 		strOrEmpty(p.View),
-		"", // ipv4cidr — dynamic allocation is not exposed by this provider
-		"", // ipv6cidr — see above
+		strOrEmpty(ipv4Cidr),
+		strOrEmpty(ipv6Cidr),
 		ipv4Addr,
 		ipv6Addr,
 		mac,
@@ -726,6 +813,78 @@ func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields
 		p.Aliases,
 		boolOrFalse(p.Disable),
 	)
+}
+
+// allocateNextAvailableHostRecord issues the WAPI EA-filter-based
+// next-available-IP allocation call — used when filterParams and
+// ipAddressType are set instead of a static address or a CIDR.
+// filterParams becomes the WAPI search filter (the SDK's objectParams
+// argument) used to find a candidate Network object to allocate an
+// address from; networkView is merged in as well when set, mirroring the
+// infoblox-go-client's own reference caller convention, since
+// "network_view" is a plain network-object search field rather than an
+// extensible attribute. The SDK returns the allocated object as
+// interface{} — for objectType "record:host" this is always a
+// *ibclient.HostRecord (see ObjectManager.AllocateNextAvailableIp), but
+// the type assertion is still checked defensively.
+func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView *string, filterParams map[string]string, ipAddressType string) (*ibclient.HostRecord, error) {
+	_, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
+	_, duid := firstIpv6AddrAndDuid(p.Ipv6Addrs)
+	enableDhcp := firstConfigureForDHCPv4(p.Ipv4Addrs) || firstConfigureForDHCPv6(p.Ipv6Addrs)
+
+	objectParams := make(map[string]string, len(filterParams)+1)
+	for k, v := range filterParams {
+		objectParams[k] = v
+	}
+	if nv := strOrEmpty(networkView); nv != "" {
+		objectParams["network_view"] = nv
+	}
+
+	res, err := objMgr.AllocateNextAvailableIp(
+		strOrEmpty(p.Name),
+		"record:host",
+		objectParams,
+		nil, // params (_parameters) — no additional WAPI search filters beyond objectParams
+		false,
+		buildEA(p.ExtAttrs),
+		strOrEmpty(p.Comment),
+		boolOrFalse(p.Disable),
+		nil, // n — allocate a single address
+		ipAddressType,
+		boolOrFalse(p.ConfigureForDNS),
+		enableDhcp,
+		mac,
+		duid,
+		strOrEmpty(networkView),
+		strOrEmpty(p.View),
+		boolOrFalse(p.UseTTL),
+		uint32OrZero(p.TTL),
+		p.Aliases,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rec, ok := res.(*ibclient.HostRecord)
+	if !ok {
+		return nil, errors.Errorf("%s: got %T", errUnexpectedAllocationType, res)
+	}
+	return rec, nil
+}
+
+// provisionHostRecord validates the desired allocation strategy and
+// dispatches HostRecord creation accordingly: EA-filter-based allocation
+// (filterParams + ipAddressType) takes priority when set, otherwise
+// createHostRecord handles both the static-address and CIDR-based
+// allocation cases (the SDK itself decides between them based on whether
+// ipv4Cidr/ipv6Cidr is non-empty).
+func provisionHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string, filterParams map[string]string, ipAddressType *string) (*ibclient.HostRecord, error) {
+	if err := validateHostRecordAllocation(p, ipv4Cidr, ipv6Cidr, filterParams, ipAddressType); err != nil {
+		return nil, err
+	}
+	if len(filterParams) > 0 {
+		return allocateNextAvailableHostRecord(objMgr, p, networkView, filterParams, strOrEmpty(ipAddressType))
+	}
+	return createHostRecord(objMgr, p, networkView, ipv4Cidr, ipv6Cidr)
 }
 
 // updateHostRecord issues the WAPI update call. networkView is never
