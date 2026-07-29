@@ -16,6 +16,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/ipv4sharednetwork"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkcontainer"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
@@ -40,6 +41,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		hostrecord.SetupGated,
 		ipv4sharednetwork.SetupGated,
 		network.SetupGated,
+		networkcontainer.SetupGated,
 		networkview.SetupGated,
 		rangetemplate.SetupGated,
 		recorda.SetupGated,
@@ -68,6 +70,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		hostrecord.Setup,
 		ipv4sharednetwork.Setup,
 		network.Setup,
+		networkcontainer.Setup,
 		networkview.Setup,
 		rangetemplate.Setup,
 		recorda.Setup,
