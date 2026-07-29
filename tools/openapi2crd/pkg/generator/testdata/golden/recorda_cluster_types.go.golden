@@ -290,6 +290,10 @@ type ARecordParameters struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view"`
+	// CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr field. When set, networkView is also required.
+	Cidr *string `json:"cidr,omitempty"`
+	// Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.
+	NetworkView *string `json:"networkView,omitempty"`
 	// Delete option: also remove the associated PTR record. Write-only — never present in the RecordA struct returned by GetARecord, so it is excluded from the AtProvider mirror.
 	RemoveAssociatedPtr *bool `json:"removeAssociatedPtr,omitempty"`
 }
@@ -321,6 +325,10 @@ type ARecordObservation struct {
 	// DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Confirmed absent from the UpdateARecord SDK method signature.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
+	// CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr field. When set, networkView is also required.
+	Cidr *string `json:"cidr,omitempty"` // atProvider
+	// Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.
+	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides, e.g. "zone.com". Derived from name/view by WAPI — not a CreateARecord parameter, so it has no ForProvider counterpart.

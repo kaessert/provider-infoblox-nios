@@ -788,7 +788,7 @@ The full WAPI object exposes ~40 additional DHCP tuning fields (bootfile, waterm
 | Update | `UpdateARecord` | ObjectManager | — |
 | Delete | `DeleteARecord` | ObjectManager | — |
 
-#### Fields (request=1, response=15, both=7)
+#### Fields (request=3, response=15, both=7)
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
@@ -815,6 +815,8 @@ The full WAPI object exposes ~40 additional DHCP tuning fields (bootfile, waterm
 | `ipv4addr` | `*string` | both | yes | no | — | IPv4 address of the record. May be set statically or allocated dynamically from a CIDR at create time. |
 | `discovered_data` | `*Discoverydata` | response | no | no | — | Discovered data for this A record (DNS discovery feature). |
 | `remove_associated_ptr` | `bool` | request | no | no | — | Delete option: also remove the associated PTR record. Write-only (Update/Delete parameter, never echoed back). |
+| `cidr` | `*string` | request | no | no | — | CIDR of the network from which to allocate the next available IP address (func:nextavailableip). Create-time-only — absent from UpdateARecord's parameter list; mutually exclusive with the static ipv4addr field. When set, network_view is also required. |
+| `network_view` | `*string` | request | no | no | — | Network view to scope the CIDR for next-available-IP allocation. Create-time-only — absent from UpdateARecord's parameter list. Required when cidr is set; ignored otherwise. |
 
 #### Full Schema Notes
 
@@ -850,7 +852,7 @@ disable is present on the WAPI object (objects_generated.go) but is NOT a parame
 | Update | `UpdateAAAARecord` | ObjectManager | — |
 | Delete | `DeleteAAAARecord` | ObjectManager | — |
 
-#### Fields (request=1, response=15, both=7)
+#### Fields (request=3, response=15, both=7)
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
@@ -877,6 +879,8 @@ disable is present on the WAPI object (objects_generated.go) but is NOT a parame
 | `ipv6addr` | `*string` | both | yes | no | — | IPv6 address of the record. May be set statically or allocated dynamically from a CIDR at create time. |
 | `discovered_data` | `*Discoverydata` | response | no | no | — | Discovered data for this AAAA record (DNS discovery feature). |
 | `remove_associated_ptr` | `bool` | request | no | no | — | Delete option: also remove the associated PTR record. Write-only. |
+| `cidr` | `*string` | request | no | no | — | CIDR of the network from which to allocate the next available IP address (func:nextavailableip). Create-time-only — absent from UpdateAAAARecord's parameter list; mutually exclusive with the static ipv6addr field. When set, network_view is also required. |
+| `network_view` | `*string` | request | no | no | — | Network view to scope the CIDR for next-available-IP allocation. Create-time-only — absent from UpdateAAAARecord's parameter list. Required when cidr is set; ignored otherwise. |
 
 #### Full Schema Notes
 
@@ -1187,7 +1191,7 @@ static scan omitted).
 | Update | `UpdatePTRRecord` | ObjectManager | — |
 | Delete | `DeletePTRRecord` | ObjectManager | — |
 
-#### Fields (request=0, response=16, both=9)
+#### Fields (request=2, response=16, both=9)
 
 | Name | Go Type | Scope | Required | Immutable | Enum | Description |
 |------|---------|-------|----------|-----------|------|-------------|
@@ -1216,6 +1220,8 @@ static scan omitted).
 | `ipv4addr` | `*string` | both | no | no | — | IPv4 address the PTR record is keyed by (mutually exclusive with ipv6addr). |
 | `ipv6addr` | `*string` | both | no | no | — | IPv6 address the PTR record is keyed by (mutually exclusive with ipv4addr). |
 | `discovered_data` | `*Discoverydata` | response | no | no | — | Discovered data for this PTR record (DNS discovery feature). |
+| `cidr` | `*string` | request | no | no | — | CIDR of the network from which to allocate the next available IP address (func:nextavailableip). Create-time-only — absent from UpdatePTRRecord's parameter list; mutually exclusive with the static ipv4addr/ipv6addr field. When set, network_view is also required. |
+| `network_view` | `*string` | request | no | no | — | Network view to scope the CIDR for next-available-IP allocation. Create-time-only — absent from UpdatePTRRecord's parameter list. Required when cidr is set; ignored otherwise. |
 
 #### Full Schema Notes
 

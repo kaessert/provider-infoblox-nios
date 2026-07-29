@@ -299,6 +299,10 @@ type PTRRecordParameters struct {
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"`
+	// CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr/ipv6Addr field. When set, networkView is also required.
+	Cidr *string `json:"cidr,omitempty"`
+	// Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.
+	NetworkView *string `json:"networkView,omitempty"`
 }
 
 // PTRRecordObservation holds the observed state of a PTRRecord.
@@ -321,6 +325,7 @@ type PTRRecordObservation struct {
 	// IPv6 address the PTR record is keyed by (mutually exclusive with ipv4Addr).
 	IPv6Addr *string `json:"ipv6Addr,omitempty"` // atProvider
 	// DNS view in which the record resides, e.g. "external". Hard immutable for PTRRecord — WAPI rejects updates with "Field is not allowed for update: view".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
@@ -331,9 +336,14 @@ type PTRRecordObservation struct {
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
+	// CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr/ipv6Addr field. When set, networkView is also required.
+	Cidr *string `json:"cidr,omitempty"` // atProvider
+	// Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.
+	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides, e.g. "zone.com". Derived from name/view by WAPI — not a CreatePTRRecord parameter, so it has no ForProvider counterpart.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable after creation"
 	Zone *string `json:"zone,omitempty"` // atProvider
 	// Record name in punycode format (derived from name).
 	DNSName *string `json:"dnsName,omitempty"` // atProvider

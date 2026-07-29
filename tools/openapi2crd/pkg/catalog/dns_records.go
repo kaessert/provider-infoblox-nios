@@ -96,6 +96,20 @@ func aRecord() ResourceDescriptor {
 				Description: "DNS view in which the record resides, e.g. \"external\". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Confirmed absent from the UpdateARecord SDK method signature.",
 			},
 			{
+				Name:        "Cidr",
+				JSONName:    "cidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr field. When set, networkView is also required.",
+			},
+			{
+				Name:        "NetworkView",
+				JSONName:    "networkView",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.",
+			},
+			{
 				Name:                "RemoveAssociatedPtr",
 				JSONName:            "removeAssociatedPtr",
 				GoType:              goTypeBool,
@@ -1110,6 +1124,20 @@ func ptrRecord() ResourceDescriptor {
 				GoType:      goTypeStringMap,
 				Scope:       FieldScopeBoth,
 				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+			},
+			{
+				Name:        "Cidr",
+				JSONName:    "cidr",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr/ipv6Addr field. When set, networkView is also required.",
+			},
+			{
+				Name:        "NetworkView",
+				JSONName:    "networkView",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Description: "Network view to scope the CIDR for next-available-IP allocation. Create-time-only — ignored on Update. Required when cidr is set; ignored otherwise.",
 			},
 			{
 				Name:        "Ref",

@@ -75,6 +75,12 @@ spec:
                 description: ForProvider holds the user-supplied parameters for this
                   ARecord.
                 properties:
+                  cidr:
+                    description: CIDR of the network from which to allocate the next
+                      available IP address (WAPI func:nextavailableip). Create-time-only
+                      — ignored on Update. Mutually exclusive with the static ipv4Addr
+                      field. When set, networkView is also required.
+                    type: string
                   comment:
                     description: Comment for the record; maximum 256 characters.
                     type: string
@@ -94,6 +100,11 @@ spec:
                   name:
                     description: Owner name in FQDN format for the A record. Renaming
                       changes the record's _ref.
+                    type: string
+                  networkView:
+                    description: Network view to scope the CIDR for next-available-IP
+                      allocation. Create-time-only — ignored on Update. Required when
+                      cidr is set; ignored otherwise.
                     type: string
                   removeAssociatedPtr:
                     description: 'Delete option: also remove the associated PTR record.
@@ -268,6 +279,12 @@ spec:
                         format: int64
                         type: integer
                     type: object
+                  cidr:
+                    description: CIDR of the network from which to allocate the next
+                      available IP address (WAPI func:nextavailableip). Create-time-only
+                      — ignored on Update. Mutually exclusive with the static ipv4Addr
+                      field. When set, networkView is also required.
+                    type: string
                   cloudInfo:
                     description: Cloud API related information for this object (cloud-managed
                       records only).
@@ -757,6 +774,11 @@ spec:
                   name:
                     description: Owner name in FQDN format for the A record. Renaming
                       changes the record's _ref.
+                    type: string
+                  networkView:
+                    description: Network view to scope the CIDR for next-available-IP
+                      allocation. Create-time-only — ignored on Update. Required when
+                      cidr is set; ignored otherwise.
                     type: string
                   reclaimable:
                     description: Whether the record is reclaimable (DNS discovery
