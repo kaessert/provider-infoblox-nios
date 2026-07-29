@@ -563,6 +563,46 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateSendsAllMutableFields verifies that every mutable
+// field (comment, default_value, flags, list_values,
+// allowed_object_types, descendants_action) set on the desired spec is
+// present in the PUT body — the counterpart to
+// TestClusterUpdateDoesNotSendImmutableField, which checks exclusion.
+func TestClusterUpdateSendsAllMutableFields(t *testing.T) {
+	m := newMockEADefServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.EADefinition{Name: stringPtr("MyAttribute"), Type: "STRING"})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+	cr.Spec.ForProvider.DefaultValue = stringPtr("new default")
+	cr.Spec.ForProvider.Flags = stringPtr("C")
+	cr.Spec.ForProvider.ListValues = []clusterv1alpha1.EADefListValue{{Value: "a"}, {Value: "b"}}
+	cr.Spec.ForProvider.AllowedObjectTypes = []string{"Network", "Zone"}
+	cr.Spec.ForProvider.DescendantsAction = stringPtr("INHERIT")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	for _, field := range []string{"comment", "default_value", "flags", "list_values", "allowed_object_types", "descendants_action"} {
+		if _, present := raw[field]; !present {
+			t.Errorf("Update: request body missing mutable field %q: %v", field, raw)
+		}
+	}
+}
+
 // ── cluster: Delete ─────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {
@@ -808,6 +848,46 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Comment == nil || *stored.Comment != "new comment" {
 		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	}
+}
+
+// TestNamespacedUpdateDoesNotSendImmutableField mirrors
+// TestClusterUpdateDoesNotSendImmutableField for the namespaced scope —
+// type/min/max must never appear in the PUT body regardless of scope.
+func TestNamespacedUpdateDoesNotSendImmutableField(t *testing.T) {
+	m := newMockEADefServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.EADefinition{
+		Name: stringPtr("MyAttribute"),
+		Type: "INTEGER",
+		Min:  uint32Ptr(1),
+		Max:  uint32Ptr(10),
+	})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Type = "INTEGER"
+	cr.Spec.ForProvider.Min = uint32Ptr(1)
+	cr.Spec.ForProvider.Max = uint32Ptr(10)
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	for _, field := range []string{"type", "min", "max"} {
+		if _, present := raw[field]; present {
+			t.Errorf("Update: request body contains immutable field %q: %v", field, raw[field])
+		}
 	}
 }
 
@@ -1176,5 +1256,73 @@ func TestDescendantsActionToSDK(t *testing.T) {
 	got := descendantsActionToSDK(stringPtr("INHERIT"))
 	if got == nil || got.OptionWithEa != "INHERIT" {
 		t.Errorf("descendantsActionToSDK(INHERIT) = %v, want OptionWithEa=INHERIT", got)
+	}
+}
+
+// TestClusterListValuesConversionRoundTrip exercises the cluster-scoped
+// CRD <-> shared []string list-value conversion, including the nil/empty
+// branches of both directions.
+func TestClusterListValuesConversionRoundTrip(t *testing.T) {
+	if got := listValuesToStrings(nil); got != nil {
+		t.Errorf("listValuesToStrings(nil) = %v, want nil", got)
+	}
+	if got := listValuesToStrings([]clusterv1alpha1.EADefListValue{}); got != nil {
+		t.Errorf("listValuesToStrings([]) = %v, want nil", got)
+	}
+	if got := stringsToListValues(nil); got != nil {
+		t.Errorf("stringsToListValues(nil) = %v, want nil", got)
+	}
+	if got := stringsToListValues([]string{}); got != nil {
+		t.Errorf("stringsToListValues([]) = %v, want nil", got)
+	}
+
+	in := []clusterv1alpha1.EADefListValue{{Value: "a"}, {Value: "b"}}
+	got := listValuesToStrings(in)
+	want := []string{"a", "b"}
+	if !stringSlicesEqualUnordered(got, want) {
+		t.Errorf("listValuesToStrings(%v) = %v, want %v", in, got, want)
+	}
+	back := stringsToListValues(got)
+	if len(back) != len(in) {
+		t.Fatalf("stringsToListValues(%v) len = %d, want %d", got, len(back), len(in))
+	}
+	for i := range in {
+		if back[i].Value != in[i].Value {
+			t.Errorf("stringsToListValues round trip[%d] = %q, want %q", i, back[i].Value, in[i].Value)
+		}
+	}
+}
+
+// TestNamespacedListValuesConversionRoundTrip mirrors
+// TestClusterListValuesConversionRoundTrip for the namespaced-scoped CRD
+// list-value conversion helpers.
+func TestNamespacedListValuesConversionRoundTrip(t *testing.T) {
+	if got := namespacedListValuesToStrings(nil); got != nil {
+		t.Errorf("namespacedListValuesToStrings(nil) = %v, want nil", got)
+	}
+	if got := namespacedListValuesToStrings([]namespacedv1alpha1.EADefListValue{}); got != nil {
+		t.Errorf("namespacedListValuesToStrings([]) = %v, want nil", got)
+	}
+	if got := namespacedStringsToListValues(nil); got != nil {
+		t.Errorf("namespacedStringsToListValues(nil) = %v, want nil", got)
+	}
+	if got := namespacedStringsToListValues([]string{}); got != nil {
+		t.Errorf("namespacedStringsToListValues([]) = %v, want nil", got)
+	}
+
+	in := []namespacedv1alpha1.EADefListValue{{Value: "x"}, {Value: "y"}}
+	got := namespacedListValuesToStrings(in)
+	want := []string{"x", "y"}
+	if !stringSlicesEqualUnordered(got, want) {
+		t.Errorf("namespacedListValuesToStrings(%v) = %v, want %v", in, got, want)
+	}
+	back := namespacedStringsToListValues(got)
+	if len(back) != len(in) {
+		t.Fatalf("namespacedStringsToListValues(%v) len = %d, want %d", got, len(back), len(in))
+	}
+	for i := range in {
+		if back[i].Value != in[i].Value {
+			t.Errorf("namespacedStringsToListValues round trip[%d] = %q, want %q", i, back[i].Value, in[i].Value)
+		}
 	}
 }
