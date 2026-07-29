@@ -25,14 +25,13 @@ package catalog
 //	UpdateNetwork(ref, netview, cidr, isIPv6, comment, eas)
 //
 // `network_view` identifies a NetworkView by name — a cross-resource
-// reference candidate (tools/openapi/inventory.md's "Cross-Resource
-// References" subsection for this resource lists NetworkView as the
-// target, resolved by name rather than by the target's `_ref`, since
-// NetworkView's name is stable across most operations). The NetworkView
-// managed resource is not yet generated in this provider, so the field is
-// modeled as a plain value for now — wiring the Ref/Selector companion
-// fields is deferred until the NetworkView types exist, to avoid emitting
-// a reference resolver that imports a package that does not exist yet.
+// reference (tools/openapi/inventory.md's "Cross-Resource References"
+// subsection for this resource lists NetworkView as the target, resolved
+// by name rather than by the target's `_ref`, since NetworkView's name is
+// stable across most operations). The NetworkView managed resource is now
+// generated (cluster-scoped: apis/cluster/networkview/v1alpha1), so the
+// field carries the standard three-field reference pattern (value + Ref +
+// Selector).
 //
 // `members` is populated on read but is not a CreateNetwork/UpdateNetwork
 // parameter via the ObjectManager wrapper (the generic WAPI Connector is
@@ -57,6 +56,11 @@ func network() ResourceDescriptor {
 				Required:    true,
 				Immutable:   true,
 				Description: "Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.",
+				Reference: &ReferenceDescriptor{
+					TargetKind:  "NetworkView",
+					TargetSlug:  "networkview",
+					TargetScope: "cluster",
+				},
 			},
 			{
 				Name:        "Network",

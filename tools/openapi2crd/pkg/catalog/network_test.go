@@ -87,6 +87,38 @@ func TestNetworkImmutableFields(t *testing.T) {
 	}
 }
 
+// TestNetworkNetworkViewHasReference verifies networkView is cataloged with
+// a Reference descriptor targeting the cluster-scoped NetworkView — per the
+// cross-resource reference table, NetworkView is resolved by name rather
+// than by the target's `_ref`, since NetworkView's name is stable across
+// most operations.
+func TestNetworkNetworkViewHasReference(t *testing.T) {
+	rd, ok := FindResource("network")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "network")
+	}
+
+	for _, f := range rd.Fields {
+		if f.Name != "NetworkView" {
+			continue
+		}
+		if f.Reference == nil {
+			t.Fatalf("NetworkView.Reference = nil, want a ReferenceDescriptor targeting NetworkView")
+		}
+		if f.Reference.TargetKind != "NetworkView" {
+			t.Errorf("NetworkView.Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
+		}
+		if f.Reference.TargetSlug != "networkview" {
+			t.Errorf("NetworkView.Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != "cluster" {
+			t.Errorf("NetworkView.Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
+		}
+		return
+	}
+	t.Errorf("Network descriptor has no NetworkView field")
+}
+
 // TestNetworkNestedTypes verifies the Network descriptor carries the
 // NetworkMember nested type used by the response-only members field.
 func TestNetworkNestedTypes(t *testing.T) {

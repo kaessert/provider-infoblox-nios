@@ -8,6 +8,10 @@
 // generator package doc comment for the rationale.
 package network
 
+import (
+	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+)
+
 // NetworkMember is a Grid member DHCP-service assignment for a network. The underlying WAPI object is a union of a dhcpmember or msdhcpserver entry; at most one field group below is populated for a given entry.
 type NetworkMember struct {
 	// Grid member name serving DHCP for this network (dhcpmember entry).
@@ -25,7 +29,12 @@ type NetworkParameters struct {
 	// Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
+	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView"`
+	// +optional
+	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	// +optional
+	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
@@ -49,8 +58,10 @@ type NetworkObservation struct {
 	// +optional
 	ID string `json:"id,omitempty"` // atProvider
 	// Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6 CIDR. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature. The WAPI object type (network vs ipv6network) is selected at runtime from this value's format.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
 	Network *string `json:"network,omitempty"` // atProvider
 	// Comment for the network; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider

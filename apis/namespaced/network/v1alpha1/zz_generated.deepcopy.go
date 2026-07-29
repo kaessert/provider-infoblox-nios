@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	v1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -162,6 +163,16 @@ func (in *NetworkParameters) DeepCopyInto(out *NetworkParameters) {
 		in, out := &in.NetworkView, &out.NetworkView
 		*out = new(string)
 		**out = **in
+	}
+	if in.NetworkViewRef != nil {
+		in, out := &in.NetworkViewRef, &out.NetworkViewRef
+		*out = new(v1.NamespacedReference)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.NetworkViewSelector != nil {
+		in, out := &in.NetworkViewSelector, &out.NetworkViewSelector
+		*out = new(v1.NamespacedSelector)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Network != nil {
 		in, out := &in.Network, &out.Network
