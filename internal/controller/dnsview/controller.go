@@ -1121,7 +1121,6 @@ type dnsViewFields struct {
 	DnssecTrustedKeys     []dnssecTrustedKeyValue
 	FixedRrsetOrderFqdns  []fixedRrsetOrderFqdnValue
 	FilterAaaaList        []addressAcValue
-	LastQueriedAcl        []addressAcValue
 	MatchClients          []addressAcValue
 	MatchDestinations     []addressAcValue
 	ResponseRateLimiting  *responseRateLimitingValue
@@ -1207,7 +1206,6 @@ func buildView(f dnsViewFields) *ibclient.View {
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesToSDKPtr(f.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesToSDKPtr(f.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesToSDKPtr(f.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesToSDKPtr(f.LastQueriedAcl),
 		MatchClients:                        addressAcValuesToSDKPtr(f.MatchClients),
 		MatchDestinations:                   addressAcValuesToSDKPtr(f.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesToSDKPtr(f.Sortlist),
@@ -1292,7 +1290,6 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesFromSDKPtr(v.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesFromSDKPtr(v.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesFromSDKPtr(v.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesFromSDKPtr(v.LastQueriedAcl),
 		MatchClients:                        addressAcValuesFromSDKPtr(v.MatchClients),
 		MatchDestinations:                   addressAcValuesFromSDKPtr(v.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesFromSDKPtr(v.Sortlist),
@@ -1531,9 +1528,6 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	},
 	func(desired, observed dnsViewFields) bool {
 		return nestedSliceEqual(desired.FilterAaaaList, observed.FilterAaaaList)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.LastQueriedAcl, observed.LastQueriedAcl)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return nestedSliceEqual(desired.MatchClients, observed.MatchClients)
@@ -1793,9 +1787,6 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitNestedSlice(&desired.FilterAaaaList, observed.FilterAaaaList)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.LastQueriedAcl, observed.LastQueriedAcl)
-	},
-	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitNestedSlice(&desired.MatchClients, observed.MatchClients)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
@@ -1833,13 +1824,13 @@ func lateInitializeFields(desired, observed dnsViewFields) (dnsViewFields, bool)
 // network_view, comment) — i.e. every field mirrored by DNSViewObservation
 // (full-mirror AtProvider convention).
 //
-// edns_udp_size/use_edns_udp_size are deliberately excluded: the provider
-// is pinned to WAPI 2.9.7, whose `view` object schema does not define
-// these fields at all (confirmed live against the Grid Manager — they
-// first appear in WAPI 2.13.1). Requesting them in the GET return-fields
-// list fails every Observe() with a 400
-// (AdmConProtoError: Unknown argument/field). The controller no longer
-// reads, writes, or compares these fields anywhere.
+// edns_udp_size/use_edns_udp_size/last_queried_acl are deliberately
+// excluded: the provider is pinned to WAPI 2.9.7, whose `view` object
+// schema does not define these fields at all (confirmed live against the
+// Grid Manager). Requesting them in the GET return-fields list fails
+// every Observe() with a 400 (AdmConProtoError: Unknown argument/field).
+// The controller no longer reads, writes, or compares these fields
+// anywhere.
 var dnsViewReturnFields = []string{
 	"blacklist_action",
 	"blacklist_log_query",
@@ -1874,7 +1865,6 @@ var dnsViewReturnFields = []string{
 	"forwarders",
 	"is_default",
 	"lame_ttl",
-	"last_queried_acl",
 	"match_clients",
 	"match_destinations",
 	"max_cache_ttl",

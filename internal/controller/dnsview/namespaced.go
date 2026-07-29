@@ -330,7 +330,6 @@ func fieldsFromNamespacedParams(p *namespacedv1alpha1.DNSViewParameters) dnsView
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesFromPtrNamespaced(p.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesFromPtrNamespaced(p.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesFromPtrNamespaced(p.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesFromPtrNamespaced(p.LastQueriedAcl),
 		MatchClients:                        addressAcValuesFromPtrNamespaced(p.MatchClients),
 		MatchDestinations:                   addressAcValuesFromPtrNamespaced(p.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesFromPtrNamespaced(p.Sortlist),
@@ -415,7 +414,6 @@ func applyFieldsToNamespacedParams(f dnsViewFields, p *namespacedv1alpha1.DNSVie
 	p.DnssecTrustedKeys = dnssecTrustedKeyValuesToPtrNamespaced(f.DnssecTrustedKeys)
 	p.FixedRrsetOrderFqdns = fixedRrsetOrderFqdnValuesToPtrNamespaced(f.FixedRrsetOrderFqdns)
 	p.FilterAaaaList = addressAcValuesToPtrNamespaced(f.FilterAaaaList)
-	p.LastQueriedAcl = addressAcValuesToPtrNamespaced(f.LastQueriedAcl)
 	p.MatchClients = addressAcValuesToPtrNamespaced(f.MatchClients)
 	p.MatchDestinations = addressAcValuesToPtrNamespaced(f.MatchDestinations)
 	p.Sortlist = sortlistEntryValuesToPtrNamespaced(f.Sortlist)
@@ -501,7 +499,6 @@ func namespacedObservationFromFields(f dnsViewFields, id string, ref *string, is
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesToPtrNamespaced(f.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesToPtrNamespaced(f.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesToPtrNamespaced(f.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesToPtrNamespaced(f.LastQueriedAcl),
 		MatchClients:                        addressAcValuesToPtrNamespaced(f.MatchClients),
 		MatchDestinations:                   addressAcValuesToPtrNamespaced(f.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesToPtrNamespaced(f.Sortlist),

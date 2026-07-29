@@ -314,7 +314,6 @@ func fieldsFromClusterParams(p *clusterv1alpha1.DNSViewParameters) dnsViewFields
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesFromPtrCluster(p.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesFromPtrCluster(p.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesFromPtrCluster(p.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesFromPtrCluster(p.LastQueriedAcl),
 		MatchClients:                        addressAcValuesFromPtrCluster(p.MatchClients),
 		MatchDestinations:                   addressAcValuesFromPtrCluster(p.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesFromPtrCluster(p.Sortlist),
@@ -399,7 +398,6 @@ func applyFieldsToClusterParams(f dnsViewFields, p *clusterv1alpha1.DNSViewParam
 	p.DnssecTrustedKeys = dnssecTrustedKeyValuesToPtrCluster(f.DnssecTrustedKeys)
 	p.FixedRrsetOrderFqdns = fixedRrsetOrderFqdnValuesToPtrCluster(f.FixedRrsetOrderFqdns)
 	p.FilterAaaaList = addressAcValuesToPtrCluster(f.FilterAaaaList)
-	p.LastQueriedAcl = addressAcValuesToPtrCluster(f.LastQueriedAcl)
 	p.MatchClients = addressAcValuesToPtrCluster(f.MatchClients)
 	p.MatchDestinations = addressAcValuesToPtrCluster(f.MatchDestinations)
 	p.Sortlist = sortlistEntryValuesToPtrCluster(f.Sortlist)
@@ -485,7 +483,6 @@ func clusterObservationFromFields(f dnsViewFields, id string, ref *string, isDef
 		DnssecTrustedKeys:                   dnssecTrustedKeyValuesToPtrCluster(f.DnssecTrustedKeys),
 		FixedRrsetOrderFqdns:                fixedRrsetOrderFqdnValuesToPtrCluster(f.FixedRrsetOrderFqdns),
 		FilterAaaaList:                      addressAcValuesToPtrCluster(f.FilterAaaaList),
-		LastQueriedAcl:                      addressAcValuesToPtrCluster(f.LastQueriedAcl),
 		MatchClients:                        addressAcValuesToPtrCluster(f.MatchClients),
 		MatchDestinations:                   addressAcValuesToPtrCluster(f.MatchDestinations),
 		Sortlist:                            sortlistEntryValuesToPtrCluster(f.Sortlist),

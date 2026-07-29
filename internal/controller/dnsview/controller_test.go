@@ -207,11 +207,11 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		// Mirror the live NIOS Grid Manager pinned at WAPI 2.9.7: the
 		// `view` object schema at that version has no edns_udp_size /
-		// use_edns_udp_size fields at all, so requesting them in
-		// _return_fields is rejected with a 400
+		// use_edns_udp_size / last_queried_acl fields at all, so
+		// requesting them in _return_fields is rejected with a 400
 		// (AdmConProtoError: Unknown argument/field).
 		for _, f := range strings.Split(r.URL.Query().Get("_return_fields"), ",") {
-			if f == "edns_udp_size" || f == "use_edns_udp_size" {
+			if f == "edns_udp_size" || f == "use_edns_udp_size" || f == "last_queried_acl" {
 				writeJSON(w, http.StatusBadRequest, map[string]string{
 					"Error": "AdmConProtoError: Unknown argument/field: '" + f + "'",
 					"code":  "Client.Ibap.Proto",
@@ -402,6 +402,37 @@ func TestClusterObserveDoesNotRequestUnsupportedEdnsFields(t *testing.T) {
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
 		t.Fatalf("Observe: unexpected error (edns_udp_size/use_edns_udp_size must not be requested at WAPI 2.9.7): %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true, got false")
+	}
+}
+
+// TestClusterObserveDoesNotRequestUnsupportedLastQueriedAclField verifies
+// Observe never requests last_queried_acl in the WAPI GET return-fields
+// list. The provider is pinned to WAPI 2.9.7, whose `view` object schema
+// doesn't define this field at all — requesting it fails every Observe()
+// with a 400 (AdmConProtoError: Unknown argument/field), which would
+// otherwise put the resource in a permanent ReconcileError loop. The mock
+// server's GET handler rejects this field exactly like the live Grid
+// Manager, so this test fails loudly if the field is ever reintroduced
+// into dnsViewReturnFields.
+func TestClusterObserveDoesNotRequestUnsupportedLastQueriedAclField(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.View{
+		Name:    stringPtr("my-view"),
+		Comment: stringPtr("hello"),
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error (last_queried_acl must not be requested at WAPI 2.9.7): %v", err)
 	}
 	if !got.ResourceExists {
 		t.Error("Observe: want ResourceExists=true, got false")
@@ -1324,7 +1355,6 @@ func TestClusterObserveFullFieldMirror(t *testing.T) {
 		FilterAaaaList: []*ibclient.Addressac{
 			{Address: "192.0.2.0/24", Permission: "ALLOW"},
 		},
-		LastQueriedAcl:    []*ibclient.Addressac{{Address: "192.0.2.1", Permission: "ALLOW"}},
 		MatchClients:      []*ibclient.Addressac{{Address: "198.51.100.0/24", Permission: "ALLOW"}},
 		MatchDestinations: []*ibclient.Addressac{{Address: "203.0.113.0/24", Permission: "DENY"}},
 		FixedRrsetOrderFqdns: []*ibclient.GridDnsFixedrrsetorderfqdn{
@@ -1364,7 +1394,7 @@ func TestClusterObserveFullFieldMirror(t *testing.T) {
 	if len(ap.DnssecTrustedKeys) != 1 || ap.DnssecTrustedKeys[0].Fqdn == nil || *ap.DnssecTrustedKeys[0].Fqdn != "example.com" {
 		t.Errorf("AtProvider.DnssecTrustedKeys = %+v, want one entry with Fqdn=example.com", ap.DnssecTrustedKeys)
 	}
-	if len(ap.FilterAaaaList) != 1 || len(ap.LastQueriedAcl) != 1 || len(ap.MatchClients) != 1 || len(ap.MatchDestinations) != 1 {
+	if len(ap.FilterAaaaList) != 1 || len(ap.MatchClients) != 1 || len(ap.MatchDestinations) != 1 {
 		t.Errorf("AtProvider address-ACL lists not fully mirrored: %+v", ap)
 	}
 	if len(ap.FixedRrsetOrderFqdns) != 1 || ap.FixedRrsetOrderFqdns[0].Fqdn == nil || *ap.FixedRrsetOrderFqdns[0].Fqdn != "svc.example.com" {
@@ -1415,7 +1445,6 @@ func TestNamespacedObserveFullFieldMirror(t *testing.T) {
 			{Fqdn: "example.org", Algorithm: "RSASHA256", Key: "def456"},
 		},
 		FilterAaaaList:    []*ibclient.Addressac{{Address: "192.0.2.0/24", Permission: "ALLOW"}},
-		LastQueriedAcl:    []*ibclient.Addressac{{Address: "192.0.2.1", Permission: "ALLOW"}},
 		MatchClients:      []*ibclient.Addressac{{Address: "198.51.100.0/24", Permission: "ALLOW"}},
 		MatchDestinations: []*ibclient.Addressac{{Address: "203.0.113.0/24", Permission: "DENY"}},
 		FixedRrsetOrderFqdns: []*ibclient.GridDnsFixedrrsetorderfqdn{
@@ -1459,7 +1488,7 @@ func TestNamespacedObserveFullFieldMirror(t *testing.T) {
 	if len(ap.DnssecTrustedKeys) != 1 {
 		t.Errorf("AtProvider.DnssecTrustedKeys = %+v, want one entry", ap.DnssecTrustedKeys)
 	}
-	if len(ap.FilterAaaaList) != 1 || len(ap.LastQueriedAcl) != 1 || len(ap.MatchClients) != 1 || len(ap.MatchDestinations) != 1 {
+	if len(ap.FilterAaaaList) != 1 || len(ap.MatchClients) != 1 || len(ap.MatchDestinations) != 1 {
 		t.Errorf("AtProvider address-ACL lists not fully mirrored: %+v", ap)
 	}
 	if len(ap.FixedRrsetOrderFqdns) != 1 {
