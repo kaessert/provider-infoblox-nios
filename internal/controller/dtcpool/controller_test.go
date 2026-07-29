@@ -277,6 +277,12 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		// Mirror live WAPI: when lb_alternate_method is omitted from the
+		// create request, the server defaults it to "NONE" on read-back —
+		// it is never actually absent from a subsequent GET.
+		if rec.LbAlternateMethod == "" {
+			rec.LbAlternateMethod = lbAlternateMethodUnset
+		}
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
@@ -312,6 +318,16 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 		var incoming ibclient.DtcPool
 		if err := json.Unmarshal(body, &incoming); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Mirror live WAPI's write-path validation: lb_alternate_method
+		// only accepts GLOBAL_AVAILABILITY, RATIO, ROUND_ROBIN, TOPOLOGY,
+		// ALL_AVAILABLE, or DYNAMIC_RATIO as an explicit value — "NONE" is
+		// a read-back-only default WAPI rejects if sent back explicitly.
+		if incoming.LbAlternateMethod == lbAlternateMethodUnset {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Invalid value for lb_alternate_method (\"NONE\") valid values are: GLOBAL_AVAILABILITY, RATIO, ROUND_ROBIN, TOPOLOGY, ALL_AVAILABLE, DYNAMIC_RATIO","code":"Client.Ibap.Proto"}`))
 			return
 		}
 
@@ -785,6 +801,96 @@ func TestUpdateSendsAllFields(t *testing.T) {
 	}
 	if _, present := raw["lb_alternate_method"]; !present {
 		t.Error("Update: request body missing 'lb_alternate_method' — PUT must echo all fields")
+	}
+}
+
+// TestLateInitializeSkipsLbAlternateMethodDefault pins the fix for the
+// Create→Observe→Update loop that previously 400'd forever: WAPI defaults
+// lb_alternate_method to "NONE" on read-back when the field was omitted at
+// Create, but rejects "NONE" as an explicit value on Update. lateInitialize
+// must never write that default back into spec.
+func TestLateInitializeSkipsLbAlternateMethodDefault(t *testing.T) {
+	var comment, availability, lbAlternateMethod, lbPreferredTopology, lbAlternateTopology *string
+	var disable, useTTL *bool
+	var quorum, ttl *uint32
+	var extAttrs map[string]string
+	var lbdrp, lbdra *dynRatio
+
+	rec := &ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+		LbAlternateMethod: lbAlternateMethodUnset, // "NONE" — WAPI's omitted-field default
+	}
+
+	changed := lateInitialize(&comment, &disable, &availability, &quorum, &ttl, &useTTL, &extAttrs, &lbAlternateMethod, &lbPreferredTopology, &lbAlternateTopology, &lbdrp, &lbdra, rec)
+	if changed {
+		t.Error("lateInitialize: want changed=false, lb_alternate_method=NONE must not count as a backfill")
+	}
+	if lbAlternateMethod != nil {
+		t.Errorf("lateInitialize: lbAlternateMethod = %v, want nil (NONE must never be written into spec)", *lbAlternateMethod)
+	}
+}
+
+// TestIsUpToDateTreatsLbAlternateMethodNoneAsUnset pins that an unset spec
+// field is considered up to date against WAPI's "NONE" read-back default,
+// so lateInitialize's refusal to backfill "NONE" (see
+// TestLateInitializeSkipsLbAlternateMethodDefault) does not itself
+// manufacture a phantom diff on every subsequent reconcile.
+func TestIsUpToDateTreatsLbAlternateMethodNoneAsUnset(t *testing.T) {
+	rec := &ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+		LbAlternateMethod: lbAlternateMethodUnset,
+	}
+	if !isUpToDate(rec.Name, stringPtr(rec.LbPreferredMethod), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, map[string]string{}, rec) {
+		t.Error("isUpToDate: want an unset spec lbAlternateMethod to be up to date against observed \"NONE\"")
+	}
+}
+
+// TestClusterUpdateAfterObserveOmitsDefaultedLbAlternateMethod reproduces
+// the full E2E-caught bug end to end: Create a pool with no
+// lbAlternateMethod → Observe reads back WAPI's "NONE" default and
+// late-initializes spec → a later Update (comment-only change) must not
+// send an explicit lb_alternate_method="NONE", which the mock server
+// (mirroring live WAPI) rejects with 400.
+func TestClusterUpdateAfterObserveOmitsDefaultedLbAlternateMethod(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "") // no lbAlternateMethod set, no external-name yet
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if cr.Spec.ForProvider.LBAlternateMethod != nil {
+		t.Fatalf("Observe: lbAlternateMethod late-initialized to %q, want nil (NONE must never round-trip into spec)", *cr.Spec.ForProvider.LBAlternateMethod)
+	}
+	if !obs.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true immediately after Create with no drift (observed \"NONE\" must not read as a phantom diff against an unset spec field)")
+	}
+
+	cr.Spec.ForProvider.Comment = stringPtr("updated comment")
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error after comment-only change: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	m.mu.Unlock()
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("cannot decode captured PUT body: %v", err)
+	}
+	if v, present := raw["lb_alternate_method"]; present {
+		t.Errorf("Update: request body sent lb_alternate_method=%v, want omitted (WAPI rejects explicit \"NONE\")", v)
 	}
 }
 

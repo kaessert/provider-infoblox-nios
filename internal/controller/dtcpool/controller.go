@@ -84,6 +84,17 @@ const (
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
 const wapiVersion = "2.9.7"
 
+// lbAlternateMethodUnset is the WAPI read-back value for dtc:pool's
+// lb_alternate_method when the field was omitted on Create (the WAPI
+// server-side default). It is NOT a value the WAPI write path accepts on
+// Update — that endpoint only accepts GLOBAL_AVAILABILITY, RATIO,
+// ROUND_ROBIN, TOPOLOGY, ALL_AVAILABLE, or DYNAMIC_RATIO (live-verified
+// via the WAPI's own 400 error message). Treat this value as "unset"
+// everywhere a DtcPool response is read, so it never gets echoed back as
+// an explicit request value — see lateInitLbAlternateMethod,
+// lbAlternateMethodUpToDate, and lbAlternateMethodForRequest below.
+const lbAlternateMethodUnset = "NONE"
+
 // ── Credential bridge ───────────────────────────────────────────────────────
 
 // nioCredentials holds the WAPI connection parameters extracted from the
@@ -613,7 +624,7 @@ func scalarFieldsUpToDate(name, lbPreferredMethod, lbAlternateMethod, comment, a
 	if strOrEmpty(lbPreferredMethod) != rec.LbPreferredMethod {
 		return false
 	}
-	if strOrEmpty(lbAlternateMethod) != rec.LbAlternateMethod {
+	if !lbAlternateMethodUpToDate(lbAlternateMethod, rec.LbAlternateMethod) {
 		return false
 	}
 	if strOrEmpty(comment) != strOrEmpty(rec.Comment) {
@@ -674,7 +685,7 @@ func lateInitialize(comment **string, disable **bool, availability **string, quo
 	changed = lateInitUint32(ttl, rec.Ttl) || changed
 	changed = lateInitBool(useTTL, rec.UseTtl) || changed
 	changed = lateInitExtAttrs(extAttrs, rec.Ea) || changed
-	changed = lateInitStringFromPlain(lbAlternateMethod, rec.LbAlternateMethod) || changed
+	changed = lateInitLbAlternateMethod(lbAlternateMethod, rec.LbAlternateMethod) || changed
 	changed = lateInitString(lbPreferredTopology, rec.LbPreferredTopology) || changed
 	changed = lateInitString(lbAlternateTopology, rec.LbAlternateTopology) || changed
 	changed = lateInitDynRatio(lbDynamicRatioPreferred, rec.LbDynamicRatioPreferred) || changed
@@ -703,6 +714,50 @@ func lateInitStringFromPlain(field **string, observed string) bool {
 	v := observed
 	*field = &v
 	return true
+}
+
+// lateInitLbAlternateMethod back-fills lbAlternateMethod from the
+// observed value like lateInitStringFromPlain, but never writes back
+// lbAlternateMethodUnset ("NONE") — the WAPI read-back default when the
+// field was omitted at Create. Round-tripping that default into spec
+// would make every subsequent Update send an explicit lb_alternate_method
+// value WAPI's write path rejects — see lbAlternateMethodUnset.
+func lateInitLbAlternateMethod(field **string, observed string) bool {
+	if observed == lbAlternateMethodUnset {
+		return false
+	}
+	return lateInitStringFromPlain(field, observed)
+}
+
+// lbAlternateMethodUpToDate compares the desired lbAlternateMethod
+// against the value WAPI reports, treating lbAlternateMethodUnset
+// ("NONE") as equivalent to an unset field on both sides — see
+// lbAlternateMethodUnset for why "NONE" must never participate in this
+// comparison as a literal value.
+func lbAlternateMethodUpToDate(lbAlternateMethod *string, observed string) bool {
+	want := strOrEmpty(lbAlternateMethod)
+	if want == lbAlternateMethodUnset {
+		want = ""
+	}
+	if observed == lbAlternateMethodUnset {
+		observed = ""
+	}
+	return want == observed
+}
+
+// lbAlternateMethodForRequest normalizes the outgoing lb_alternate_method
+// value for Create/Update requests. If it is unset or equals
+// lbAlternateMethodUnset ("NONE"), this returns "" so the SDK's
+// `omitempty`-tagged LbAlternateMethod field is dropped from the request
+// entirely — mirroring how Create already omits it today — instead of
+// being sent as the literal string "NONE", which WAPI's write path
+// rejects.
+func lbAlternateMethodForRequest(lbAlternateMethod *string) string {
+	v := strOrEmpty(lbAlternateMethod)
+	if v == lbAlternateMethodUnset {
+		return ""
+	}
+	return v
 }
 
 // lateInitBool back-fills a single optional *bool spec field from the
@@ -853,7 +908,7 @@ func buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment *string, s
 	return &ibclient.DtcPool{
 		Name:                    name,
 		LbPreferredMethod:       strOrEmpty(lbPreferredMethod),
-		LbAlternateMethod:       strOrEmpty(lbAlternateMethod),
+		LbAlternateMethod:       lbAlternateMethodForRequest(lbAlternateMethod),
 		Comment:                 comment,
 		Servers:                 buildServers(servers),
 		Availability:            strOrEmpty(availability),
