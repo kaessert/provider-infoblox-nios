@@ -413,6 +413,39 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterObserveNotUpToDate verifies Observe() reports
+// ResourceUpToDate=false when the desired spec drifts from the observed
+// server state (as opposed to TestClusterObserveSuccess, which pins the
+// matching case).
+func TestClusterObserveNotUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
+		NetviewName: "default",
+		IPv4Address: "10.0.0.5",
+		Mac:         stringPtr("00:11:22:33:44:55"),
+		MatchClient: stringPtr("MAC_ADDRESS"),
+		Comment:     "old comment",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterFixedAddress("my-fixedaddress", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment") // drifted from server
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for a comment drift, got true")
+	}
+}
+
 func TestClusterObserveNotFound(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -670,6 +703,27 @@ func TestClusterUpdateDefaultsMatchClientForIPv4(t *testing.T) {
 	m.mu.Unlock()
 	if stored.MatchClient == nil || *stored.MatchClient != matchClientDefault {
 		t.Errorf("Update: stored match_client = %v, want default %q", stored.MatchClient, matchClientDefault)
+	}
+}
+
+// TestClusterUpdateServerError verifies Update() surfaces a wrapped error
+// (rather than a panic or a silently unchanged external-name) when the
+// WAPI backend rejects the PUT request.
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	ref := "fixedaddress/test1:10.0.0.5"
+	cr := newClusterFixedAddress("my-fixedaddress", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("triggers update")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: want error for a 500 WAPI response, got nil")
+	}
+
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name changed to %q after a failed update, want unchanged %q", got, ref)
 	}
 }
 
@@ -1203,36 +1257,145 @@ func TestLateInitializeResolvesDynamicAllocationAddress(t *testing.T) {
 	}
 }
 
+// TestIsUpToDate is a table-driven test exercising every mutable field
+// compared by isUpToDate (isUpToDateAddress and isUpToDateDHCP), covering
+// both the matching baseline and a drift on each individual field.
 func TestIsUpToDate(t *testing.T) {
 	base := fixedAddressFields{
-		IPv4Addr:    stringPtr("10.0.0.5"),
-		MAC:         stringPtr("00:11:22:33:44:55"),
-		NetworkView: stringPtr("default"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     stringPtr("hello"),
+		IPv4Addr:                    stringPtr("10.0.0.5"),
+		MAC:                         stringPtr("00:11:22:33:44:55"),
+		NetworkView:                 stringPtr("default"),
+		Network:                     stringPtr("10.0.0.0/24"),
+		Name:                        stringPtr("host1"),
+		MatchClient:                 stringPtr("MAC_ADDRESS"),
+		Comment:                     stringPtr("hello"),
+		ExtAttrs:                    map[string]string{"env": "prod"},
+		Disable:                     boolPtr(false),
+		AgentCircuitID:              stringPtr("circuit1"),
+		AgentRemoteID:               stringPtr("remote1"),
+		ClientIdentifierPrependZero: boolPtr(true),
+		DHCPClientIdentifier:        stringPtr("client1"),
+		UseOptions:                  boolPtr(true),
+		Options: []dhcpOption{
+			{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")},
+		},
 	}
 	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		NetviewName: "default",
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     "hello",
+		IPv4Address:                 "10.0.0.5",
+		Mac:                         stringPtr("00:11:22:33:44:55"),
+		NetviewName:                 "default",
+		Cidr:                        "10.0.0.0/24",
+		Name:                        stringPtr("host1"),
+		MatchClient:                 stringPtr("MAC_ADDRESS"),
+		Comment:                     "hello",
+		Ea:                          ibclient.EA{"env": "prod"},
+		Disable:                     boolPtr(false),
+		AgentCircuitId:              stringPtr("circuit1"),
+		AgentRemoteId:               stringPtr("remote1"),
+		ClientIdentifierPrependZero: boolPtr(true),
+		DhcpClientIdentifier:        stringPtr("client1"),
+		UseOptions:                  boolPtr(true),
+		Options: []*ibclient.Dhcpoption{
+			{Name: "routers", Value: "10.0.0.1"},
+		},
 	}
 
 	if !isUpToDate(base, fa) {
-		t.Error("isUpToDate: want true for matching fields, got false")
+		t.Fatal("isUpToDate: want true for matching fields, got false")
 	}
 
-	drifted := base
-	drifted.Comment = stringPtr("changed")
-	if isUpToDate(drifted, fa) {
-		t.Error("isUpToDate: want false for a comment diff, got true")
+	cases := map[string]struct {
+		reason string
+		mutate func(f *fixedAddressFields)
+	}{
+		"IPv4Addr": {
+			reason: "an ipv4addr diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.IPv4Addr = stringPtr("10.0.0.9") },
+		},
+		"MAC": {
+			reason: "a mac diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.MAC = stringPtr("aa:bb:cc:dd:ee:ff") },
+		},
+		"NetworkView": {
+			reason: "a network_view diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.NetworkView = stringPtr("other-view") },
+		},
+		"Network": {
+			reason: "a network (CIDR) diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.Network = stringPtr("10.0.1.0/24") },
+		},
+		"Name": {
+			reason: "a name diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.Name = stringPtr("host2") },
+		},
+		"MatchClient": {
+			reason: "a match_client diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.MatchClient = stringPtr("CIRCUIT_ID") },
+		},
+		"Comment": {
+			reason: "a comment diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.Comment = stringPtr("changed") },
+		},
+		"ExtAttrs": {
+			reason: "an extattrs diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.ExtAttrs = map[string]string{"env": "dev"} },
+		},
+		"Disable": {
+			reason: "a disable diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.Disable = boolPtr(true) },
+		},
+		"AgentCircuitID": {
+			reason: "an agent_circuit_id diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.AgentCircuitID = stringPtr("circuit2") },
+		},
+		"AgentRemoteID": {
+			reason: "an agent_remote_id diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.AgentRemoteID = stringPtr("remote2") },
+		},
+		"ClientIdentifierPrependZero": {
+			reason: "a client_identifier_prepend_zero diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.ClientIdentifierPrependZero = boolPtr(false) },
+		},
+		"DHCPClientIdentifier": {
+			reason: "a dhcp_client_identifier diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.DHCPClientIdentifier = stringPtr("client2") },
+		},
+		"UseOptions": {
+			reason: "a use_options diff must be detected",
+			mutate: func(f *fixedAddressFields) { f.UseOptions = boolPtr(false) },
+		},
+		"Options": {
+			reason: "an options diff must be detected",
+			mutate: func(f *fixedAddressFields) {
+				f.Options = []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
+			},
+		},
 	}
 
-	drifted = base
-	drifted.IPv4Addr = stringPtr("10.0.0.9")
-	if isUpToDate(drifted, fa) {
-		t.Error("isUpToDate: want false for an ipv4addr diff, got true")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			drifted := base
+			tc.mutate(&drifted)
+			if isUpToDate(drifted, fa) {
+				t.Errorf("%s: isUpToDate: want false, got true", tc.reason)
+			}
+		})
+	}
+}
+
+// TestIsUpToDateIPv6Addr verifies the IPv6 branch of isUpToDateAddress:
+// when the desired fields carry ipv6addr (isIPv6()==true), a mismatch on
+// ipv6addr is detected instead of ipv4addr.
+func TestIsUpToDateIPv6Addr(t *testing.T) {
+	f := fixedAddressFields{IPv6Addr: stringPtr("2001:db8::5"), NetworkView: stringPtr("default")}
+	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::5", NetviewName: "default"}
+	if !isUpToDate(f, fa) {
+		t.Fatal("isUpToDate: want true for matching ipv6addr, got false")
+	}
+
+	f.IPv6Addr = stringPtr("2001:db8::9")
+	if isUpToDate(f, fa) {
+		t.Error("isUpToDate: want false for an ipv6addr diff, got true")
 	}
 }
 
