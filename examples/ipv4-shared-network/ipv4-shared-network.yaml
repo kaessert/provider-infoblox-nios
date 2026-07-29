@@ -1,0 +1,57 @@
+# IPv4SharedNetwork is a cluster-scoped Infoblox NIOS shared network (WAPI
+# object type sharednetwork). See ipv4-shared-network-namespaced.yaml for
+# the namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string from
+# Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   name:     display name of the shared network. Mutable after creation.
+#   networks: CIDRs of the member networks combined into this shared
+#             network. Each entry must match the `network` (CIDR) field of
+#             an existing Network object on the Grid Manager — WAPI
+#             validates membership against real network objects, not
+#             arbitrary strings. This provider does not yet ship an
+#             IPv4Network managed resource, so the CIDR below must already
+#             exist on the target Grid Manager (created directly via WAPI,
+#             or via a future Network managed resource once available in
+#             this provider). Replace with a real, pre-existing network
+#             CIDR for a live NIOS Grid Manager.
+#
+# Optional fields:
+#   networkView: the NetworkView the shared network belongs to. Present in
+#                both the Create and Update SDK wrapper signatures, but
+#                live WAPI schema probing found this field immutable after
+#                creation (CEL rule enforced) — the WAPI schema rejects
+#                changing it even though the wrapper accepts the parameter
+#                on update calls. Defaults to the Grid's well-known
+#                "default" network view when omitted.
+#   comment:     free-text description. Mutable — used as the update-tester
+#                target field below.
+#   extAttrs, disable, useOptions, options: see the CRD schema for details.
+apiVersion: ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network
+  annotations:
+    meta.upbound.io/example-id: ipv4sharednetwork/v1alpha1/ipv4sharednetwork
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-ipv4-shared-network.sh
+    # comment is the mutable scalar exercised by the update-tester.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+spec:
+  forProvider:
+    name: example-shared-network
+    networks:
+      - 203.0.113.0/25
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
