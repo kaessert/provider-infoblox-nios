@@ -380,12 +380,6 @@ spec:
                       answers.
                     format: int64
                     type: integer
-                  maxUdpSize:
-                    description: The maximum DNS response size, in bytes, that authoritative
-                      DNS servers will send. The value should be between 512 and 4096
-                      bytes. The recommended value is between 512 and 1220 bytes.
-                    format: int64
-                    type: integer
                   name:
                     description: Name of the DNS view. Renaming an existing view changes
                       its _ref (DNSView is in the _ref-unstable resource group — the
@@ -684,9 +678,6 @@ spec:
                     type: boolean
                   useMaxNcacheTtl:
                     description: 'Use flag for: max_ncache_ttl.'
-                    type: boolean
-                  useMaxUdpSize:
-                    description: 'Use flag for: max_udp_size.'
                     type: boolean
                   useNxdomainRedirect:
                     description: 'Use flag for: nxdomain_redirect, nxdomain_redirect_addresses,
@@ -1165,12 +1156,6 @@ spec:
                       answers.
                     format: int64
                     type: integer
-                  maxUdpSize:
-                    description: The maximum DNS response size, in bytes, that authoritative
-                      DNS servers will send. The value should be between 512 and 4096
-                      bytes. The recommended value is between 512 and 1220 bytes.
-                    format: int64
-                    type: integer
                   name:
                     description: Name of the DNS view. Renaming an existing view changes
                       its _ref (DNSView is in the _ref-unstable resource group — the
@@ -1476,9 +1461,6 @@ spec:
                     type: boolean
                   useMaxNcacheTtl:
                     description: 'Use flag for: max_ncache_ttl.'
-                    type: boolean
-                  useMaxUdpSize:
-                    description: 'Use flag for: max_udp_size.'
                     type: boolean
                   useNxdomainRedirect:
                     description: 'Use flag for: nxdomain_redirect, nxdomain_redirect_addresses,

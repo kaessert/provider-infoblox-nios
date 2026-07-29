@@ -327,10 +327,6 @@ type DNSViewParameters struct {
 	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"`
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"`
-	// The maximum DNS response size, in bytes, that authoritative DNS servers will send. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.
-	MaxUDPSize *int64 `json:"maxUdpSize,omitempty"`
-	// Use flag for: max_udp_size.
-	UseMaxUDPSize *bool `json:"useMaxUdpSize,omitempty"`
 	// The number of seconds of delay before notify messages are sent to secondaries.
 	NotifyDelay *int64 `json:"notifyDelay,omitempty"`
 	// The flag that indicates whether NXDOMAIN redirection queries are logged. The default value is false.
@@ -515,10 +511,6 @@ type DNSViewObservation struct {
 	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"` // atProvider
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"` // atProvider
-	// The maximum DNS response size, in bytes, that authoritative DNS servers will send. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.
-	MaxUDPSize *int64 `json:"maxUdpSize,omitempty"` // atProvider
-	// Use flag for: max_udp_size.
-	UseMaxUDPSize *bool `json:"useMaxUdpSize,omitempty"` // atProvider
 	// The number of seconds of delay before notify messages are sent to secondaries.
 	NotifyDelay *int64 `json:"notifyDelay,omitempty"` // atProvider
 	// The flag that indicates whether NXDOMAIN redirection queries are logged. The default value is false.

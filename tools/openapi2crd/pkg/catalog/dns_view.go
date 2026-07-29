@@ -49,16 +49,17 @@ package catalog
 // live-verification decision record to avoid retroactive changes during
 // wave expansion.
 //
-// Excluded fields: edns_udp_size, use_edns_udp_size, and last_queried_acl are
-// NOT part of this descriptor. They are documented in newer WAPI schema
-// versions but do not exist at all on the pinned WAPI 2.9.7 baseline —
-// requesting any of them returns a live 400 from a real Grid Manager
-// appliance ("Unknown argument/field"). edns_udp_size/use_edns_udp_size first
-// appear starting WAPI 2.13.1; last_queried_acl was confirmed unsupported by
-// the same live-probing method during the DNSView Phase 6 wave. Re-add them
-// (as FieldScopeBoth, matching the rest of the View object) only after the
-// pinned WAPI baseline is upgraded past the version that introduces each
-// field.
+// Excluded fields: edns_udp_size, use_edns_udp_size, last_queried_acl, and
+// max_udp_size/use_max_udp_size are NOT part of this descriptor. They are
+// documented in newer WAPI schema versions but do not exist at all on the
+// pinned WAPI 2.9.7 baseline — requesting any of them returns a live 400
+// from a real Grid Manager appliance ("Unknown argument/field").
+// edns_udp_size/use_edns_udp_size first appear starting WAPI 2.13.1;
+// last_queried_acl and max_udp_size/use_max_udp_size were confirmed
+// unsupported by the same live-probing method during the DNSView Phase 6
+// wave. Re-add them (as FieldScopeBoth, matching the rest of the View
+// object) only after the pinned WAPI baseline is upgraded past the version
+// that introduces each field.
 func dnsView() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "DNSView",
@@ -468,20 +469,14 @@ func dnsView() ResourceDescriptor {
 				Scope:       FieldScopeBoth,
 				Description: "Use flag for: max_ncache_ttl.",
 			},
-			{
-				Name:        "MaxUDPSize",
-				JSONName:    "maxUdpSize",
-				GoType:      goTypeInt64,
-				Scope:       FieldScopeBoth,
-				Description: "The maximum DNS response size, in bytes, that authoritative DNS servers will send. The value should be between 512 and 4096 bytes. The recommended value is between 512 and 1220 bytes.",
-			},
-			{
-				Name:        "UseMaxUDPSize",
-				JSONName:    "useMaxUdpSize",
-				GoType:      goTypeBool,
-				Scope:       FieldScopeBoth,
-				Description: "Use flag for: max_udp_size.",
-			},
+			// MaxUDPSize and UseMaxUDPSize (WAPI max_udp_size /
+			// use_max_udp_size) are intentionally excluded from this
+			// descriptor: they don't exist at all on the pinned WAPI 2.9.7
+			// baseline (confirmed by a live 400 response against a real
+			// Grid Manager appliance) and first appear in a later WAPI
+			// version. Advertising them in the CRD schema would let a
+			// user set a field the controller can never read back or
+			// persist.
 			{
 				Name:        "NotifyDelay",
 				JSONName:    "notifyDelay",

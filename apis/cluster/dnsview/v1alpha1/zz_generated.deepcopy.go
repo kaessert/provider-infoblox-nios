@@ -713,16 +713,6 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.MaxUDPSize != nil {
-		in, out := &in.MaxUDPSize, &out.MaxUDPSize
-		*out = new(int64)
-		**out = **in
-	}
-	if in.UseMaxUDPSize != nil {
-		in, out := &in.UseMaxUDPSize, &out.UseMaxUDPSize
-		*out = new(bool)
-		**out = **in
-	}
 	if in.NotifyDelay != nil {
 		in, out := &in.NotifyDelay, &out.NotifyDelay
 		*out = new(int64)
@@ -1175,16 +1165,6 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.UseMaxNcacheTTL != nil {
 		in, out := &in.UseMaxNcacheTTL, &out.UseMaxNcacheTTL
-		*out = new(bool)
-		**out = **in
-	}
-	if in.MaxUDPSize != nil {
-		in, out := &in.MaxUDPSize, &out.MaxUDPSize
-		*out = new(int64)
-		**out = **in
-	}
-	if in.UseMaxUDPSize != nil {
-		in, out := &in.UseMaxUDPSize, &out.UseMaxUDPSize
 		*out = new(bool)
 		**out = **in
 	}
