@@ -263,6 +263,7 @@ func All() []ResourceDescriptor {
 		dtcServer(),
 		dnsView(),
 		dtcPool(),
+		dtcLBDN(),
 	}
 }
 
