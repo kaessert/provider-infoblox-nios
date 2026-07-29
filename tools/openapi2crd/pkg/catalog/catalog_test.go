@@ -881,6 +881,22 @@ func TestZoneAuthImmutableFields(t *testing.T) {
 	rd, ok := FindResource("zoneauth")
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "zoneauth")
+	}
+
+	wantImmutable := map[string]bool{
+		"fqdn":       true,
+		"view":       true,
+		"zoneFormat": true,
+	}
+
+	for _, f := range rd.Fields {
+		want := wantImmutable[f.JSONName]
+		if f.Immutable != want {
+			t.Errorf("field %q Immutable = %v, want %v", f.JSONName, f.Immutable, want)
+		}
+	}
+}
+
 // TestZoneForwardImmutableFields verifies the three live-verified immutable
 // fields (fqdn, view, zoneFormat) carry Immutable=true and every other
 // field does not.
@@ -987,6 +1003,9 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("NetworkContainer descriptor has no NetworkView field")
+	}
+}
+
 // TestZoneForwardNestedTypes verifies the NameServer and ForwardingServer
 // nested types are present with the fields consumed by forwardTo /
 // forwardingServers.

@@ -25,13 +25,13 @@ import (
 	clusterinfobloxniosv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterzoneauthv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	clusterzonedelegatedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
+	clusterzoneforwardv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
 	namespacedhostrecordv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacedipv4sharednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
 	namespacednetworkv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	namespacednetworkcontainerv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
 	namespacednetworkviewv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	namespacedrangetemplatev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
-	clusterzoneforwardv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
 	namespacedrecordav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedrecordaaaav1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
 	namespacedrecordcnamev1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
@@ -83,6 +83,8 @@ func init() {
 	AddToSchemes = append(AddToSchemes, clusterzoneauthv1alpha1.SchemeBuilder.AddToScheme)
 	// Register cluster-scoped Zonedelegated types.
 	AddToSchemes = append(AddToSchemes, clusterzonedelegatedv1alpha1.SchemeBuilder.AddToScheme)
+	// Register cluster-scoped Zoneforward types.
+	AddToSchemes = append(AddToSchemes, clusterzoneforwardv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Hostrecord types.
 	AddToSchemes = append(AddToSchemes, namespacedhostrecordv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Ipv4sharednetwork types.
@@ -95,8 +97,6 @@ func init() {
 	AddToSchemes = append(AddToSchemes, namespacednetworkviewv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Rangetemplate types.
 	AddToSchemes = append(AddToSchemes, namespacedrangetemplatev1alpha1.SchemeBuilder.AddToScheme)
-	// Register cluster-scoped Zoneforward types.
-	AddToSchemes = append(AddToSchemes, clusterzoneforwardv1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recorda types.
 	AddToSchemes = append(AddToSchemes, namespacedrecordav1alpha1.SchemeBuilder.AddToScheme)
 	// Register namespaced Recordaaaa types.
