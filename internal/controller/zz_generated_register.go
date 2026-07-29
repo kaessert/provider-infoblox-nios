@@ -13,24 +13,21 @@ package controller
 
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/fixedaddress"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/ipv4sharednetwork"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkcontainer"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
+	hostrecord "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/hostrecord"
+	ipv4sharednetwork "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/ipv4sharednetwork"
+	network "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/network"
+	networkview "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/networkview"
 	rangepkg "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/range"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordmx"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordsrv"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneauth"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneforward"
+	rangetemplate "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/rangetemplate"
+	recorda "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recorda"
+	recordaaaa "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordaaaa"
+	recordcname "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordcname"
+	recordmx "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordmx"
+	recordptr "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordptr"
+	recordsrv "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordsrv"
+	recordtxt "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/recordtxt"
+	zoneauth "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zoneauth"
+	zonedelegated "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/zonedelegated"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -41,11 +38,9 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
-		fixedaddress.SetupGated,
 		hostrecord.SetupGated,
 		ipv4sharednetwork.SetupGated,
 		network.SetupGated,
-		networkcontainer.SetupGated,
 		networkview.SetupGated,
 		rangepkg.SetupGated,
 		rangetemplate.SetupGated,
@@ -58,7 +53,6 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		recordtxt.SetupGated,
 		zoneauth.SetupGated,
 		zonedelegated.SetupGated,
-		zoneforward.SetupGated,
 	} {
 		if err := setup(mgr, o); err != nil {
 			return err
@@ -73,11 +67,9 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	for _, setup := range []func(ctrl.Manager, controller.Options) error{
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
-		fixedaddress.Setup,
 		hostrecord.Setup,
 		ipv4sharednetwork.Setup,
 		network.Setup,
-		networkcontainer.Setup,
 		networkview.Setup,
 		rangepkg.Setup,
 		rangetemplate.Setup,
@@ -90,7 +82,6 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		recordtxt.Setup,
 		zoneauth.Setup,
 		zonedelegated.Setup,
-		zoneforward.Setup,
 	} {
 		if err := setup(mgr, o); err != nil {
 			return err
