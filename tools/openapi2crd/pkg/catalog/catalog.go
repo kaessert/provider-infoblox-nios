@@ -259,9 +259,9 @@ func All() []ResourceDescriptor {
 		rangeTemplate(),
 		ipv4SharedNetwork(),
 		networkContainer(),
-zoneForward(),
+		zoneForward(),
 		dtcServer(),
-dnsView(),
+		dnsView(),
 	}
 }
 

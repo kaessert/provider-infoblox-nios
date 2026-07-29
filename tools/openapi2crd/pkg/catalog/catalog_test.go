@@ -1194,6 +1194,9 @@ func TestZoneForwardNestedTypes(t *testing.T) {
 		if !names[want] {
 			t.Errorf("NestedTypes missing %q", want)
 		}
+	}
+}
+
 // TestFindResourceDNSView verifies FindResource returns the DNSView
 // descriptor discovered during Phase 6 live probing (missing from the
 // original inventory).
