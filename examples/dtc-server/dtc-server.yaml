@@ -23,10 +23,15 @@ metadata:
     meta.upbound.io/example-id: dtcserver/v1alpha1/dtcserver
     uptest.upbound.io/timeout: "120"
     # uptest.upbound.io/update-parameter is intentionally omitted — it has
-    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
-    # comment field below is a safe mutable scalar for update coverage;
-    # field-level update testing is wired via post-assert-hook during the
-    # E2E ticket.
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-server.sh
+    # comment is a safe mutable scalar for update coverage — DTCServer has
+    # no known immutable fields (all Create parameters are also accepted
+    # by Update).
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
 spec:
   forProvider:
     name: example-server.example.com
