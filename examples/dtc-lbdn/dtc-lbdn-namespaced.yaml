@@ -1,0 +1,37 @@
+# DTCLBDN is the namespace-scoped variant of the Infoblox NIOS DTC (DNS
+# Traffic Control) Load Balanced Domain Name. See dtc-lbdn.yaml for the
+# cluster-scoped variant and full field documentation — this file only
+# documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the name below differs from dtc-lbdn.yaml's so both
+# examples can be applied to the same NIOS Grid Manager at once without
+# colliding on the same DTC LBDN display name.
+apiVersion: dtclbdn.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCLBDN
+metadata:
+  name: example-dtclbdn-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: dtclbdn/v1alpha1/dtclbdn
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # dtc-lbdn.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-lbdn-namespaced.sh
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+spec:
+  forProvider:
+    name: test-dtc-lbdn-ns
+    lbMethod: ROUND_ROBIN
+    patterns:
+      - "*.namespaced.example.com"
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

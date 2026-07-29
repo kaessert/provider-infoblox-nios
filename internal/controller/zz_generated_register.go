@@ -14,6 +14,7 @@ package controller
 import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	dnsview "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dnsview"
+	dtclbdn "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtclbdn"
 	dtcpool "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtcpool"
 	dtcserver "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/dtcserver"
 	extensibleattributedef "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/extensibleattributedef"
@@ -47,6 +48,7 @@ func SetupGated(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		dnsview.SetupGated,
+		dtclbdn.SetupGated,
 		dtcpool.SetupGated,
 		dtcserver.SetupGated,
 		extensibleattributedef.SetupGated,
@@ -84,6 +86,7 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		// ProviderConfig — never gated, must always be available.
 		config.Setup,
 		dnsview.Setup,
+		dtclbdn.Setup,
 		dtcpool.Setup,
 		dtcserver.Setup,
 		extensibleattributedef.Setup,

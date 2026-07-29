@@ -259,3 +259,203 @@ func TestDTCPoolServersCrossResourceReference(t *testing.T) {
 		t.Errorf("Reference.TargetScope = %q, want cluster", serverField.Reference.TargetScope)
 	}
 }
+
+// TestFindResourceDTCLBDN verifies FindResource returns the DTCLBDN
+// descriptor for its slug, with the expected cluster/namespaced API groups.
+func TestFindResourceDTCLBDN(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+	if rd.Kind != "DTCLBDN" {
+		t.Errorf("Kind = %q, want DTCLBDN", rd.Kind)
+	}
+	if rd.ClusterGroup != "dtclbdn.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want dtclbdn.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "dtclbdn.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want dtclbdn.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestDTCLBDNFieldCounts pins the request/response/both field counts for the
+// DTCLBDN catalog entry — request=0, response=2 (ref, health), both=14
+// (name, lbMethod, patterns, pools, authZones, types, priority,
+// persistence, topology, ttl, useTtl, comment, disable, extattrs).
+func TestDTCLBDNFieldCounts(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 2 {
+		t.Errorf("response-scope field count = %d, want 2", resp)
+	}
+	if both != 14 {
+		t.Errorf("both-scope field count = %d, want 14", both)
+	}
+}
+
+// TestDTCLBDNNoAutoConsolidatedMonitors verifies the SDK-only
+// auto_consolidated_monitors field (no corresponding WAPI _schema entry,
+// per ADR-IN-0004) is never cataloged for DTCLBDN.
+func TestDTCLBDNNoAutoConsolidatedMonitors(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	for _, f := range rd.Fields {
+		if f.Name == "AutoConsolidatedMonitors" || f.JSONName == "autoConsolidatedMonitors" || f.JSONName == "auto_consolidated_monitors" {
+			t.Errorf("field %q (json %q) must not be cataloged — SDK-only artifact absent from WAPI", f.Name, f.JSONName)
+		}
+	}
+}
+
+// TestDTCLBDNRequiredFields verifies name, lbMethod, and patterns are the
+// only required ForProvider fields.
+func TestDTCLBDNRequiredFields(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	required := map[string]bool{}
+	for _, f := range rd.Fields {
+		if f.Required {
+			required[f.Name] = true
+		}
+	}
+
+	if !required["Name"] {
+		t.Errorf("expected Name to be required")
+	}
+	if !required["LBMethod"] {
+		t.Errorf("expected LBMethod to be required")
+	}
+	if !required["Patterns"] {
+		t.Errorf("expected Patterns to be required")
+	}
+	if len(required) != 3 {
+		t.Errorf("expected exactly 3 required fields, got %d: %v", len(required), required)
+	}
+}
+
+// TestDTCLBDNAuthZonesIsStringSlice verifies authZones is typed as
+// []string (bare _ref strings), NOT []object, per ADR-IN-0004's live
+// verification that WAPI rejects `[{"_ref": "..."}]` for this field.
+func TestDTCLBDNAuthZonesIsStringSlice(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	var authZones *FieldDef
+	for i := range rd.Fields {
+		if rd.Fields[i].Name == "AuthZones" {
+			authZones = &rd.Fields[i]
+			break
+		}
+	}
+	if authZones == nil {
+		t.Fatalf("expected an AuthZones field on DTCLBDN")
+	}
+	if authZones.GoType != "[]string" {
+		t.Errorf("AuthZones.GoType = %q, want []string", authZones.GoType)
+	}
+	if authZones.Reference == nil {
+		t.Fatalf("expected AuthZones field to carry a Reference")
+	}
+	if authZones.Reference.TargetKind != "ZoneAuth" {
+		t.Errorf("AuthZones.Reference.TargetKind = %q, want ZoneAuth", authZones.Reference.TargetKind)
+	}
+	if authZones.Reference.TargetSlug != "zoneauth" {
+		t.Errorf("AuthZones.Reference.TargetSlug = %q, want zoneauth", authZones.Reference.TargetSlug)
+	}
+	if authZones.Reference.TargetScope != "cluster" {
+		t.Errorf("AuthZones.Reference.TargetScope = %q, want cluster", authZones.Reference.TargetScope)
+	}
+}
+
+// TestDTCLBDNPoolsCrossResourceReference verifies the pools field's nested
+// DTCLBDNPoolLink.Pool carries a Reference to DTCPool (cluster-scoped), per
+// this provider's cross-resource reference convention.
+func TestDTCLBDNPoolsCrossResourceReference(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	var nt *NestedTypeDef
+	for i := range rd.NestedTypes {
+		if rd.NestedTypes[i].TypeName == "DTCLBDNPoolLink" {
+			nt = &rd.NestedTypes[i]
+			break
+		}
+	}
+	if nt == nil {
+		t.Fatalf("expected a DTCLBDNPoolLink nested type")
+	}
+
+	var poolField *FieldDef
+	for i := range nt.Fields {
+		if nt.Fields[i].Name == "Pool" {
+			poolField = &nt.Fields[i]
+			break
+		}
+	}
+	if poolField == nil {
+		t.Fatalf("expected a Pool field on DTCLBDNPoolLink")
+	}
+	if poolField.Reference == nil {
+		t.Fatalf("expected Pool field to carry a Reference")
+	}
+	if poolField.Reference.TargetKind != "DTCPool" {
+		t.Errorf("Reference.TargetKind = %q, want DTCPool", poolField.Reference.TargetKind)
+	}
+	if poolField.Reference.TargetSlug != "dtcpool" {
+		t.Errorf("Reference.TargetSlug = %q, want dtcpool", poolField.Reference.TargetSlug)
+	}
+	if poolField.Reference.TargetScope != "cluster" {
+		t.Errorf("Reference.TargetScope = %q, want cluster", poolField.Reference.TargetScope)
+	}
+}
+
+// TestDTCLBDNRefAndHealthAreResponseOnly verifies ref and health are
+// response-scope (AtProvider-only) per the ph6 ticket acceptance criteria.
+func TestDTCLBDNRefAndHealthAreResponseOnly(t *testing.T) {
+	rd, ok := FindResource("dtclbdn")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "dtclbdn")
+	}
+
+	wantResponseOnly := map[string]bool{"Ref": false, "Health": false}
+	for _, f := range rd.Fields {
+		if _, ok := wantResponseOnly[f.Name]; ok {
+			wantResponseOnly[f.Name] = true
+			if f.Scope != FieldScopeResponse {
+				t.Errorf("field %q scope = %v, want FieldScopeResponse", f.Name, f.Scope)
+			}
+		}
+	}
+	for name, found := range wantResponseOnly {
+		if !found {
+			t.Errorf("expected field %q not found on DTCLBDN", name)
+		}
+	}
+}

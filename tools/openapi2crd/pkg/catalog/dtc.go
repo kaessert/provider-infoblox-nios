@@ -378,3 +378,201 @@ func dtcServer() ResourceDescriptor {
 		},
 	}
 }
+
+// dtcLBDN returns the DTCLBDN resource descriptor.
+//
+// Source: tools/openapi/inventory.md, "### DTCLBDN" section (fields
+// request=0, response=2, both=15) — derived from the pinned
+// infoblox-go-client/v2 SDK's DtcLbdn struct (WAPI object type dtc:lbdn)
+// under tools/openapi/specs/infobloxopen/, corrected by ADR-IN-0004's
+// live-verification pass (2026-07-28): `auto_consolidated_monitors` is an
+// SDK-only field with no corresponding WAPI `_schema` entry and is
+// deliberately NOT cataloged here (same finding as DTCPool's field of the
+// same name).
+//
+// External-name strategy: server-assigned (the WAPI `_ref` returned by
+// CreateDtcLbdn) — name is mutable, so it cannot serve as the
+// external-name.
+//
+// Immutable fields: none known. Every CreateDtcLbdn parameter is also
+// accepted by UpdateDtcLbdn.
+//
+// `authZones`: live-verified (ADR-IN-0004) to be an array of bare `_ref`
+// strings, NOT an array of objects — `[{"_ref": "..."}]` is rejected by
+// WAPI with "Object reference expected in auth_zones". Modeled as
+// []string carrying a direct cross-resource Reference to ZoneAuth
+// (cluster-scoped), mirroring the same top-level-slice-with-Reference
+// pattern already used by IPv4SharedNetwork.networks. Linked zones must
+// have a Grid primary configured for auth_zones to be usable.
+//
+// `pools`: array of {pool: _ref, ratio: int} entries: modeled as
+// DTCLBDNPoolLink, whose Pool field carries the three-field cross-resource
+// reference pattern (value + Ref + Selector) to DTCPool (cluster-scoped),
+// mirroring DTCPool.Servers' DTCPoolServerLink.Server pattern.
+//
+// `health`: response-only (GetDtcLbdn only) — DTCLBDNHealth mirrors the
+// SDK's DtcHealth struct (same shape as DTCPoolHealth/DTCServerHealth,
+// duplicated here because every scope package in this generator is
+// self-contained).
+func dtcLBDN() ResourceDescriptor {
+	return ResourceDescriptor{
+		Kind:                 "DTCLBDN",
+		Slug:                 "dtclbdn",
+		ClusterGroup:         clusterGroup("dtclbdn"),
+		NamespacedGroup:      namespacedGroup("dtclbdn"),
+		ExternalNameStrategy: StrategyServerAssigned,
+		Fields: []FieldDef{
+			{
+				Name:        "Name",
+				JSONName:    "name",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "DTC LBDN (Load Balanced Domain Name) display name (not DNS-related). Mutable — changes the WAPI `_ref`.",
+			},
+			{
+				Name:        "LBMethod",
+				JSONName:    "lbMethod",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Enum:        []string{"ROUND_ROBIN", "RATIO", "TOPOLOGY", "GLOBAL_AVAILABILITY"},
+				Description: "Load balancing method used to select a pool from those listed in pools.",
+			},
+			{
+				Name:        "Patterns",
+				JSONName:    "patterns",
+				GoType:      "[]string",
+				Scope:       FieldScopeBoth,
+				Required:    true,
+				Description: "FQDN wildcard patterns matched against incoming queries. At least one pattern is required for the LBDN to answer any query.",
+			},
+			{
+				Name:        "Pools",
+				JSONName:    "pools",
+				GoType:      "[]DTCLBDNPoolLink",
+				Scope:       FieldScopeBoth,
+				Description: "Pools associated with this LBDN, each with a per-pool match priority ratio.",
+			},
+			{
+				Name:        "AuthZones",
+				JSONName:    "authZones",
+				GoType:      "[]string",
+				Scope:       FieldScopeBoth,
+				Description: "Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified (ADR-IN-0004): WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.",
+				Reference: &ReferenceDescriptor{
+					TargetKind:  "ZoneAuth",
+					TargetSlug:  "zoneauth",
+					TargetScope: "cluster",
+				},
+			},
+			{
+				Name:        "Types",
+				JSONName:    "types",
+				GoType:      "[]string",
+				Scope:       FieldScopeBoth,
+				Enum:        []string{"A", "AAAA", "CNAME", "NAPTR", "SRV"},
+				Description: "Resource record types the LBDN answers with.",
+			},
+			{
+				Name:        "Priority",
+				JSONName:    "priority",
+				GoType:      goTypeUint32,
+				Scope:       FieldScopeBoth,
+				Description: "Match priority among overlapping LBDNs (lower ordinal wins).",
+			},
+			{
+				Name:        "Persistence",
+				JSONName:    "persistence",
+				GoType:      goTypeUint32,
+				Scope:       FieldScopeBoth,
+				Description: "Seconds to cache a client-specific LBDN response. Zero disables caching.",
+			},
+			{
+				Name:        "Topology",
+				JSONName:    "topology",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Description: "Topology ruleset name used when lbMethod=TOPOLOGY.",
+			},
+			{
+				Name:        "TTL",
+				JSONName:    "ttl",
+				GoType:      goTypeUint32,
+				Scope:       FieldScopeBoth,
+				Description: "Time-To-Live for the DTC LBDN response, in seconds.",
+			},
+			{
+				Name:        "UseTTL",
+				JSONName:    "useTtl",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Use flag for ttl.",
+			},
+			{
+				Name:        "Comment",
+				JSONName:    "comment",
+				GoType:      goTypeString,
+				Scope:       FieldScopeBoth,
+				Description: "Comment for the DTC LBDN; maximum 256 characters.",
+			},
+			{
+				Name:        "Disable",
+				JSONName:    "disable",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Whether the DTC LBDN is disabled.",
+			},
+			{
+				Name:        "ExtAttrs",
+				JSONName:    "extattrs",
+				GoType:      goTypeStringMap,
+				Scope:       FieldScopeBoth,
+				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+			},
+			{
+				Name:        "Ref",
+				JSONName:    "ref",
+				GoType:      goTypeString,
+				Scope:       FieldScopeResponse,
+				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.",
+			},
+			{
+				Name:        "Health",
+				JSONName:    "health",
+				GoType:      "*DTCLBDNHealth",
+				Scope:       FieldScopeResponse,
+				Description: "Aggregate health status of the LBDN.",
+			},
+		},
+		NestedTypes: []NestedTypeDef{
+			{
+				TypeName:    "DTCLBDNPoolLink",
+				Description: "identifies one DTCPool member of a DTCLBDN along with its match priority ratio (mirrors the SDK's DtcPoolLink struct).",
+				Fields: []FieldDef{
+					{
+						Name:        "Pool",
+						JSONName:    "pool",
+						GoType:      goTypeString,
+						Description: "DTCPool member of the LBDN, identified by its Crossplane external-name (the DTCPool's WAPI `_ref`).",
+						Reference: &ReferenceDescriptor{
+							TargetKind:  "DTCPool",
+							TargetSlug:  "dtcpool",
+							TargetScope: "cluster",
+						},
+					},
+					{Name: "Ratio", JSONName: "ratio", GoType: goTypeUint32, Description: "The match priority weight of the pool within the LBDN."},
+				},
+			},
+			{
+				TypeName:    "DTCLBDNHealth",
+				Description: "carries the aggregate health status of a DTCLBDN (mirrors the SDK's DtcHealth struct).",
+				Fields: []FieldDef{
+					{Name: "Availability", JSONName: "availability", GoType: goTypeString, Description: "The availability color status."},
+					{Name: "Description", JSONName: "description", GoType: goTypeString, Description: "The textual description of the object's status."},
+					{Name: "EnabledState", JSONName: "enabledState", GoType: goTypeString, Description: "The enabled state of the object."},
+				},
+			},
+		},
+	}
+}
