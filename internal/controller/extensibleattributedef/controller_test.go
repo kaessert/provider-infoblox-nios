@@ -369,6 +369,67 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse verifies that Observe does not panic
+// and returns a sane result when the WAPI response carries only the
+// required identifier fields (Name, Type) with every optional
+// pointer/slice field (Comment, DefaultValue, Min, Max, Flags,
+// ListValues, AllowedObjectTypes) left at its nil/zero value. This is
+// the shape WAPI returns for a freshly created ExtensibleAttributeDef
+// that never set any optional field.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockEADefServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.EADefinition{
+		Name: stringPtr("MyAttribute"),
+		Type: "STRING",
+		// All optional fields intentionally left nil/empty: Comment,
+		// DefaultValue, Min, Max, Flags, ListValues, AllowedObjectTypes.
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true, got false")
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true for matching minimal spec, got false")
+	}
+	if got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=false when server returns no optional values, got true")
+	}
+	if cr.Status.AtProvider.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
+	}
+	if cr.Status.AtProvider.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", cr.Status.AtProvider.Comment)
+	}
+	if cr.Status.AtProvider.DefaultValue != nil {
+		t.Errorf("AtProvider.DefaultValue = %v, want nil", cr.Status.AtProvider.DefaultValue)
+	}
+	if cr.Status.AtProvider.Min != nil {
+		t.Errorf("AtProvider.Min = %v, want nil", cr.Status.AtProvider.Min)
+	}
+	if cr.Status.AtProvider.Max != nil {
+		t.Errorf("AtProvider.Max = %v, want nil", cr.Status.AtProvider.Max)
+	}
+	if cr.Status.AtProvider.Flags != nil {
+		t.Errorf("AtProvider.Flags = %v, want nil", cr.Status.AtProvider.Flags)
+	}
+	if len(cr.Status.AtProvider.ListValues) != 0 {
+		t.Errorf("AtProvider.ListValues = %v, want empty", cr.Status.AtProvider.ListValues)
+	}
+	if len(cr.Status.AtProvider.AllowedObjectTypes) != 0 {
+		t.Errorf("AtProvider.AllowedObjectTypes = %v, want empty", cr.Status.AtProvider.AllowedObjectTypes)
+	}
+}
+
 // TestObservePreCreateState verifies that Observe short-circuits (no HTTP
 // call) when the external-name still equals the CR's Kubernetes name — the
 // pre-create state for a server-assigned external-name strategy.
@@ -760,6 +821,65 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false for 404, got true")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse is the namespaced-scope
+// equivalent of TestClusterObserveMinimalResponse: it verifies Observe
+// does not panic and returns a sane result when the WAPI response
+// carries only the required identifier fields (Name, Type) with every
+// optional pointer/slice field left at its nil/zero value.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockEADefServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.EADefinition{
+		Name: stringPtr("MyAttribute"),
+		Type: "STRING",
+		// All optional fields intentionally left nil/empty: Comment,
+		// DefaultValue, Min, Max, Flags, ListValues, AllowedObjectTypes.
+	})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true, got false")
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true for matching minimal spec, got false")
+	}
+	if got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=false when server returns no optional values, got true")
+	}
+	if cr.Status.AtProvider.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
+	}
+	if cr.Status.AtProvider.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", cr.Status.AtProvider.Comment)
+	}
+	if cr.Status.AtProvider.DefaultValue != nil {
+		t.Errorf("AtProvider.DefaultValue = %v, want nil", cr.Status.AtProvider.DefaultValue)
+	}
+	if cr.Status.AtProvider.Min != nil {
+		t.Errorf("AtProvider.Min = %v, want nil", cr.Status.AtProvider.Min)
+	}
+	if cr.Status.AtProvider.Max != nil {
+		t.Errorf("AtProvider.Max = %v, want nil", cr.Status.AtProvider.Max)
+	}
+	if cr.Status.AtProvider.Flags != nil {
+		t.Errorf("AtProvider.Flags = %v, want nil", cr.Status.AtProvider.Flags)
+	}
+	if len(cr.Status.AtProvider.ListValues) != 0 {
+		t.Errorf("AtProvider.ListValues = %v, want empty", cr.Status.AtProvider.ListValues)
+	}
+	if len(cr.Status.AtProvider.AllowedObjectTypes) != 0 {
+		t.Errorf("AtProvider.AllowedObjectTypes = %v, want empty", cr.Status.AtProvider.AllowedObjectTypes)
 	}
 }
 
