@@ -1653,6 +1653,147 @@ func TestClusterCreateRejectsIpv4CidrWithStaticAddr(t *testing.T) {
 	}
 }
 
+// TestClusterCreateStaticAddrsStillWorks is a regression guard: a
+// HostRecord with only static ipv4Addrs (no ipv4Cidr/ipv6Cidr set) must
+// still forward the literal address to CreateHostRecord unchanged — not
+// a func:nextavailableip expression — so wiring the CIDR-based
+// allocation path did not disturb the pre-existing static-address path.
+func TestClusterCreateStaticAddrsStillWorks(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "") // no external-name yet
+	// newClusterHostRecord already sets a static 10.0.0.1 ipv4Addrs entry
+	// and leaves ipv4Cidr/ipv6Cidr unset.
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+	if len(stored.Ipv4Addrs) != 1 || stored.Ipv4Addrs[0].Ipv4Addr == nil {
+		t.Fatalf("Create: stored ipv4Addrs = %v, want one entry", stored.Ipv4Addrs)
+	}
+	if got := *stored.Ipv4Addrs[0].Ipv4Addr; got != "10.0.0.1" {
+		t.Errorf("Create: stored ipv4addr = %q, want static address 10.0.0.1 (unmodified)", got)
+	}
+}
+
+// TestClusterCreateWithIpv6CidrAllocatesIP is the IPv6 counterpart of
+// TestClusterCreateWithIpv4Cidr: a HostRecord with ipv6Cidr set (and no
+// static ipv6Addrs) forwards the CIDR to CreateHostRecord, which
+// substitutes a func:nextavailableip expression for the address.
+func TestClusterCreateWithIpv6CidrAllocatesIP(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "")
+	cr.Spec.ForProvider.Ipv4Addrs = nil
+	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+	if len(stored.Ipv6Addrs) != 1 || stored.Ipv6Addrs[0].Ipv6Addr == nil {
+		t.Fatalf("Create: stored ipv6Addrs = %v, want one entry", stored.Ipv6Addrs)
+	}
+	want := "func:nextavailableip:2001:db8::/64,default"
+	if got := *stored.Ipv6Addrs[0].Ipv6Addr; got != want {
+		t.Errorf("Create: stored ipv6addr = %q, want %q", got, want)
+	}
+}
+
+// TestClusterCreateWithDualStackCidrs verifies that a HostRecord with
+// both ipv4Cidr and ipv6Cidr set forwards both CIDRs to CreateHostRecord
+// in a single call, allocating an address from each family.
+func TestClusterCreateWithDualStackCidrs(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "")
+	cr.Spec.ForProvider.Ipv4Addrs = nil
+	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+	if len(stored.Ipv4Addrs) != 1 || stored.Ipv4Addrs[0].Ipv4Addr == nil {
+		t.Fatalf("Create: stored ipv4Addrs = %v, want one entry", stored.Ipv4Addrs)
+	}
+	if want, got := "func:nextavailableip:10.0.0.0/24,default", *stored.Ipv4Addrs[0].Ipv4Addr; got != want {
+		t.Errorf("Create: stored ipv4addr = %q, want %q", got, want)
+	}
+	if len(stored.Ipv6Addrs) != 1 || stored.Ipv6Addrs[0].Ipv6Addr == nil {
+		t.Fatalf("Create: stored ipv6Addrs = %v, want one entry", stored.Ipv6Addrs)
+	}
+	if want, got := "func:nextavailableip:2001:db8::/64,default", *stored.Ipv6Addrs[0].Ipv6Addr; got != want {
+		t.Errorf("Create: stored ipv6addr = %q, want %q", got, want)
+	}
+}
+
+// TestClusterCreateRejectsIpv6CidrWithStaticAddr is the IPv6 counterpart
+// of TestClusterCreateRejectsIpv4CidrWithStaticAddr: Create surfaces the
+// validation error (wrapped) when ipv6Cidr and a static ipv6Addrs entry
+// are both set.
+func TestClusterCreateRejectsIpv6CidrWithStaticAddr(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "")
+	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.Ipv6Addrs = []clusterv1alpha1.HostRecordIpv6Addr{
+		{Ipv6Addr: "2001:db8::1"},
+	}
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil || !strings.Contains(err.Error(), errIpv6CidrWithStaticAddr) {
+		t.Errorf("Create: err = %v, want it to contain %q", err, errIpv6CidrWithStaticAddr)
+	}
+}
+
+// TestClusterCreateRejectsFilterParamsAndCidr verifies Create surfaces
+// the validation error (wrapped) when filterParams and ipv4Cidr are both
+// set — the EA-filter-based and CIDR-based allocation strategies are
+// mutually exclusive.
+func TestClusterCreateRejectsFilterParamsAndCidr(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", "")
+	cr.Spec.ForProvider.Ipv4Addrs = nil
+	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.FilterParams = map[string]string{"*Site": "HQ"}
+	cr.Spec.ForProvider.IpAddressType = stringPtr("IPV4")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil || !strings.Contains(err.Error(), errFilterParamsWithCidr) {
+		t.Errorf("Create: err = %v, want it to contain %q", err, errFilterParamsWithCidr)
+	}
+}
+
 // TestClusterObserveLateInitializesIpv4AddrsAfterCidrAllocation verifies
 // that once a CIDR-allocated HostRecord is observed, the WAPI-assigned
 // address is captured back into spec.ipv4Addrs (empty at apply-time,
@@ -1688,6 +1829,42 @@ func TestClusterObserveLateInitializesIpv4AddrsAfterCidrAllocation(t *testing.T)
 	}
 	if !got.ResourceUpToDate {
 		t.Error("Observe: want ResourceUpToDate=true once ipv4Addrs is late-initialized, got false")
+	}
+}
+
+// TestClusterObserveLateInitializesIpv6AddrsAfterCidrAllocation is the
+// IPv6 counterpart of TestClusterObserveLateInitializesIpv4AddrsAfterCidrAllocation:
+// once an ipv6Cidr-allocated HostRecord is observed, the WAPI-assigned
+// address is captured back into spec.ipv6Addrs.
+func TestClusterObserveLateInitializesIpv6AddrsAfterCidrAllocation(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		Ipv6Addrs:   []ibclient.HostRecordIpv6Addr{{Ipv6Addr: stringPtr("2001:db8::99")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+	})
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", ref)
+	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true, got false")
+	}
+	if len(cr.Spec.ForProvider.Ipv6Addrs) != 1 || cr.Spec.ForProvider.Ipv6Addrs[0].Ipv6Addr != "2001:db8::99" {
+		t.Errorf("Observe: spec.ipv6Addrs = %v, want [2001:db8::99]", cr.Spec.ForProvider.Ipv6Addrs)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true once ipv6Addrs is late-initialized, got false")
 	}
 }
 
