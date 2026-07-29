@@ -290,8 +290,6 @@ func fieldsFromNamespacedParams(p *namespacedv1alpha1.DNSViewParameters) dnsView
 		DnssecNegativeTrustAnchors:          p.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             p.DnssecValidationEnabled,
 		UseDnssec:                           p.UseDnssec,
-		EdnsUDPSize:                         p.EdnsUDPSize,
-		UseEdnsUDPSize:                      p.UseEdnsUDPSize,
 		EnableFixedRrsetOrderFqdns:          p.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             p.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            p.EnableMatchRecursiveOnly,
@@ -377,8 +375,6 @@ func applyFieldsToNamespacedParams(f dnsViewFields, p *namespacedv1alpha1.DNSVie
 	p.DnssecNegativeTrustAnchors = f.DnssecNegativeTrustAnchors
 	p.DnssecValidationEnabled = f.DnssecValidationEnabled
 	p.UseDnssec = f.UseDnssec
-	p.EdnsUDPSize = f.EdnsUDPSize
-	p.UseEdnsUDPSize = f.UseEdnsUDPSize
 	p.EnableFixedRrsetOrderFqdns = f.EnableFixedRrsetOrderFqdns
 	p.UseFixedRrsetOrderFqdns = f.UseFixedRrsetOrderFqdns
 	p.EnableMatchRecursiveOnly = f.EnableMatchRecursiveOnly
@@ -465,8 +461,6 @@ func namespacedObservationFromFields(f dnsViewFields, id string, ref *string, is
 		DnssecNegativeTrustAnchors:          f.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             f.DnssecValidationEnabled,
 		UseDnssec:                           f.UseDnssec,
-		EdnsUDPSize:                         f.EdnsUDPSize,
-		UseEdnsUDPSize:                      f.UseEdnsUDPSize,
 		EnableFixedRrsetOrderFqdns:          f.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             f.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            f.EnableMatchRecursiveOnly,

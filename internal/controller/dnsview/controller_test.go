@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -204,6 +205,20 @@ func (m *mockWapiServer) handler() http.Handler {
 	})
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
+		// Mirror the live NIOS Grid Manager pinned at WAPI 2.9.7: the
+		// `view` object schema at that version has no edns_udp_size /
+		// use_edns_udp_size fields at all, so requesting them in
+		// _return_fields is rejected with a 400
+		// (AdmConProtoError: Unknown argument/field).
+		for _, f := range strings.Split(r.URL.Query().Get("_return_fields"), ",") {
+			if f == "edns_udp_size" || f == "use_edns_udp_size" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"Error": "AdmConProtoError: Unknown argument/field: '" + f + "'",
+					"code":  "Client.Ibap.Proto",
+				})
+				return
+			}
+		}
 		ref := r.PathValue("ref")
 		m.mu.Lock()
 		rec, ok := m.records[ref]
@@ -359,6 +374,37 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
 		t.Errorf("condition Ready = %v, want True", cond.Status)
+	}
+}
+
+// TestClusterObserveDoesNotRequestUnsupportedEdnsFields verifies Observe
+// never requests edns_udp_size/use_edns_udp_size in the WAPI GET
+// return-fields list. The provider is pinned to WAPI 2.9.7, whose `view`
+// object schema doesn't define these fields at all — requesting them
+// fails every Observe() with a 400 (AdmConProtoError: Unknown
+// argument/field), which would otherwise put the resource in a permanent
+// ReconcileError loop. The mock server's GET handler rejects these fields
+// exactly like the live Grid Manager, so this test fails loudly if the
+// fields are ever reintroduced into dnsViewReturnFields.
+func TestClusterObserveDoesNotRequestUnsupportedEdnsFields(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.View{
+		Name:    stringPtr("my-view"),
+		Comment: stringPtr("hello"),
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error (edns_udp_size/use_edns_udp_size must not be requested at WAPI 2.9.7): %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true, got false")
 	}
 }
 

@@ -1080,8 +1080,6 @@ type dnsViewFields struct {
 	DnssecNegativeTrustAnchors          []string
 	DnssecValidationEnabled             *bool
 	UseDnssec                           *bool
-	EdnsUDPSize                         *int64
-	UseEdnsUDPSize                      *bool
 	EnableFixedRrsetOrderFqdns          *bool
 	UseFixedRrsetOrderFqdns             *bool
 	EnableMatchRecursiveOnly            *bool
@@ -1169,8 +1167,6 @@ func buildView(f dnsViewFields) *ibclient.View {
 		DnssecNegativeTrustAnchors:          f.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             f.DnssecValidationEnabled,
 		UseDnssec:                           f.UseDnssec,
-		EdnsUdpSize:                         int64PtrToUint32Ptr(f.EdnsUDPSize),
-		UseEdnsUdpSize:                      f.UseEdnsUDPSize,
 		EnableFixedRrsetOrderFqdns:          f.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             f.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            f.EnableMatchRecursiveOnly,
@@ -1256,8 +1252,6 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 		DnssecNegativeTrustAnchors:          v.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             v.DnssecValidationEnabled,
 		UseDnssec:                           v.UseDnssec,
-		EdnsUDPSize:                         uint32PtrToInt64Ptr(v.EdnsUdpSize),
-		UseEdnsUDPSize:                      v.UseEdnsUdpSize,
 		EnableFixedRrsetOrderFqdns:          v.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             v.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            v.EnableMatchRecursiveOnly,
@@ -1419,12 +1413,6 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDnssec) == boolOrFalse(observed.UseDnssec)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.EdnsUDPSize) == int64OrZero(observed.EdnsUDPSize)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.UseEdnsUDPSize) == boolOrFalse(observed.UseEdnsUDPSize)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.EnableFixedRrsetOrderFqdns) == boolOrFalse(observed.EnableFixedRrsetOrderFqdns)
@@ -1685,12 +1673,6 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitPtr(&desired.UseDnssec, observed.UseDnssec)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.EdnsUDPSize, observed.EdnsUDPSize)
-	},
-	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.UseEdnsUDPSize, observed.UseEdnsUDPSize)
-	},
-	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.EnableFixedRrsetOrderFqdns, observed.EnableFixedRrsetOrderFqdns)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
@@ -1850,6 +1832,14 @@ func lateInitializeFields(desired, observed dnsViewFields) (dnsViewFields, bool)
 // ibclient.NewEmptyDNSView's default return-field set (extattrs, name,
 // network_view, comment) — i.e. every field mirrored by DNSViewObservation
 // (full-mirror AtProvider convention).
+//
+// edns_udp_size/use_edns_udp_size are deliberately excluded: the provider
+// is pinned to WAPI 2.9.7, whose `view` object schema does not define
+// these fields at all (confirmed live against the Grid Manager — they
+// first appear in WAPI 2.13.1). Requesting them in the GET return-fields
+// list fails every Observe() with a 400
+// (AdmConProtoError: Unknown argument/field). The controller no longer
+// reads, writes, or compares these fields anywhere.
 var dnsViewReturnFields = []string{
 	"blacklist_action",
 	"blacklist_log_query",
@@ -1874,7 +1864,6 @@ var dnsViewReturnFields = []string{
 	"dnssec_negative_trust_anchors",
 	"dnssec_trusted_keys",
 	"dnssec_validation_enabled",
-	"edns_udp_size",
 	"enable_blacklist",
 	"enable_fixed_rrset_order_fqdns",
 	"enable_match_recursive_only",
@@ -1915,7 +1904,6 @@ var dnsViewReturnFields = []string{
 	"use_ddns_restrict_static",
 	"use_dns64",
 	"use_dnssec",
-	"use_edns_udp_size",
 	"use_filter_aaaa",
 	"use_fixed_rrset_order_fqdns",
 	"use_forwarders",

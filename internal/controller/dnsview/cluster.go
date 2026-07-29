@@ -274,8 +274,6 @@ func fieldsFromClusterParams(p *clusterv1alpha1.DNSViewParameters) dnsViewFields
 		DnssecNegativeTrustAnchors:          p.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             p.DnssecValidationEnabled,
 		UseDnssec:                           p.UseDnssec,
-		EdnsUDPSize:                         p.EdnsUDPSize,
-		UseEdnsUDPSize:                      p.UseEdnsUDPSize,
 		EnableFixedRrsetOrderFqdns:          p.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             p.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            p.EnableMatchRecursiveOnly,
@@ -361,8 +359,6 @@ func applyFieldsToClusterParams(f dnsViewFields, p *clusterv1alpha1.DNSViewParam
 	p.DnssecNegativeTrustAnchors = f.DnssecNegativeTrustAnchors
 	p.DnssecValidationEnabled = f.DnssecValidationEnabled
 	p.UseDnssec = f.UseDnssec
-	p.EdnsUDPSize = f.EdnsUDPSize
-	p.UseEdnsUDPSize = f.UseEdnsUDPSize
 	p.EnableFixedRrsetOrderFqdns = f.EnableFixedRrsetOrderFqdns
 	p.UseFixedRrsetOrderFqdns = f.UseFixedRrsetOrderFqdns
 	p.EnableMatchRecursiveOnly = f.EnableMatchRecursiveOnly
@@ -449,8 +445,6 @@ func clusterObservationFromFields(f dnsViewFields, id string, ref *string, isDef
 		DnssecNegativeTrustAnchors:          f.DnssecNegativeTrustAnchors,
 		DnssecValidationEnabled:             f.DnssecValidationEnabled,
 		UseDnssec:                           f.UseDnssec,
-		EdnsUDPSize:                         f.EdnsUDPSize,
-		UseEdnsUDPSize:                      f.UseEdnsUDPSize,
 		EnableFixedRrsetOrderFqdns:          f.EnableFixedRrsetOrderFqdns,
 		UseFixedRrsetOrderFqdns:             f.UseFixedRrsetOrderFqdns,
 		EnableMatchRecursiveOnly:            f.EnableMatchRecursiveOnly,
