@@ -23,6 +23,52 @@ type ProviderCredentials struct {
 type ProviderConfigSpec struct {
 	// Credentials required to authenticate to this provider.
 	Credentials ProviderCredentials `json:"credentials"`
+
+	// ReadEndpoint configures an optional read-only NIOS endpoint (typically
+	// a Grid Master Candidate) for offloading Observe traffic away from the
+	// primary Grid Master. When omitted, all traffic (including reads) goes
+	// to the primary endpoint — identical to the provider's behavior before
+	// this field existed.
+	// +optional
+	ReadEndpoint *ReadEndpoint `json:"readEndpoint,omitempty"`
+}
+
+// ReadEndpoint configures an optional read-only NIOS endpoint (typically a
+// Grid Master Candidate) for offloading Observe traffic.
+type ReadEndpoint struct {
+	// CredentialsRef references a Secret with the same key format as the
+	// primary credentials (host, username, password). Supports
+	// least-privilege read-only NIOS accounts.
+	CredentialsRef xpv1.SecretReference `json:"credentialsRef"`
+
+	// Convergence configures how the controller detects replication
+	// convergence between the primary and the read endpoint.
+	// +optional
+	Convergence *ConvergenceConfig `json:"convergence,omitempty"`
+}
+
+// ConvergenceConfig controls read-after-write convergence detection.
+type ConvergenceConfig struct {
+	// Mode selects the convergence strategy.
+	// "soaSerial" (default for DNS): compare zone SOA serials between
+	// endpoints.
+	// "primaryOnly": always read from primary (default for IPAM, no serial
+	// signal).
+	// +kubebuilder:validation:Enum=soaSerial;primaryOnly
+	// +kubebuilder:default=soaSerial
+	Mode string `json:"mode,omitempty"`
+
+	// PollInterval is how often to check the candidate's serial during
+	// convergence.
+	// +kubebuilder:default="2s"
+	// +optional
+	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+
+	// Timeout is how long to wait for convergence before falling back to
+	// primary.
+	// +kubebuilder:default="60s"
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 // +kubebuilder:object:root=true
