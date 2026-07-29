@@ -1427,6 +1427,69 @@ kubectl apply -f examples/dtc-server/dtc-server.yaml
 kubectl apply -f examples/dtc-server/dtc-server-namespaced.yaml
 ```
 
+### DTCPool
+
+Manage Infoblox NIOS DTC (DNS Traffic Control) pools (WAPI object type
+`dtc:pool`). A DTC Pool groups DTCServer members behind a load-balancing
+method (round robin, ratio, topology, dynamic ratio, global availability,
+or source-IP hash) and is in turn referenced by a DTCLBDN.
+
+**Cluster-scoped** (`dtcpool.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtcpool.infobloxnios.crossplane.io/v1alpha1
+kind: DTCPool
+metadata:
+  name: example-dtcpool
+spec:
+  forProvider:
+    name: test-dtc-pool
+    lbPreferredMethod: ROUND_ROBIN
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`dtcpool.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtcpool.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCPool
+metadata:
+  name: example-dtcpool-ns
+  namespace: default
+spec:
+  forProvider:
+    name: test-dtc-pool-ns
+    lbPreferredMethod: ROUND_ROBIN
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually. Create is synchronous: WAPI's POST returns the `_ref`
+immediately, so no special create-pending handling is required.
+
+`servers` (the DTCServer members of the pool, each with a per-server
+`ratio` weight) is optional and references DTCServer resources by external
+name via `serverRef`/`serverSelector`; these examples omit it so they run
+standalone without requiring a pre-existing DTCServer. `name` is mutable,
+but changes are not reference-resolved on the fly by DTCLBDN resources that
+reference this pool. All other fields (`lbAlternateMethod`, `servers`,
+`availability`, `quorum`, `comment`, `disable`, `ttl`, `useTtl`,
+`extAttrs`, and the topology/dynamic-ratio settings) are mutable in place
+via WAPI PUT.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/dtc-pool/dtc-pool.yaml
+kubectl apply -f examples/dtc-pool/dtc-pool-namespaced.yaml
+```
+
 ## Development
 
 ```bash
