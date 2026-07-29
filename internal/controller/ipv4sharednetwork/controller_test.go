@@ -544,6 +544,78 @@ func TestClusterObserveForbidden(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse verifies that Observe does not panic
+// when the WAPI response contains only the resource identifier (_ref) and
+// every other field is at its Go zero/nil value. Controller-runtime
+// silently swallows panics in the reconcile loop, so a nil-pointer
+// dereference here would leave the resource stuck forever with no visible
+// error.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// Seed a completely bare shared network — only the SDK-assigned
+	// _ref (via seed()) identifies the object. Name/NetworkView/Comment/
+	// Ea/Disable/UseOptions/Options are all at their Go zero value.
+	ref := m.seed(&storedSharedNetwork{})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterIPv4SharedNetwork("my-network", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Disable != nil {
+		t.Errorf("AtProvider.Disable = %v, want nil", ap.Disable)
+	}
+	if ap.UseOptions != nil {
+		t.Errorf("AtProvider.UseOptions = %v, want nil", ap.UseOptions)
+	}
+	if ap.Options != nil {
+		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
+	}
+	if ap.Authority != nil {
+		t.Errorf("AtProvider.Authority = %v, want nil", ap.Authority)
+	}
+	if ap.DdnsTTL != nil {
+		t.Errorf("AtProvider.DdnsTTL = %v, want nil", ap.DdnsTTL)
+	}
+	if ap.EnableDdns != nil {
+		t.Errorf("AtProvider.EnableDdns = %v, want nil", ap.EnableDdns)
+	}
+	if ap.DhcpUtilization != nil {
+		t.Errorf("AtProvider.DhcpUtilization = %v, want nil", ap.DhcpUtilization)
+	}
+	if ap.DhcpUtilizationStatus != nil {
+		t.Errorf("AtProvider.DhcpUtilizationStatus = %v, want nil", ap.DhcpUtilizationStatus)
+	}
+	if ap.DynamicHosts != nil {
+		t.Errorf("AtProvider.DynamicHosts = %v, want nil", ap.DynamicHosts)
+	}
+}
+
 // TestIsUpToDateIgnoresImmutableField verifies that drift on networkView
 // (immutable — live-verified supports=rws, no u) does not flip
 // ResourceUpToDate to false.
@@ -990,6 +1062,73 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse is the namespaced-scope variant of
+// TestClusterObserveMinimalResponse — verifies Observe does not panic when
+// the WAPI response contains only the resource identifier (_ref) and every
+// other field is at its Go zero/nil value.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&storedSharedNetwork{})
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedIPv4SharedNetwork(testNamespace, "my-network", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Disable != nil {
+		t.Errorf("AtProvider.Disable = %v, want nil", ap.Disable)
+	}
+	if ap.UseOptions != nil {
+		t.Errorf("AtProvider.UseOptions = %v, want nil", ap.UseOptions)
+	}
+	if ap.Options != nil {
+		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
+	}
+	if ap.Authority != nil {
+		t.Errorf("AtProvider.Authority = %v, want nil", ap.Authority)
+	}
+	if ap.DdnsTTL != nil {
+		t.Errorf("AtProvider.DdnsTTL = %v, want nil", ap.DdnsTTL)
+	}
+	if ap.EnableDdns != nil {
+		t.Errorf("AtProvider.EnableDdns = %v, want nil", ap.EnableDdns)
+	}
+	if ap.DhcpUtilization != nil {
+		t.Errorf("AtProvider.DhcpUtilization = %v, want nil", ap.DhcpUtilization)
+	}
+	if ap.DhcpUtilizationStatus != nil {
+		t.Errorf("AtProvider.DhcpUtilizationStatus = %v, want nil", ap.DhcpUtilizationStatus)
+	}
+	if ap.DynamicHosts != nil {
+		t.Errorf("AtProvider.DynamicHosts = %v, want nil", ap.DynamicHosts)
 	}
 }
 
