@@ -540,6 +540,156 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// ── cluster: Create with cidr/networkView (next-available-IP) ──────────
+
+func TestClusterCreateWithCidrAllocatesNextAvailableIP(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+
+	want := "func:nextavailableip:2001:db8::/64,my-view"
+	if stored.Ipv6Addr == nil || *stored.Ipv6Addr != want {
+		t.Errorf("Create: stored ipv6addr = %v, want %q", stored.Ipv6Addr, want)
+	}
+}
+
+func TestClusterCreateWithCidrDefaultsNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = nil
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+
+	want := "func:nextavailableip:2001:db8::/64,default"
+	if stored.Ipv6Addr == nil || *stored.Ipv6Addr != want {
+		t.Errorf("Create: stored ipv6addr = %v, want %q", stored.Ipv6Addr, want)
+	}
+}
+
+func TestClusterCreateCidrAndIPv6AddrMutuallyExclusive(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "")
+	cr.Spec.ForProvider.IPv6Addr = stringPtr("2001:db8::1")
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when cidr and ipv6Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("Create: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+
+	m.mu.Lock()
+	n := len(m.records)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Errorf("Create: expected no record to be created, found %d", n)
+	}
+}
+
+// TestCreateAAAARecordRejectsCidrWithStaticIP is a white-box test of the
+// shared createAAAARecord wrapper: the mutual-exclusivity check must run
+// before any SDK/network call is attempted (passing a nil objMgr proves
+// this — a real call would panic on a nil receiver).
+func TestCreateAAAARecordRejectsCidrWithStaticIP(t *testing.T) {
+	_, err := createAAAARecord(nil, stringPtr("host.example.com"), stringPtr("default"), stringPtr("2001:db8::1"), nil, nil, nil, nil, stringPtr("2001:db8::/64"), nil)
+	if err == nil {
+		t.Fatal("createAAAARecord: expected an error when cidr and ipv6Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("createAAAARecord: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+}
+
+func TestClusterObserveMirrorsCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		Ipv6Addr: stringPtr("2001:db8::1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.Cidr == nil || *ap.Cidr != "2001:db8::/64" {
+		t.Errorf("AtProvider.Cidr = %v, want %q", ap.Cidr, "2001:db8::/64")
+	}
+	if ap.NetworkView == nil || *ap.NetworkView != "my-view" {
+		t.Errorf("AtProvider.NetworkView = %v, want %q", ap.NetworkView, "my-view")
+	}
+}
+
+func TestClusterObserveIsUpToDateIgnoresCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		Ipv6Addr: stringPtr("2001:db8::1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true despite cidr/networkView being set in spec, got false")
+	}
+}
+
 // TestClusterCreateServerError verifies that a 5xx response from the WAPI
 // create endpoint is propagated (wrapped, not swallowed) and that no
 // external-name is assigned.

@@ -543,6 +543,183 @@ func TestClusterCreateSuccess(t *testing.T) {
 	}
 }
 
+// ── cluster: Create with cidr/networkView (next-available-IP) ──────────
+
+func TestClusterCreateWithCidrAllocatesNextAvailableIP(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", "")
+	cr.Spec.ForProvider.IPv4Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+
+	want := "func:nextavailableip:10.0.0.0/24,my-view"
+	if stored.Ipv4Addr == nil || *stored.Ipv4Addr != want {
+		t.Errorf("Create: stored ipv4addr = %v, want %q", stored.Ipv4Addr, want)
+	}
+}
+
+func TestClusterCreateWithCidrDefaultsNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", "")
+	cr.Spec.ForProvider.IPv4Addr = nil
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.NetworkView = nil
+
+	_, err := e.Create(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	stored := m.records[ref]
+	m.mu.Unlock()
+
+	want := "func:nextavailableip:10.0.0.0/24,default"
+	if stored.Ipv4Addr == nil || *stored.Ipv4Addr != want {
+		t.Errorf("Create: stored ipv4addr = %v, want %q", stored.Ipv4Addr, want)
+	}
+}
+
+func TestClusterCreateCidrAndIPv4AddrMutuallyExclusive(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", "")
+	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.5")
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when cidr and ipv4Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("Create: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+
+	m.mu.Lock()
+	n := len(m.records)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Errorf("Create: expected no record to be created, found %d", n)
+	}
+}
+
+func TestClusterCreateCidrAndIPv6AddrMutuallyExclusive(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", "")
+	cr.Spec.ForProvider.IPv4Addr = nil
+	cr.Spec.ForProvider.IPv6Addr = stringPtr("2001:db8::1")
+	cr.Spec.ForProvider.Cidr = stringPtr("2001:db8::/64")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when cidr and ipv6Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("Create: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+
+	m.mu.Lock()
+	n := len(m.records)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Errorf("Create: expected no record to be created, found %d", n)
+	}
+}
+
+// TestCreatePTRRecordRejectsCidrWithStaticIP is a white-box test of the
+// shared createPTRRecord wrapper: the mutual-exclusivity check must run
+// before any SDK/network call is attempted (passing a nil objMgr proves
+// this — a real call would panic on a nil receiver).
+func TestCreatePTRRecordRejectsCidrWithStaticIP(t *testing.T) {
+	_, err := createPTRRecord(nil, stringPtr("host.example.com"), nil, stringPtr("10.0.0.5"), nil, stringPtr("default"), nil, nil, nil, nil, stringPtr("10.0.0.0/24"), nil)
+	if err == nil {
+		t.Fatal("createPTRRecord: expected an error when cidr and ipv4Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("createPTRRecord: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+}
+
+func TestClusterObserveMirrorsCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordPTR{
+		PtrdName: stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.Cidr == nil || *ap.Cidr != "10.0.0.0/24" {
+		t.Errorf("AtProvider.Cidr = %v, want %q", ap.Cidr, "10.0.0.0/24")
+	}
+	if ap.NetworkView == nil || *ap.NetworkView != "my-view" {
+		t.Errorf("AtProvider.NetworkView = %v, want %q", ap.NetworkView, "my-view")
+	}
+}
+
+func TestClusterObserveIsUpToDateIgnoresCidrAndNetworkView(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordPTR{
+		PtrdName: stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterPTRRecord("my-ptrrecord", ref)
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true despite cidr/networkView being set in spec, got false")
+	}
+}
+
 // TestClusterCreateServerError verifies that a 5xx response from the WAPI
 // create endpoint is propagated (wrapped, not swallowed) and the
 // external-name annotation is left unset.

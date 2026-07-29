@@ -49,6 +49,7 @@ const (
 	errCreateAAAARecord  = "cannot create AAAARecord"
 	errUpdateAAAARecord  = "cannot update AAAARecord"
 	errDeleteAAAARecord  = "cannot delete AAAARecord"
+	errCidrIPv6Mutex     = "cidr and ipv6Addr are mutually exclusive"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -419,17 +420,30 @@ func observeFromRecordAAAA(externalID string, rec *ibclient.RecordAAAA) observed
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createAAAARecord issues the WAPI create call. netView and cidr are
-// always empty — this provider only supports statically-assigned IPv6
-// addresses (ipv6Addr is a required ForProvider field); WAPI's dynamic
-// next-available-IP allocation (func:nextavailableip via netView/cidr) is
-// not exposed by AAAARecordParameters.
-func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordAAAA, error) {
+// createAAAARecord issues the WAPI create call. When cidr is set, the
+// WAPI dynamically allocates the next available IPv6 address from the
+// given network view (func:nextavailableip) instead of using a
+// caller-supplied static address — cidr and ipv6Addr are mutually
+// exclusive, enforced below before the SDK call is issued. CreateAAAARecord
+// already defaults an empty network view to "default" internally; this
+// wrapper applies the same default explicitly for consistency with
+// createARecord (whose SDK counterpart does not self-default).
+func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string, cidr, networkView *string) (*ibclient.RecordAAAA, error) {
+	cidrVal := strOrEmpty(cidr)
+	if cidrVal != "" && strOrEmpty(ipv6Addr) != "" {
+		return nil, errors.New(errCidrIPv6Mutex)
+	}
+
+	netView := strOrEmpty(networkView)
+	if cidrVal != "" && netView == "" {
+		netView = "default"
+	}
+
 	return objMgr.CreateAAAARecord(
-		"", // netView — dynamic IP allocation is not exposed by this provider
+		netView,
 		strOrEmpty(view),
 		strOrEmpty(name),
-		"", // cidr — see netView above
+		cidrVal,
 		strOrEmpty(ipv6Addr),
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
