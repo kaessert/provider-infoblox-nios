@@ -1,0 +1,68 @@
+# NSRecord is a cluster-scoped Infoblox NIOS DNS delegation "NS" record
+# (WAPI object type record:ns). See record-ns-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:ns/ZG5zLmJpbmRfbnM:subdomain.zone.com/default") from
+# Create (a synchronous WAPI POST — the record exists immediately after
+# the 201 response); Crossplane stores it in the crossplane.io/
+# external-name annotation. Do not set that annotation manually — the
+# controller populates it.
+#
+# Required fields:
+#   name:       the delegated zone/subdomain in FQDN format. Live-verified
+#               immutable — WAPI rejects a PUT that changes this field
+#               even though the underlying SDK's update call still
+#               accepts a name parameter.
+#   nameserver: FQDN of the authoritative server for the delegated zone.
+#               Mutable — not part of the record's (view, zone, name)
+#               identity, so changing it does not rotate the `_ref`.
+#   view:       the DNS view the record is created in. Live-verified hard
+#               immutable (CEL rule enforced) — the update call has no
+#               view parameter.
+#   addresses:  at least one glue address record for the name server.
+#               Live-verified required on create (WAPI returns
+#               "field for create missing: addresses" without it), even
+#               though it is optional in the underlying SDK's field
+#               table.
+#
+# NS quirk: Grid DNS policy rejects manual record:ns creation for
+# subdomains that are not already registered as a delegated child zone
+# ("Cannot add a manual NS record") — this is a Grid-wide policy, not a
+# per-zone one. Live-verified against a real Grid: a manual record:ns
+# whose `name` is the ZONE APEX itself (e.g. "peatestinglab.com", not a
+# subdomain of it) succeeds with full CRUD in the "Internal" view. Use a
+# zone-apex name here, not a subdomain, and confirm the target zone/view
+# permits manual NS records before applying this example elsewhere.
+#
+# Optional mutable fields: msDelegationName. (addresses can also be
+# changed after creation, but as a list it is not a safe uptest
+# update-parameter target — see the annotation note below.)
+apiVersion: recordns.infobloxnios.crossplane.io/v1alpha1
+kind: NSRecord
+metadata:
+  name: example-nsrecord
+  annotations:
+    meta.upbound.io/example-id: recordns/v1alpha1/nsrecord
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
+    # Runs the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
+    # nameserver is the mutable scalar exercised here. It is intentionally
+    # NOT one of the record's identity fields (name, view) — changing
+    # either of those would rotate the WAPI `_ref` mid-test and
+    # destabilize the update-tester's convergence check.
+    crossplane.io/update-test: |
+      - field: nameserver
+        value: "ns2.example.com"
+spec:
+  forProvider:
+    name: peatestinglab.com
+    nameserver: ns1.example.com
+    addresses:
+      - address: 192.0.2.53
+        autoCreatePtr: false
+    view: Internal
+  providerConfigRef:
+    name: default

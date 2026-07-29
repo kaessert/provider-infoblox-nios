@@ -869,6 +869,71 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/record-mx/record-mx.yaml
 kubectl apply -f examples/record-mx/record-mx-namespaced.yaml
+
+### NSRecord
+
+Manage Infoblox NIOS DNS delegation "NS" records (WAPI object type
+`record:ns`).
+
+**Cluster-scoped** (`recordns.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordns.infobloxnios.crossplane.io/v1alpha1
+kind: NSRecord
+metadata:
+  name: example-nsrecord
+spec:
+  forProvider:
+    name: subdomain.zone.com
+    nameserver: ns1.example.com
+    addresses:
+      - address: 192.0.2.53
+        autoCreatePtr: false
+    view: default
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordns.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordns.infobloxnios.m.crossplane.io/v1alpha1
+kind: NSRecord
+metadata:
+  name: example-nsrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: subdomain-ns.zone.com
+    nameserver: ns1.example.com
+    addresses:
+      - address: 192.0.2.54
+        autoCreatePtr: false
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:ns/ZG5zLmJpbmRfbnM:subdomain.zone.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `name` and `view` fields are immutable after creation: WAPI ties an NS
+record's `_ref` to `(view, zone, name)`, and the underlying SDK's update
+call drops both parameters from the request body. `addresses` is required
+on create — WAPI rejects a create request that omits it.
+
+Grid policy may block manual NS record creation for zones that are not
+delegated. Point `name`/`nameserver` at a zone/nameserver pair your Grid
+Manager permits before applying.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-ns/record-ns.yaml
+kubectl apply -f examples/record-ns/record-ns-namespaced.yaml
 ```
 
 ### SRVRecord

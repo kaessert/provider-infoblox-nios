@@ -35,8 +35,17 @@ if [ -z "${MANIFEST:-}" ]; then
     RESOURCE="${SLUG%-namespaced}"    # strip -namespaced suffix
     MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE-namespaced.yaml"
   elif [[ "$SLUG" == *-ns ]]; then
-    RESOURCE="${SLUG%-ns}"            # strip -ns suffix
-    MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE-namespaced.yaml"
+    # Check if the full slug is itself a resource directory first. This
+    # avoids collisions between resource names that legitimately end in
+    # "-ns" (e.g. record-ns for DNS NS records) and the "-ns" shorthand
+    # used elsewhere for "-namespaced".
+    if [ -d "$PROVIDER_ROOT/examples/$SLUG" ]; then
+      RESOURCE="$SLUG"
+      MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE.yaml"
+    else
+      RESOURCE="${SLUG%-ns}"            # strip -ns suffix
+      MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE-namespaced.yaml"
+    fi
   else
     RESOURCE="$SLUG"
     MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE.yaml"

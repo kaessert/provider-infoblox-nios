@@ -1,0 +1,40 @@
+# NSRecord is the namespace-scoped variant of the Infoblox NIOS DNS
+# delegation "NS" record. See record-ns.yaml for the cluster-scoped
+# variant and full field documentation — this file only documents what
+# differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig
+# (usable by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the delegated name below differs from record-ns.yaml's
+# so both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (view, zone, name) WAPI identity. Like
+# record-ns.yaml, `name` MUST be a zone-apex name, not a subdomain — see
+# record-ns.yaml's "NS quirk" note for why.
+apiVersion: recordns.infobloxnios.m.crossplane.io/v1alpha1
+kind: NSRecord
+metadata:
+  name: example-nsrecord-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recordns/v1alpha1/nsrecord
+    uptest.upbound.io/timeout: "300"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-ns.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns-namespaced.sh
+    crossplane.io/update-test: |
+      - field: nameserver
+        value: "ns2-ns.example.com"
+spec:
+  forProvider:
+    name: example.com
+    nameserver: ns1.example.com
+    addresses:
+      - address: 192.0.2.54
+        autoCreatePtr: false
+    view: Internal
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
