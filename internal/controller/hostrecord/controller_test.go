@@ -477,6 +477,89 @@ func TestClusterObserveForbidden(t *testing.T) {
 	}
 }
 
+// TestClusterObserveMinimalResponse pins nil-safety in Observe: a WAPI
+// response carrying only the object's _ref (the resource identifier) and
+// every other field at its Go zero value (nil pointers, an empty string
+// NetworkView, a nil Ea map, nil slices) must not panic and must produce a
+// valid observation with nil-safe AtProvider fields.
+// observeFromHostRecord copies optional pointer fields directly (never
+// dereferences without a nil guard first), so this test also pins that
+// contract for future edits.
+func TestClusterObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// Seed a completely bare HostRecord — only the SDK-assigned _ref (via
+	// seed()) identifies the object. Name/View are nil, so zoneFromName
+	// leaves Zone at "" too.
+	ref := m.seed(&ibclient.HostRecord{})
+
+	e := &clusterExternal{client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.Ipv4Addrs != nil {
+		t.Errorf("AtProvider.Ipv4Addrs = %v, want nil", ap.Ipv4Addrs)
+	}
+	if ap.Ipv6Addrs != nil {
+		t.Errorf("AtProvider.Ipv6Addrs = %v, want nil", ap.Ipv6Addrs)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.View != nil {
+		t.Errorf("AtProvider.View = %v, want nil", ap.View)
+	}
+	if ap.Aliases != nil {
+		t.Errorf("AtProvider.Aliases = %v, want nil", ap.Aliases)
+	}
+	if ap.ConfigureForDNS != nil {
+		t.Errorf("AtProvider.ConfigureForDNS = %v, want nil", ap.ConfigureForDNS)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.Disable != nil {
+		t.Errorf("AtProvider.Disable = %v, want nil", ap.Disable)
+	}
+	if ap.TTL != nil {
+		t.Errorf("AtProvider.TTL = %v, want nil", ap.TTL)
+	}
+	if ap.UseTTL != nil {
+		t.Errorf("AtProvider.UseTTL = %v, want nil", ap.UseTTL)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Ref == nil || *ap.Ref != ref {
+		t.Errorf("AtProvider.Ref = %v, want %q", ap.Ref, ref)
+	}
+	if ap.Zone != nil {
+		t.Errorf("AtProvider.Zone = %v, want nil", ap.Zone)
+	}
+	if ap.DNSName != nil {
+		t.Errorf("AtProvider.DNSName = %v, want nil", ap.DNSName)
+	}
+	if ap.DNSAliases != nil {
+		t.Errorf("AtProvider.DNSAliases = %v, want nil", ap.DNSAliases)
+	}
+}
+
 // TestClusterObserveFullMirror verifies that response-only fields not
 // present in HostRecordParameters — Disable, DNSName, DNSAliases — are
 // correctly mirrored into AtProvider (full-mirror AtProvider convention).
@@ -909,6 +992,81 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
+	}
+}
+
+// TestNamespacedObserveMinimalResponse is the namespaced-scope counterpart
+// of TestClusterObserveMinimalResponse — see that test's doc comment for
+// rationale.
+func TestNamespacedObserveMinimalResponse(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.HostRecord{})
+
+	e := &namespacedExternal{client: newTestClient(t, srv)}
+	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for minimal response, got false")
+	}
+
+	ap := cr.Status.AtProvider
+	if ap.ID != ref {
+		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
+	}
+	if ap.Name != nil {
+		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
+	}
+	if ap.Ipv4Addrs != nil {
+		t.Errorf("AtProvider.Ipv4Addrs = %v, want nil", ap.Ipv4Addrs)
+	}
+	if ap.Ipv6Addrs != nil {
+		t.Errorf("AtProvider.Ipv6Addrs = %v, want nil", ap.Ipv6Addrs)
+	}
+	if ap.NetworkView != nil {
+		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
+	}
+	if ap.View != nil {
+		t.Errorf("AtProvider.View = %v, want nil", ap.View)
+	}
+	if ap.Aliases != nil {
+		t.Errorf("AtProvider.Aliases = %v, want nil", ap.Aliases)
+	}
+	if ap.ConfigureForDNS != nil {
+		t.Errorf("AtProvider.ConfigureForDNS = %v, want nil", ap.ConfigureForDNS)
+	}
+	if ap.Comment != nil {
+		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
+	}
+	if ap.Disable != nil {
+		t.Errorf("AtProvider.Disable = %v, want nil", ap.Disable)
+	}
+	if ap.TTL != nil {
+		t.Errorf("AtProvider.TTL = %v, want nil", ap.TTL)
+	}
+	if ap.UseTTL != nil {
+		t.Errorf("AtProvider.UseTTL = %v, want nil", ap.UseTTL)
+	}
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
+	}
+	if ap.Ref == nil || *ap.Ref != ref {
+		t.Errorf("AtProvider.Ref = %v, want %q", ap.Ref, ref)
+	}
+	if ap.Zone != nil {
+		t.Errorf("AtProvider.Zone = %v, want nil", ap.Zone)
+	}
+	if ap.DNSName != nil {
+		t.Errorf("AtProvider.DNSName = %v, want nil", ap.DNSName)
+	}
+	if ap.DNSAliases != nil {
+		t.Errorf("AtProvider.DNSAliases = %v, want nil", ap.DNSAliases)
 	}
 }
 
