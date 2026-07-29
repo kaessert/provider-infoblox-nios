@@ -1179,6 +1179,62 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 
 // ── shared helper unit tests ─────────────────────────────────────────────
 
+// TestStringifyEAValue exercises every branch of the extensible-attribute
+// value renderer: the plain string fast path exercised elsewhere via
+// TestExtAttrsRoundTrip only covers the string case, so this test pins
+// down the nil, ibclient.Bool (both true and false), []string, and
+// default (numeric) cases too.
+func TestStringifyEAValue(t *testing.T) {
+	cases := map[string]struct {
+		reason string
+		in     interface{}
+		want   string
+	}{
+		"Nil": {
+			reason: "a nil EA value renders as an empty string",
+			in:     nil,
+			want:   "",
+		},
+		"String": {
+			reason: "a string value passes through unchanged",
+			in:     "prod",
+			want:   "prod",
+		},
+		"BoolTrue": {
+			reason: "ibclient.Bool(true) renders as the CRD's \"True\" literal",
+			in:     ibclient.Bool(true),
+			want:   "True",
+		},
+		"BoolFalse": {
+			reason: "ibclient.Bool(false) renders as the CRD's \"False\" literal",
+			in:     ibclient.Bool(false),
+			want:   "False",
+		},
+		"StringSlice": {
+			reason: "a []string value (as produced by EA.UnmarshalJSON for multi-value EAs) joins on commas",
+			in:     []string{"a", "b", "c"},
+			want:   "a,b,c",
+		},
+		"StringSliceEmpty": {
+			reason: "an empty []string renders as an empty string",
+			in:     []string{},
+			want:   "",
+		},
+		"DefaultInt": {
+			reason: "any other type (e.g. int) falls through to the default fmt.Sprintf branch",
+			in:     42,
+			want:   "42",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := stringifyEAValue(tc.in); got != tc.want {
+				t.Errorf("%s: stringifyEAValue(%#v) = %q, want %q", tc.reason, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtAttrsRoundTrip(t *testing.T) {
 	in := map[string]string{testExtAttrKey: testExtAttrValue, "owner": "platform-team"}
 	ea := buildEA(in)

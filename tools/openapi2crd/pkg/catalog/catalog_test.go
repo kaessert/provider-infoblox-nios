@@ -2,6 +2,12 @@ package catalog
 
 import "testing"
 
+// testKindNetworkView is the shared literal for the NetworkView resource's
+// Kind, reused across several catalog test files (catalog_test.go,
+// network_test.go, network_view_test.go) that assert on cross-resource
+// Reference descriptors and Kind values pointing at NetworkView.
+const testKindNetworkView = "NetworkView"
+
 // TestFindResource verifies FindResource returns the ARecord descriptor for
 // its slug and reports false for an unknown slug.
 func TestFindResource(t *testing.T) {
@@ -685,7 +691,7 @@ func TestHostRecordNetworkViewReference(t *testing.T) {
 		if f.Reference == nil {
 			t.Fatalf("networkView field has nil Reference")
 		}
-		if f.Reference.TargetKind != "NetworkView" {
+		if f.Reference.TargetKind != testKindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {
@@ -901,14 +907,14 @@ func TestNetworkContainerNetworkViewReference(t *testing.T) {
 
 	var found bool
 	for _, f := range rd.Fields {
-		if f.Name != "NetworkView" {
+		if f.Name != testKindNetworkView {
 			continue
 		}
 		found = true
 		if f.Reference == nil {
 			t.Fatalf("NetworkView field has no Reference descriptor")
 		}
-		if f.Reference.TargetKind != "NetworkView" {
+		if f.Reference.TargetKind != testKindNetworkView {
 			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
 		}
 		if f.Reference.TargetSlug != "networkview" {

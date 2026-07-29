@@ -9,7 +9,7 @@ func TestFindResourceNetworkView(t *testing.T) {
 	if !ok {
 		t.Fatalf("FindResource(%q): expected found", "networkview")
 	}
-	if rd.Kind != "NetworkView" {
+	if rd.Kind != testKindNetworkView {
 		t.Errorf("Kind = %q, want NetworkView", rd.Kind)
 	}
 	if rd.ClusterGroup != "networkview.infobloxnios.crossplane.io" {
