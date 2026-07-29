@@ -547,3 +547,118 @@ func TestSRVRecordImmutableFields(t *testing.T) {
 		}
 	}
 }
+
+// TestFindResourceHostRecord verifies FindResource returns the
+// HostRecord descriptor for its slug.
+func TestFindResourceHostRecord(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+	if rd.Kind != "HostRecord" {
+		t.Errorf("Kind = %q, want HostRecord", rd.Kind)
+	}
+	if rd.ClusterGroup != "hostrecord.infobloxnios.crossplane.io" {
+		t.Errorf("ClusterGroup = %q, want hostrecord.infobloxnios.crossplane.io", rd.ClusterGroup)
+	}
+	if rd.NamespacedGroup != "hostrecord.infobloxnios.m.crossplane.io" {
+		t.Errorf("NamespacedGroup = %q, want hostrecord.infobloxnios.m.crossplane.io", rd.NamespacedGroup)
+	}
+}
+
+// TestHostRecordFieldCounts pins the field counts for HostRecord — the
+// ticket specifies ForProvider fields (settable) and AtProvider fields
+// (response-only). Field scopes: request=0 (mac_address/duid omitted —
+// see catalog doc), response=4, both=12.
+func TestHostRecordFieldCounts(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+
+	var req, resp, both int
+	for _, f := range rd.Fields {
+		switch f.Scope {
+		case FieldScopeRequest:
+			req++
+		case FieldScopeResponse:
+			resp++
+		case FieldScopeBoth:
+			both++
+		}
+	}
+
+	if req != 0 {
+		t.Errorf("request-scope field count = %d, want 0", req)
+	}
+	if resp != 4 {
+		t.Errorf("response-scope field count = %d, want 4", resp)
+	}
+	if both != 12 {
+		t.Errorf("both-scope field count = %d, want 12", both)
+	}
+}
+
+// TestHostRecordNestedTypes verifies HostRecord has the expected nested
+// types (HostIpv4Addr and HostIpv6Addr) with correct sub-field counts.
+func TestHostRecordNestedTypes(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+
+	if len(rd.NestedTypes) != 2 {
+		t.Fatalf("HostRecord nested type count = %d, want 2", len(rd.NestedTypes))
+	}
+
+	ipv4 := rd.NestedTypes[0]
+	if ipv4.TypeName != "HostRecordIpv4Addr" {
+		t.Errorf("NestedTypes[0].TypeName = %q, want HostRecordIpv4Addr", ipv4.TypeName)
+	}
+	if len(ipv4.Fields) != 4 {
+		t.Errorf("HostRecordIpv4Addr field count = %d, want 4", len(ipv4.Fields))
+	}
+
+	ipv6 := rd.NestedTypes[1]
+	if ipv6.TypeName != "HostRecordIpv6Addr" {
+		t.Errorf("NestedTypes[1].TypeName = %q, want HostRecordIpv6Addr", ipv6.TypeName)
+	}
+	if len(ipv6.Fields) != 3 {
+		t.Errorf("HostRecordIpv6Addr field count = %d, want 3", len(ipv6.Fields))
+	}
+}
+
+// TestHostRecordNetworkViewReference verifies the networkView field carries
+// a cross-resource reference descriptor targeting NetworkView.
+func TestHostRecordNetworkViewReference(t *testing.T) {
+	rd, ok := FindResource("hostrecord")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "hostrecord")
+	}
+
+	var found bool
+	for _, f := range rd.Fields {
+		if f.JSONName != "networkView" {
+			continue
+		}
+		found = true
+		if f.Reference == nil {
+			t.Fatalf("networkView field has nil Reference")
+		}
+		if f.Reference.TargetKind != "NetworkView" {
+			t.Errorf("Reference.TargetKind = %q, want NetworkView", f.Reference.TargetKind)
+		}
+		if f.Reference.TargetSlug != "networkview" {
+			t.Errorf("Reference.TargetSlug = %q, want networkview", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != "cluster" {
+			t.Errorf("Reference.TargetScope = %q, want cluster", f.Reference.TargetScope)
+		}
+		if !f.Immutable {
+			t.Errorf("networkView field should be Immutable")
+		}
+	}
+	if !found {
+		t.Errorf("no field with JSONName=networkView found in HostRecord")
+	}
+}

@@ -1,0 +1,86 @@
+# HostRecord is a cluster-scoped Infoblox NIOS host record (WAPI object
+# type "record:host"). See host-record-namespaced.yaml for the
+# namespace-scoped variant used by namespaced (ModernManaged) resources.
+#
+# External name: server-assigned. WAPI returns an opaque `_ref` string
+# (e.g. "record:host/ZG5zLmhvc3Rfcm9v:test-host.example.com/default") from
+# Create; Crossplane stores it in the crossplane.io/external-name
+# annotation. Do not set that annotation manually — the controller
+# populates it.
+#
+# Required fields:
+#   name:      host name in FQDN format. Renaming changes the record's
+#              `_ref` (the controller re-syncs the external-name
+#              annotation when that happens).
+#   ipv4Addrs: at least one IPv4 address entry is required on create.
+#
+# Optional but notable fields:
+#   networkView: immutable after creation — the underlying SDK's update
+#                call has no networkView parameter.
+#   view:        mutable — changing it moves the record between DNS
+#                views and changes the `_ref`.
+#
+# Optional mutable fields: aliases, comment, disable, ttl, useTtl,
+# configureForDns, extAttrs.
+apiVersion: hostrecord.infobloxnios.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord
+  annotations:
+    meta.upbound.io/example-id: hostrecord/v1alpha1/hostrecord
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
+    # comment field below is a safe mutable scalar for update coverage;
+    # field-level update testing runs via the hook annotation just below.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-host-record.sh
+    # Per-field update coverage for the post-assert hook. Scalar mutable
+    # fields are exercised with a real value change; list/map fields and
+    # identity-changing fields are explicitly skipped with a reason so the
+    # validate subcommand still reports full coverage.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+      - field: ttl
+        value: 3600
+      - field: useTtl
+        value: true
+      - field: disable
+        value: true
+      - field: name
+        skip: "renaming changes the record's _ref; identity changes aren't exercised via per-field diff testing"
+      - field: view
+        skip: "changing view moves the record between DNS views and changes its _ref"
+      - field: configureForDns
+        skip: "toggling DNS registration can remove the record from DNS entirely, altering derived zone/dnsName atProvider fields"
+      - field: ipv4Addrs
+        skip: "list field — not a scalar update target"
+      - field: ipv6Addrs
+        skip: "list field — not a scalar update target"
+      - field: aliases
+        skip: "list field — not a scalar update target"
+      - field: extAttrs
+        skip: "map field — not a scalar update target"
+      - field: networkViewRef
+        skip: "reference field resolving to networkView, which is immutable after creation"
+      - field: networkViewSelector
+        skip: "reference field resolving to networkView, which is immutable after creation"
+spec:
+  forProvider:
+    name: test-host.example.com
+    ipv4Addrs:
+      - ipv4Addr: 10.0.0.100
+    view: default
+    # configureForDns must be true: the WAPI Grid Manager rejects Create
+    # when DNS is not configured (enable_dns=false) unless the host
+    # address already belongs to an existing IPAM Network object, which
+    # the E2E environment does not provision. test/setup.sh creates the
+    # example.com auth zone specifically so this record can register as
+    # a DNS host under it — omitting this field defaults to false (see
+    # controller.go's boolOrFalse helper) and fails Create with
+    # IB.Data.Conflict: "At least one host address must belong to an
+    # existing network if DNS is not configured for this host."
+    configureForDns: true
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default

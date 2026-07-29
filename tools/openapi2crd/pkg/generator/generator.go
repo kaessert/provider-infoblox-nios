@@ -342,7 +342,8 @@ func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetDa
 				JSONName:    f.JSONName,
 				Description: f.Description,
 				// No omitempty on slice/map, even in nested types.
-				OmitEmpty: isOmitEmpty(f.GoType, false),
+				OmitEmpty: isOmitEmpty(f.GoType, f.Required),
+				Required:  f.Required,
 				Reference: buildReferenceData(f.Reference, f.Name, f.GoType, isCluster),
 			})
 			if f.Reference != nil {
@@ -439,7 +440,9 @@ const fieldSetTemplate = `{{- define "referenceMarker" -}}
 // {{.TypeName}} {{.Description}}
 type {{.TypeName}} struct {
 {{range .Fields}}	// {{.Description}}
-{{- if not .OmitEmpty}}
+{{- if .Required}}
+	// +kubebuilder:validation:Required
+{{- else if not .OmitEmpty}}
 	// +optional
 {{- end}}
 {{- template "referenceMarker" .}}

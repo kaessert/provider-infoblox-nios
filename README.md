@@ -355,6 +355,65 @@ kubectl apply -f examples/record-txt/record-txt.yaml
 kubectl apply -f examples/record-txt/record-txt-namespaced.yaml
 ```
 
+### HostRecord
+
+Manage Infoblox NIOS host records (WAPI object type `record:host`). A host
+record combines one or more IPv4/IPv6 addresses with a DNS name under a
+single object, optionally with DHCP association.
+
+**Cluster-scoped** (`hostrecord.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: hostrecord.infobloxnios.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord
+spec:
+  forProvider:
+    name: test-host.example.com
+    ipv4Addrs:
+      - ipv4Addr: 10.0.0.100
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`hostrecord.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: hostrecord.infobloxnios.m.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: test-host-ns.example.com
+    ipv4Addrs:
+      - ipv4Addr: 10.0.0.101
+    view: default
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:host/ZG5zLmhvc3Rfcm9v:test-host.example.com/default`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+The `networkView` field is immutable after creation (the underlying SDK's
+update call has no `networkView` parameter). The `view` field is mutable,
+but changing it moves the record between DNS views and changes the `_ref`.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/host-record/host-record.yaml
+kubectl apply -f examples/host-record/host-record-namespaced.yaml
+```
+
 ### ZoneDelegated
 
 Manage Infoblox NIOS delegated DNS zones (WAPI object type `zone_delegated`).
