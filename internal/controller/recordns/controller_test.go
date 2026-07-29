@@ -474,6 +474,82 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	}
 }
 
+// TestClusterObserveWithCloudInfo verifies a cloud-managed record's
+// cloud_info block (including the nested delegated_member) is fully
+// translated into the cluster-scoped AtProvider mirror.
+func TestClusterObserveWithCloudInfo(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		Nameserver: stringPtr("ns1.example.com"),
+		View:       "default",
+		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
+		CloudInfo: &ibclient.GridCloudapiInfo{
+			DelegatedMember: &ibclient.Dhcpmember{
+				Ipv4Addr: "192.0.2.5",
+				Ipv6Addr: "2001:db8::5",
+				Name:     "member1.example.com",
+			},
+			DelegatedScope: "ROOT",
+			DelegatedRoot:  "delegated.example.com",
+			OwnedByAdaptor: true,
+			Usage:          "AWS",
+			Tenant:         "tenant-1",
+			MgmtPlatform:   "AWS",
+			AuthorityType:  "ROOT",
+		},
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	ci := cr.Status.AtProvider.CloudInfo
+	if ci == nil {
+		t.Fatal("AtProvider.CloudInfo = nil, want populated")
+	}
+	if ci.DelegatedScope == nil || *ci.DelegatedScope != "ROOT" {
+		t.Errorf("CloudInfo.DelegatedScope = %v, want ROOT", ci.DelegatedScope)
+	}
+	if ci.DelegatedRoot == nil || *ci.DelegatedRoot != "delegated.example.com" {
+		t.Errorf("CloudInfo.DelegatedRoot = %v, want delegated.example.com", ci.DelegatedRoot)
+	}
+	if ci.OwnedByAdaptor == nil || !*ci.OwnedByAdaptor {
+		t.Errorf("CloudInfo.OwnedByAdaptor = %v, want true", ci.OwnedByAdaptor)
+	}
+	if ci.Usage == nil || *ci.Usage != "AWS" {
+		t.Errorf("CloudInfo.Usage = %v, want AWS", ci.Usage)
+	}
+	if ci.Tenant == nil || *ci.Tenant != "tenant-1" {
+		t.Errorf("CloudInfo.Tenant = %v, want tenant-1", ci.Tenant)
+	}
+	if ci.MgmtPlatform == nil || *ci.MgmtPlatform != "AWS" {
+		t.Errorf("CloudInfo.MgmtPlatform = %v, want AWS", ci.MgmtPlatform)
+	}
+	if ci.AuthorityType == nil || *ci.AuthorityType != "ROOT" {
+		t.Errorf("CloudInfo.AuthorityType = %v, want ROOT", ci.AuthorityType)
+	}
+	dm := ci.DelegatedMember
+	if dm == nil {
+		t.Fatal("CloudInfo.DelegatedMember = nil, want populated")
+	}
+	if dm.Ipv4Addr == nil || *dm.Ipv4Addr != "192.0.2.5" {
+		t.Errorf("DelegatedMember.Ipv4Addr = %v, want 192.0.2.5", dm.Ipv4Addr)
+	}
+	if dm.Ipv6Addr == nil || *dm.Ipv6Addr != "2001:db8::5" {
+		t.Errorf("DelegatedMember.Ipv6Addr = %v, want 2001:db8::5", dm.Ipv6Addr)
+	}
+	if dm.Name == nil || *dm.Name != "member1.example.com" {
+		t.Errorf("DelegatedMember.Name = %v, want member1.example.com", dm.Name)
+	}
+}
+
 // ── cluster: Create ─────────────────────────────────────────────────────
 
 func TestClusterCreateSuccess(t *testing.T) {
@@ -492,6 +568,28 @@ func TestClusterCreateSuccess(t *testing.T) {
 	got := meta.GetExternalName(cr)
 	if got == "" || got == cr.GetName() {
 		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
+	}
+}
+
+// TestClusterCreateServerError verifies that a 5xx response from the WAPI
+// create endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unset.
+func TestClusterCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateNSRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateNSRecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty on error", got)
 	}
 }
 
@@ -620,6 +718,24 @@ func TestClusterUpdateRefChangesUpdatesExternalName(t *testing.T) {
 	// itself is exercised by inspection of Update's code path.
 	if got := meta.GetExternalName(cr); got != ref {
 		t.Errorf("Update: external-name = %q, want unchanged %q (mock ref is stable)", got, ref)
+	}
+}
+
+// TestClusterUpdateServerError verifies that a 5xx response from the WAPI
+// update endpoint is propagated (wrapped, not swallowed).
+func TestClusterUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/test1:delegated.example.com/default")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateNSRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateNSRecord)
 	}
 }
 
@@ -854,6 +970,28 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedCreateServerError verifies that a 5xx response from the
+// WAPI create endpoint is propagated (wrapped, not swallowed) and the
+// external-name annotation is left unset.
+func TestNamespacedCreateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errCreateNSRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateNSRecord)
+	}
+	if got := meta.GetExternalName(cr); got != "" {
+		t.Errorf("Create: external-name = %q, want empty on error", got)
+	}
+}
+
 func TestNamespacedUpdateSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -879,6 +1017,24 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Nameserver == nil || *stored.Nameserver != "ns2.example.com" {
 		t.Errorf("Update: stored nameserver = %v, want ns2.example.com", stored.Nameserver)
+	}
+}
+
+// TestNamespacedUpdateServerError verifies that a 5xx response from the
+// WAPI update endpoint is propagated (wrapped, not swallowed).
+func TestNamespacedUpdateServerError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/test1:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error for 500, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errUpdateNSRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateNSRecord)
 	}
 }
 
