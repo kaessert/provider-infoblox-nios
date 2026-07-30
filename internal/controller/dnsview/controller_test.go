@@ -330,7 +330,7 @@ func newTestConnector(t *testing.T, srv *httptest.Server) ibclient.IBConnector {
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
-	}, "http", u.Port())
+	}, true, "http", u.Port())
 	if err != nil {
 		t.Fatalf("cannot build test connector: %v", err)
 	}

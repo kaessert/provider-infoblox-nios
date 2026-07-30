@@ -412,7 +412,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectM
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
-	}, "http", u.Port())
+	}, true, "http", u.Port())
 	if err != nil {
 		t.Fatalf("cannot build test object manager: %v", err)
 	}
@@ -1611,24 +1611,15 @@ func TestExtractCredentialsMissingKeys(t *testing.T) {
 	}
 }
 
-func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret(testClusterNamespace, "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: testClusterNamespace},
-		Key:             testUnusedKey,
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if !creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to default to true")
-	}
-}
-
-func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+// ── extractCredentials: ssl_verify key is fully ignored ────────────────
+//
+// TLS verification is governed by the ProviderConfig's own sslVerify spec
+// field (see cluster.go/namespaced.go's Connect methods), never by a key
+// in the credentials Secret. This pins the migration: a legacy
+// "ssl_verify" key in the Secret must have zero effect on
+// extractCredentials — nioCredentials has no SslVerify field to read it
+// into.
+func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := credentialsSecret(testClusterNamespace, "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
@@ -1641,7 +1632,7 @@ func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
 	}
-	if creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify=false when secret key is \"false\"")
+	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
+		t.Errorf("extractCredentials: got %+v, want Host/Username/Password populated regardless of the ssl_verify key", creds)
 	}
 }

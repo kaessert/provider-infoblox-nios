@@ -54,6 +54,13 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 	}
 
 	var creds *nioCredentials
+	// sslVerify governs TLS verification for all endpoints (primary and
+	// read); it is a ProviderConfig/ClusterProviderConfig policy field,
+	// not a per-credential Secret key. Defaults to true (secure) when
+	// unset — the kubebuilder default handles the YAML path, but Go code
+	// must handle the nil-pointer case too (e.g. objects created before
+	// this field existed).
+	sslVerify := true
 	switch ref.Kind {
 	case "ProviderConfig":
 		pc := &apisv1alpha1.ProviderConfig{}
@@ -64,6 +71,9 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		creds, err = extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace())
 		if err != nil {
 			return nil, err
+		}
+		if pc.Spec.SSLVerify != nil {
+			sslVerify = *pc.Spec.SSLVerify
 		}
 
 	case "ClusterProviderConfig":
@@ -76,12 +86,15 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		if err != nil {
 			return nil, err
 		}
+		if cpc.Spec.SSLVerify != nil {
+			sslVerify = *cpc.Spec.SSLVerify
+		}
 
 	default:
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	clients, err := newClients(creds)
+	clients, err := newClients(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
