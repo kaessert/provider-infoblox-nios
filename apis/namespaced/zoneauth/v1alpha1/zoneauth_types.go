@@ -64,11 +64,15 @@ type ZoneAuthParameters struct {
 	Comment *string `json:"comment,omitempty"`
 	// Determines whether the zone is disabled. When false, the zone is enabled.
 	Disable *bool `json:"disable,omitempty"`
-	// TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached.
+	// TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	SoaDefaultTTL *uint32 `json:"soaDefaultTtl,omitempty"`
 	// Number of seconds after which a secondary server stops answering for the zone because its data is considered too old to be useful.
 	SoaExpire *uint32 `json:"soaExpire,omitempty"`
-	// Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches "Does Not Respond" answers.
+	// Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches "Does Not Respond" answers. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	SoaNegativeTTL *uint32 `json:"soaNegativeTtl,omitempty"`
 	// Interval (in seconds) at which a secondary server checks the primary server for fresh zone data.
 	SoaRefresh *uint32 `json:"soaRefresh,omitempty"`
@@ -105,20 +109,23 @@ type ZoneAuthObservation struct {
 	// +optional
 	ID string `json:"id,omitempty"` // atProvider
 	// Fully-qualified domain name of the zone, e.g. "example.com". Immutable — WAPI rejects a PUT that changes it with "Field is not allowed for update".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="fqdn is immutable after creation"
 	FQDN *string `json:"fqdn,omitempty"` // atProvider
 	// DNS view in which the zone resides, e.g. "external". Defaults to the Grid's default view if unset at creation. Immutable — WAPI rejects a PUT that changes it with "Cannot move zones between views".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Format of the zone. Immutable — WAPI rejects a PUT that changes it with "Field is not allowed for update".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zoneFormat is immutable after creation"
 	ZoneFormat *string `json:"zoneFormat,omitempty"` // atProvider
 	// Comment for the zone; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Determines whether the zone is disabled. When false, the zone is enabled.
 	Disable *bool `json:"disable,omitempty"` // atProvider
-	// TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached.
+	// TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	SoaDefaultTTL *uint32 `json:"soaDefaultTtl,omitempty"` // atProvider
 	// Number of seconds after which a secondary server stops answering for the zone because its data is considered too old to be useful.
 	SoaExpire *uint32 `json:"soaExpire,omitempty"` // atProvider
-	// Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches "Does Not Respond" answers.
+	// Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches "Does Not Respond" answers. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	SoaNegativeTTL *uint32 `json:"soaNegativeTtl,omitempty"` // atProvider
 	// Interval (in seconds) at which a secondary server checks the primary server for fresh zone data.
 	SoaRefresh *uint32 `json:"soaRefresh,omitempty"` // atProvider

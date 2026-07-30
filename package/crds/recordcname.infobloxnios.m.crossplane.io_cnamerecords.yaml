@@ -165,8 +165,12 @@ spec:
                     type: string
                   ttl:
                     description: Time-to-live in seconds. Zero means the record is
-                      not cached.
+                      not cached. Must be non-negative (0-2147483647); to inherit
+                      the zone/grid default, set useTtl to false rather than passing
+                      a negative sentinel value.
                     format: int64
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   useTtl:
                     description: Use flag for ttl — when false the zone/grid default
@@ -287,7 +291,9 @@ spec:
                     type: string
                   ttl:
                     description: Time-to-live in seconds. Zero means the record is
-                      not cached.
+                      not cached. Must be non-negative (0-2147483647); to inherit
+                      the zone/grid default, set useTtl to false rather than passing
+                      a negative sentinel value.
                     format: int64
                     type: integer
                   useTtl:
@@ -301,11 +307,17 @@ spec:
                       the update at the data level ("A parent was not found"), so
                       it is treated as immutable.
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zone:
                     description: Zone in which the record resides, e.g. "zone.com".
                       Derived from name/view by WAPI — not a CreateCNAMERecord parameter,
                       so it has no ForProvider counterpart.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zone is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

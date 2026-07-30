@@ -98,8 +98,12 @@ spec:
                     type: array
                   delegatedTtl:
                     description: Time-to-live, in seconds, of the auto-generated NS
-                      and glue records for this delegation.
+                      and glue records for this delegation. Must be non-negative (0-2147483647);
+                      to inherit the zone/grid default, set useDelegatedTtl to false
+                      rather than passing a negative sentinel value.
                     format: int32
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   disable:
                     description: Determines whether the zone is disabled. When false,
@@ -271,7 +275,9 @@ spec:
                     type: array
                   delegatedTtl:
                     description: Time-to-live, in seconds, of the auto-generated NS
-                      and glue records for this delegation.
+                      and glue records for this delegation. Must be non-negative (0-2147483647);
+                      to inherit the zone/grid default, set useDelegatedTtl to false
+                      rather than passing a negative sentinel value.
                     format: int32
                     type: integer
                   disable:
@@ -291,6 +297,9 @@ spec:
                     description: FQDN of the delegated zone. Fixed at creation — confirmed
                       absent from the UpdateZoneDelegated SDK method signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: fqdn is immutable after creation
+                      rule: self == oldSelf
                   id:
                     description: |-
                       Server-assigned external identifier for this resource, set by Observe()
@@ -321,11 +330,17 @@ spec:
                       SDK method signature. The WAPI additionally rejects moving an
                       existing zone between views at the data level.
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zoneFormat:
                     description: Format of the zone (e.g. FORWARD, IPV4, IPV6). Fixed
                       at creation — confirmed absent from the UpdateZoneDelegated
                       SDK method signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zoneFormat is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

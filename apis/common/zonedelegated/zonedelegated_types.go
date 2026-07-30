@@ -39,7 +39,9 @@ type ZoneDelegatedParameters struct {
 	Locked *bool `json:"locked,omitempty"`
 	// Delegation name server group bound to this delegated zone.
 	NsGroup *string `json:"nsGroup,omitempty"`
-	// Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation.
+	// Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useDelegatedTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	DelegatedTTL *uint32 `json:"delegatedTtl,omitempty"`
 	// Use flag for delegatedTtl — when false the zone/grid default TTL applies.
 	UseDelegatedTTL *bool `json:"useDelegatedTtl,omitempty"`
@@ -60,13 +62,16 @@ type ZoneDelegatedObservation struct {
 	// +optional
 	ID string `json:"id,omitempty"` // atProvider
 	// FQDN of the delegated zone. Fixed at creation — confirmed absent from the UpdateZoneDelegated SDK method signature.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="fqdn is immutable after creation"
 	Fqdn *string `json:"fqdn,omitempty"` // atProvider
 	// List of remote name servers the zone is delegated to. The Infoblox appliance redirects queries for the delegated zone to these servers.
 	// +optional
 	DelegateTo []ZoneDelegatedNameServer `json:"delegateTo"` // atProvider
 	// DNS view in which the zone resides, e.g. "external". Fixed at creation — confirmed absent from the UpdateZoneDelegated SDK method signature. The WAPI additionally rejects moving an existing zone between views at the data level.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Format of the zone (e.g. FORWARD, IPV4, IPV6). Fixed at creation — confirmed absent from the UpdateZoneDelegated SDK method signature.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zoneFormat is immutable after creation"
 	ZoneFormat *string `json:"zoneFormat,omitempty"` // atProvider
 	// Comment for the zone; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
@@ -76,7 +81,7 @@ type ZoneDelegatedObservation struct {
 	Locked *bool `json:"locked,omitempty"` // atProvider
 	// Delegation name server group bound to this delegated zone.
 	NsGroup *string `json:"nsGroup,omitempty"` // atProvider
-	// Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation.
+	// Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useDelegatedTtl to false rather than passing a negative sentinel value.
 	DelegatedTTL *uint32 `json:"delegatedTtl,omitempty"` // atProvider
 	// Use flag for delegatedTtl — when false the zone/grid default TTL applies.
 	UseDelegatedTTL *bool `json:"useDelegatedTtl,omitempty"` // atProvider

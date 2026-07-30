@@ -93,8 +93,12 @@ spec:
                     type: string
                   ttl:
                     description: Time-to-live in seconds. Zero means the record is
-                      not cached.
+                      not cached. Must be non-negative (0-2147483647); to inherit
+                      the zone/grid default, set useTtl to false rather than passing
+                      a negative sentinel value.
                     format: int64
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   useTtl:
                     description: Use flag for ttl — when false the zone/grid default
@@ -378,7 +382,9 @@ spec:
                     type: string
                   ttl:
                     description: Time-to-live in seconds. Zero means the record is
-                      not cached.
+                      not cached. Must be non-negative (0-2147483647); to inherit
+                      the zone/grid default, set useTtl to false rather than passing
+                      a negative sentinel value.
                     format: int64
                     type: integer
                   useTtl:
@@ -391,6 +397,9 @@ spec:
                       name). Confirmed absent from the UpdateSRVRecord SDK method
                       signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   weight:
                     description: Relative weight (0-65535) for records with the same
                       priority. Changing this changes the record's _ref.
@@ -401,6 +410,9 @@ spec:
                       Derived from name/view by WAPI — not a CreateSRVRecord parameter,
                       so it has no ForProvider counterpart.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zone is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

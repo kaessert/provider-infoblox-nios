@@ -153,7 +153,9 @@ func dtcPool() ResourceDescriptor {
 				JSONName:    "ttl",
 				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
-				Description: "Time-To-Live for the DTC Pool response, in seconds. Zero indicates the record should not be cached.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "Time-To-Live for the DTC Pool response, in seconds. Zero indicates the record should not be cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.",
 			},
 			{
 				Name:        "UseTTL",
@@ -500,7 +502,9 @@ func dtcLBDN() ResourceDescriptor {
 				JSONName:    "ttl",
 				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
-				Description: "Time-To-Live for the DTC LBDN response, in seconds.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "Time-To-Live for the DTC LBDN response, in seconds. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.",
 			},
 			{
 				Name:        "UseTTL",

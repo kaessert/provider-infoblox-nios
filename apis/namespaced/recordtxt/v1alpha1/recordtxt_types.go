@@ -84,7 +84,9 @@ type TXTRecordParameters struct {
 	Text *string `json:"text"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	TTL *uint32 `json:"ttl,omitempty"`
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"`
@@ -114,7 +116,7 @@ type TXTRecordObservation struct {
 	Text *string `json:"text,omitempty"` // atProvider
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
 	TTL *uint32 `json:"ttl,omitempty"` // atProvider
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"` // atProvider
@@ -122,10 +124,12 @@ type TXTRecordObservation struct {
 	// +optional
 	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
 	// DNS view in which the record resides, e.g. "external". Soft-immutable: the WAPI schema reports it as updatable, but a PUT that changes view is rejected at runtime ("The action is not allowed. A parent was not found."), and the SDK's UpdateTXTRecord method omits the parameter entirely.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides, e.g. "zone.com". Derived from name/view by WAPI — not a CreateTXTRecord parameter, so it has no ForProvider counterpart.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable after creation"
 	Zone *string `json:"zone,omitempty"` // atProvider
 	// Record name in punycode format (derived from name).
 	DNSName *string `json:"dnsName,omitempty"` // atProvider

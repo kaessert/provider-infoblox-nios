@@ -300,7 +300,12 @@ spec:
                     type: string
                   ttl:
                     description: Time-To-Live for the DTC LBDN response, in seconds.
+                      Must be non-negative (0-2147483647); to inherit the zone/grid
+                      default, set useTtl to false rather than passing a negative
+                      sentinel value.
                     format: int32
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   types:
                     description: Resource record types the LBDN answers with.
@@ -562,6 +567,9 @@ spec:
                     type: string
                   ttl:
                     description: Time-To-Live for the DTC LBDN response, in seconds.
+                      Must be non-negative (0-2147483647); to inherit the zone/grid
+                      default, set useTtl to false rather than passing a negative
+                      sentinel value.
                     format: int32
                     type: integer
                   types:
