@@ -407,7 +407,7 @@ func newTestClients(t *testing.T, srv *httptest.Server) *dtcPoolClients {
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
-	}, "http", u.Port())
+	}, true, "http", u.Port())
 	if err != nil {
 		t.Fatalf("cannot build test clients: %v", err)
 	}
@@ -1704,24 +1704,15 @@ func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
 	}
 }
 
-func TestExtractCredentialsSslVerifyDefaultsTrue(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             unusedSecretKey,
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if !creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to default to true")
-	}
-}
-
-func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
+// ── extractCredentials: ssl_verify key is fully ignored ────────────────
+//
+// TLS verification is governed by the ProviderConfig's own sslVerify spec
+// field (see cluster.go/namespaced.go's Connect methods), never by a key
+// in the credentials Secret. This pins the migration: a legacy
+// "ssl_verify" key in the Secret must have zero effect on
+// extractCredentials — nioCredentials has no SslVerify field to read it
+// into.
+func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
@@ -1734,38 +1725,20 @@ func TestExtractCredentialsSslVerifyFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractCredentials: unexpected error: %v", err)
 	}
-	if creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify=false when Secret sets ssl_verify=false")
-	}
-}
-
-func TestExtractCredentialsSslVerifyUnrecognizedValueDefaultsTrue(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	secret.Data["ssl_verify"] = []byte("nope")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             unusedSecretKey,
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if !creds.SslVerify {
-		t.Error("extractCredentials: expected SslVerify to default to true for any value other than exactly \"false\"")
+	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
+		t.Errorf("extractCredentials: got %+v, want Host/Username/Password populated regardless of the ssl_verify key", creds)
 	}
 }
 
 func TestNewClientWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 	// Regression guard: newClientsWithScheme must not hardcode SslVerify to
-	// "true" — it must honor creds.SslVerify. Both branches must construct
+	// "true" — it must honor the sslVerify parameter. Both branches must construct
 	// successfully (transport config validation happens locally; no
 	// network round-trip occurs here).
 	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
 		t.Run(name, func(t *testing.T) {
-			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t", SslVerify: sslVerify}
-			clients, err := newClientsWithScheme(creds, "http", "80")
+			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
+			clients, err := newClientsWithScheme(creds, sslVerify, "http", "80")
 			if err != nil {
 				t.Fatalf("newClientsWithScheme: unexpected error: %v", err)
 			}

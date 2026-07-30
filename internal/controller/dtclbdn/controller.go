@@ -89,13 +89,13 @@ const wapiVersion = "2.9.7"
 // ── Credential bridge ───────────────────────────────────────────────────────
 
 // nioCredentials holds the WAPI connection parameters extracted from the
-// ProviderConfig's credentials Secret (host/username/password keys, plus
-// the optional ssl_verify key).
+// ProviderConfig's credentials Secret (host/username/password keys). TLS
+// verification is governed by the ProviderConfig's own sslVerify spec
+// field, not by anything in this Secret.
 type nioCredentials struct {
-	Host      string
-	Username  string
-	Password  string
-	SslVerify bool
+	Host     string
+	Username string
+	Password string
 }
 
 // extractCredentials reads the Secret referenced by a ProviderConfig's
@@ -130,16 +130,7 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 		return nil, errors.New(errMissingCredKey)
 	}
 
-	// sslVerify is secure by default (true). Setting the optional
-	// "ssl_verify" Secret key to "false" disables TLS certificate
-	// verification — used when the Grid Manager presents a self-signed
-	// certificate whose SAN does not match the reachable host address.
-	sslVerify := true
-	if v := string(secret.Data["ssl_verify"]); v == "false" {
-		sslVerify = false
-	}
-
-	return &nioCredentials{Host: host, Username: username, Password: password, SslVerify: sslVerify}, nil
+	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
 // dtcLbdnClients bundles the two SDK handles this package needs: the
@@ -158,14 +149,14 @@ type dtcLbdnClients struct {
 // HTTP Basic Auth on every request and only validates configuration
 // locally — no network round-trip happens until the first
 // Observe/Create/Update/Delete call.
-func newClients(creds *nioCredentials) (*dtcLbdnClients, error) {
-	return newClientsWithScheme(creds, "https", "443")
+func newClients(creds *nioCredentials, sslVerify bool) (*dtcLbdnClients, error) {
+	return newClientsWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newClientsWithScheme is the scheme/port-parameterized variant of
 // newClients used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newClientsWithScheme(creds *nioCredentials, scheme, port string) (*dtcLbdnClients, error) {
+func newClientsWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (*dtcLbdnClients, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -176,12 +167,13 @@ func newClientsWithScheme(creds *nioCredentials, scheme, port string) (*dtcLbdnC
 		Username: creds.Username,
 		Password: creds.Password,
 	}
-	// SslVerify is configurable via the credentials Secret's optional
-	// "ssl_verify" key (default: "true"). Set to "false" when the Grid
+	// sslVerify comes from the ProviderConfig's own spec field (not
+	// the credentials Secret) — see the Connect methods in
+	// cluster.go/namespaced.go. Set to false only when the Grid
 	// Manager uses a self-signed certificate whose SAN does not match
 	// the reachable host address.
 	sslVerifyStr := "true"
-	if !creds.SslVerify {
+	if !sslVerify {
 		sslVerifyStr = "false"
 	}
 	transportConfig := ibclient.NewTransportConfig(sslVerifyStr, 60, 10)
