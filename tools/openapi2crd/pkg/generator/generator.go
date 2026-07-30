@@ -79,6 +79,16 @@ type FieldData struct {
 	Immutable bool
 	// Enum lists valid string values for this field.
 	Enum []string
+	// HasMinimum controls whether a +kubebuilder:validation:Minimum
+	// marker is emitted (ForProvider fields only).
+	HasMinimum bool
+	// Minimum is the marker value rendered when HasMinimum is true.
+	Minimum int64
+	// HasMaximum controls whether a +kubebuilder:validation:Maximum
+	// marker is emitted (ForProvider fields only).
+	HasMaximum bool
+	// Maximum is the marker value rendered when HasMaximum is true.
+	Maximum int64
 	// Reference holds cross-resource reference template data. Nil for
 	// every ARecord field today.
 	Reference *ReferenceData
@@ -270,7 +280,7 @@ func buildReferenceData(ref *catalog.ReferenceDescriptor, goFieldName, goType st
 
 // buildFieldData converts one catalog.FieldDef into ForProvider FieldData.
 func buildFieldData(f catalog.FieldDef, isCluster bool) FieldData {
-	return FieldData{
+	fd := FieldData{
 		Name:        f.Name,
 		GoType:      f.GoType,
 		JSONName:    f.JSONName,
@@ -281,6 +291,15 @@ func buildFieldData(f catalog.FieldDef, isCluster bool) FieldData {
 		Enum:        f.Enum,
 		Reference:   buildReferenceData(f.Reference, f.Name, f.GoType, isCluster),
 	}
+	if f.Minimum != nil {
+		fd.HasMinimum = true
+		fd.Minimum = *f.Minimum
+	}
+	if f.Maximum != nil {
+		fd.HasMaximum = true
+		fd.Maximum = *f.Maximum
+	}
+	return fd
 }
 
 // atProviderGoType returns the Go type to use for a field mirrored into the
@@ -507,6 +526,12 @@ type {{.Kind}}Parameters struct {
 {{- else}}
 	// +kubebuilder:validation:Enum={{enumValues .Enum}}
 {{- end}}
+{{- end}}
+{{- if .HasMinimum}}
+	// +kubebuilder:validation:Minimum={{.Minimum}}
+{{- end}}
+{{- if .HasMaximum}}
+	// +kubebuilder:validation:Maximum={{.Maximum}}
 {{- end}}
 {{- template "referenceMarker" .}}
 	{{.Name}} {{.GoType}} {{jsonTag .JSONName .OmitEmpty}}

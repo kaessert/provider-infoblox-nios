@@ -65,7 +65,9 @@ type DTCLBDNParameters struct {
 	Persistence *uint32 `json:"persistence,omitempty"`
 	// Topology ruleset name used when lbMethod=TOPOLOGY.
 	Topology *string `json:"topology,omitempty"`
-	// Time-To-Live for the DTC LBDN response, in seconds.
+	// Time-To-Live for the DTC LBDN response, in seconds. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	TTL *uint32 `json:"ttl,omitempty"`
 	// Use flag for ttl.
 	UseTTL *bool `json:"useTtl,omitempty"`
@@ -111,7 +113,7 @@ type DTCLBDNObservation struct {
 	Persistence *uint32 `json:"persistence,omitempty"` // atProvider
 	// Topology ruleset name used when lbMethod=TOPOLOGY.
 	Topology *string `json:"topology,omitempty"` // atProvider
-	// Time-To-Live for the DTC LBDN response, in seconds.
+	// Time-To-Live for the DTC LBDN response, in seconds. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
 	TTL *uint32 `json:"ttl,omitempty"` // atProvider
 	// Use flag for ttl.
 	UseTTL *bool `json:"useTtl,omitempty"` // atProvider

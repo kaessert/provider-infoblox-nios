@@ -278,7 +278,9 @@ type ARecordParameters struct {
 	IPv4Addr *string `json:"ipv4Addr"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	TTL *int64 `json:"ttl,omitempty"`
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"`
@@ -314,7 +316,7 @@ type ARecordObservation struct {
 	IPv4Addr *string `json:"ipv4Addr,omitempty"` // atProvider
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
 	TTL *int64 `json:"ttl,omitempty"` // atProvider
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"` // atProvider

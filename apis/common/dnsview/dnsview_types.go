@@ -219,7 +219,9 @@ type DNSViewParameters struct {
 	// The array of IP addresses the appliance includes in the response it sends in place of a blacklisted IP address.
 	// +optional
 	BlacklistRedirectAddresses []string `json:"blacklistRedirectAddresses"`
-	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection.
+	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	BlacklistRedirectTTL *int64 `json:"blacklistRedirectTtl,omitempty"`
 	// The name of the Ruleset object assigned at the Grid level for blacklist redirection.
 	// +optional
@@ -309,7 +311,9 @@ type DNSViewParameters struct {
 	Forwarders []string `json:"forwarders"`
 	// Use flag for: forwarders, forward_only.
 	UseForwarders *bool `json:"useForwarders,omitempty"`
-	// The number of seconds to cache lame delegations or lame servers.
+	// The number of seconds to cache lame delegations or lame servers. Must be non-negative (0-2147483647); to inherit the grid default, set useLameTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	LameTTL *int64 `json:"lameTtl,omitempty"`
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"`
@@ -319,11 +323,15 @@ type DNSViewParameters struct {
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of destinations that are allowed or denied access to the DNS view.
 	// +optional
 	MatchDestinations []*DNSViewAddressAc `json:"matchDestinations"`
-	// The maximum number of seconds to cache ordinary (positive) answers.
+	// The maximum number of seconds to cache ordinary (positive) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxCacheTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	MaxCacheTTL *int64 `json:"maxCacheTtl,omitempty"`
 	// Use flag for: max_cache_ttl.
 	UseMaxCacheTTL *bool `json:"useMaxCacheTtl,omitempty"`
-	// The maximum number of seconds to cache negative (NXDOMAIN) answers.
+	// The maximum number of seconds to cache negative (NXDOMAIN) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxNcacheTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"`
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"`
@@ -339,7 +347,9 @@ type DNSViewParameters struct {
 	// The array with IPv6 addresses the appliance includes in the response it sends in place of an NXDOMAIN response.
 	// +optional
 	NxdomainRedirectAddressesV6 []string `json:"nxdomainRedirectAddressesV6"`
-	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection.
+	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	NxdomainRedirectTTL *int64 `json:"nxdomainRedirectTtl,omitempty"`
 	// The names of the Ruleset objects assigned at the grid level for NXDOMAIN redirection.
 	// +optional
@@ -403,7 +413,7 @@ type DNSViewObservation struct {
 	// The array of IP addresses the appliance includes in the response it sends in place of a blacklisted IP address.
 	// +optional
 	BlacklistRedirectAddresses []string `json:"blacklistRedirectAddresses"` // atProvider
-	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection.
+	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	BlacklistRedirectTTL *int64 `json:"blacklistRedirectTtl,omitempty"` // atProvider
 	// The name of the Ruleset object assigned at the Grid level for blacklist redirection.
 	// +optional
@@ -493,7 +503,7 @@ type DNSViewObservation struct {
 	Forwarders []string `json:"forwarders"` // atProvider
 	// Use flag for: forwarders, forward_only.
 	UseForwarders *bool `json:"useForwarders,omitempty"` // atProvider
-	// The number of seconds to cache lame delegations or lame servers.
+	// The number of seconds to cache lame delegations or lame servers. Must be non-negative (0-2147483647); to inherit the grid default, set useLameTtl to false rather than passing a negative sentinel value.
 	LameTTL *int64 `json:"lameTtl,omitempty"` // atProvider
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"` // atProvider
@@ -503,11 +513,11 @@ type DNSViewObservation struct {
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of destinations that are allowed or denied access to the DNS view.
 	// +optional
 	MatchDestinations []*DNSViewAddressAc `json:"matchDestinations"` // atProvider
-	// The maximum number of seconds to cache ordinary (positive) answers.
+	// The maximum number of seconds to cache ordinary (positive) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxCacheTtl to false rather than passing a negative sentinel value.
 	MaxCacheTTL *int64 `json:"maxCacheTtl,omitempty"` // atProvider
 	// Use flag for: max_cache_ttl.
 	UseMaxCacheTTL *bool `json:"useMaxCacheTtl,omitempty"` // atProvider
-	// The maximum number of seconds to cache negative (NXDOMAIN) answers.
+	// The maximum number of seconds to cache negative (NXDOMAIN) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxNcacheTtl to false rather than passing a negative sentinel value.
 	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"` // atProvider
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"` // atProvider
@@ -523,7 +533,7 @@ type DNSViewObservation struct {
 	// The array with IPv6 addresses the appliance includes in the response it sends in place of an NXDOMAIN response.
 	// +optional
 	NxdomainRedirectAddressesV6 []string `json:"nxdomainRedirectAddressesV6"` // atProvider
-	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection.
+	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	NxdomainRedirectTTL *int64 `json:"nxdomainRedirectTtl,omitempty"` // atProvider
 	// The names of the Ruleset objects assigned at the grid level for NXDOMAIN redirection.
 	// +optional

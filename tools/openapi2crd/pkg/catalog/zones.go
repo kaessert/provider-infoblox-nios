@@ -82,7 +82,9 @@ func zoneAuth() ResourceDescriptor {
 				JSONName:    "soaDefaultTtl",
 				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
-				Description: "TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "TTL (in seconds) of the SOA record of this zone — the length of time data from the zone is cached. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.",
 			},
 			{
 				Name:        "SoaExpire",
@@ -96,7 +98,9 @@ func zoneAuth() ResourceDescriptor {
 				JSONName:    "soaNegativeTtl",
 				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
-				Description: "Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches \"Does Not Respond\" answers.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "Negative-caching TTL (in seconds) of the zone's SOA record — how long a secondary server caches \"Does Not Respond\" answers. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.",
 			},
 			{
 				Name:        "SoaRefresh",

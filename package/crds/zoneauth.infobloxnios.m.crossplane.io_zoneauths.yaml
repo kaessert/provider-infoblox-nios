@@ -298,8 +298,12 @@ spec:
                     type: string
                   soaDefaultTtl:
                     description: TTL (in seconds) of the SOA record of this zone —
-                      the length of time data from the zone is cached.
+                      the length of time data from the zone is cached. Must be non-negative
+                      (0-2147483647); NIOS has no zone/grid-default sentinel for this
+                      field, so out-of-range values are rejected outright.
                     format: int32
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   soaExpire:
                     description: Number of seconds after which a secondary server
@@ -310,8 +314,12 @@ spec:
                   soaNegativeTtl:
                     description: Negative-caching TTL (in seconds) of the zone's SOA
                       record — how long a secondary server caches "Does Not Respond"
-                      answers.
+                      answers. Must be non-negative (0-2147483647); NIOS has no zone/grid-default
+                      sentinel for this field, so out-of-range values are rejected
+                      outright.
                     format: int32
+                    maximum: 2147483647
+                    minimum: 0
                     type: integer
                   soaRefresh:
                     description: Interval (in seconds) at which a secondary server
@@ -506,6 +514,9 @@ spec:
                       Immutable — WAPI rejects a PUT that changes it with "Field is
                       not allowed for update".
                     type: string
+                    x-kubernetes-validations:
+                    - message: fqdn is immutable after creation
+                      rule: self == oldSelf
                   gridPrimary:
                     description: Grid members that act as primary servers for this
                       zone.
@@ -658,7 +669,9 @@ spec:
                     type: string
                   soaDefaultTtl:
                     description: TTL (in seconds) of the SOA record of this zone —
-                      the length of time data from the zone is cached.
+                      the length of time data from the zone is cached. Must be non-negative
+                      (0-2147483647); NIOS has no zone/grid-default sentinel for this
+                      field, so out-of-range values are rejected outright.
                     format: int32
                     type: integer
                   soaExpire:
@@ -670,7 +683,9 @@ spec:
                   soaNegativeTtl:
                     description: Negative-caching TTL (in seconds) of the zone's SOA
                       record — how long a secondary server caches "Does Not Respond"
-                      answers.
+                      answers. Must be non-negative (0-2147483647); NIOS has no zone/grid-default
+                      sentinel for this field, so out-of-range values are rejected
+                      outright.
                     format: int32
                     type: integer
                   soaRefresh:
@@ -689,10 +704,16 @@ spec:
                       — WAPI rejects a PUT that changes it with "Cannot move zones
                       between views".
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zoneFormat:
                     description: Format of the zone. Immutable — WAPI rejects a PUT
                       that changes it with "Field is not allowed for update".
                     type: string
+                    x-kubernetes-validations:
+                    - message: zoneFormat is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

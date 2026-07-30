@@ -72,7 +72,9 @@ func aaaaRecord() ResourceDescriptor {
 				JSONName:    "ttl",
 				GoType:      goTypeInt64,
 				Scope:       FieldScopeBoth,
-				Description: "Time-to-live in seconds. Zero means the record is not cached.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.",
 			},
 			{
 				Name:        "UseTTL",

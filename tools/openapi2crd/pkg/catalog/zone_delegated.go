@@ -105,7 +105,9 @@ func zoneDelegated() ResourceDescriptor {
 				JSONName:    "delegatedTtl",
 				GoType:      "*uint32",
 				Scope:       FieldScopeBoth,
-				Description: "Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation.",
+				Minimum:     int64Ptr(ttlMinimumSeconds),
+				Maximum:     int64Ptr(ttlMaximumSeconds),
+				Description: "Time-to-live, in seconds, of the auto-generated NS and glue records for this delegation. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useDelegatedTtl to false rather than passing a negative sentinel value.",
 			},
 			{
 				Name:        "UseDelegatedTTL",

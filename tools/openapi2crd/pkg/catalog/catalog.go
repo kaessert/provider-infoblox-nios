@@ -87,7 +87,26 @@ const (
 	// resource, used both by production catalog entries (TargetSlug) and
 	// by table-driven tests across the catalog package.
 	slugNetworkView = "networkview"
+	// ttlMinimumSeconds/ttlMaximumSeconds bound every TTL-like field in
+	// the catalog (DNS/DHCP cache and delegation TTLs, all expressed in
+	// seconds). WAPI stores TTLs as a signed 32-bit integer internally,
+	// so 2147483647 (max int32) is the practical upper bound. Negative
+	// values have no DNS/DHCP meaning — some Terraform-style tooling
+	// uses a negative sentinel (e.g. -2147483648) to mean "inherit the
+	// zone/grid default", but WAPI has no such convention; the correct
+	// way to inherit the default is to set the field's paired use-flag
+	// (e.g. useTtl, useDelegatedTtl) to false instead of passing a
+	// sentinel TTL value.
+	ttlMinimumSeconds = 0
+	ttlMaximumSeconds = 2147483647
 )
+
+// int64Ptr returns a pointer to v. Used to populate FieldDef.Minimum and
+// FieldDef.Maximum from an untyped constant, since a constant's address
+// cannot be taken directly in a Go literal.
+func int64Ptr(v int64) *int64 {
+	return &v
+}
 
 // FieldDef describes one field of a resource or nested type.
 type FieldDef struct {
@@ -124,6 +143,18 @@ type FieldDef struct {
 	// non-empty, the generator emits a +kubebuilder:validation:Enum
 	// marker on the ForProvider field.
 	Enum []string
+	// Minimum sets the lower bound for a numeric field. When non-nil,
+	// the generator emits a +kubebuilder:validation:Minimum marker on
+	// the ForProvider field, rejecting out-of-range values at admission
+	// time instead of letting them reach the controller (e.g. a
+	// negative TTL, which some Terraform-style tooling treats as an
+	// "inherit default" sentinel but which crashes NIOS's unsigned wire
+	// types).
+	Minimum *int64
+	// Maximum sets the upper bound for a numeric field. When non-nil,
+	// the generator emits a +kubebuilder:validation:Maximum marker on
+	// the ForProvider field.
+	Maximum *int64
 	// Description is the field's doc comment, taken from the SDK
 	// struct field comment (see inventory.md).
 	Description string

@@ -66,7 +66,9 @@ type HostRecordParameters struct {
 	Comment *string `json:"comment,omitempty"`
 	// Whether the record is disabled.
 	Disable *bool `json:"disable,omitempty"`
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
 	TTL *uint32 `json:"ttl,omitempty"`
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"`
@@ -118,7 +120,7 @@ type HostRecordObservation struct {
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Whether the record is disabled.
 	Disable *bool `json:"disable,omitempty"` // atProvider
-	// Time-to-live in seconds. Zero means the record is not cached.
+	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
 	TTL *uint32 `json:"ttl,omitempty"` // atProvider
 	// Use flag for ttl — when false the zone/grid default TTL applies.
 	UseTTL *bool `json:"useTtl,omitempty"` // atProvider
