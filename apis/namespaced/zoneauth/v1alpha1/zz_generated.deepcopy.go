@@ -226,6 +226,11 @@ func (in *ZoneAuthObservation) DeepCopyInto(out *ZoneAuthObservation) {
 		*out = new(uint32)
 		**out = **in
 	}
+	if in.UseGridZoneTimer != nil {
+		in, out := &in.UseGridZoneTimer, &out.UseGridZoneTimer
+		*out = new(bool)
+		**out = **in
+	}
 	if in.NsGroup != nil {
 		in, out := &in.NsGroup, &out.NsGroup
 		*out = new(string)
@@ -334,6 +339,11 @@ func (in *ZoneAuthParameters) DeepCopyInto(out *ZoneAuthParameters) {
 	if in.SoaRetry != nil {
 		in, out := &in.SoaRetry, &out.SoaRetry
 		*out = new(uint32)
+		**out = **in
+	}
+	if in.UseGridZoneTimer != nil {
+		in, out := &in.UseGridZoneTimer, &out.UseGridZoneTimer
+		*out = new(bool)
 		**out = **in
 	}
 	if in.NsGroup != nil {
