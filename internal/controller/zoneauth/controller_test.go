@@ -1116,10 +1116,11 @@ func TestIsUpToDateGridPrimaryMismatch(t *testing.T) {
 func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 	desired := zoneAuthFields{}
 	observed := zoneAuthFields{
-		Comment:       stringPtr("server comment"),
-		Disable:       boolPtr(false),
-		SoaDefaultTTL: uint32Ptr(28800),
-		NsGroup:       stringPtr("default-nsgroup"),
+		Comment:          stringPtr("server comment"),
+		Disable:          boolPtr(false),
+		SoaDefaultTTL:    uint32Ptr(28800),
+		UseGridZoneTimer: boolPtr(true),
+		NsGroup:          stringPtr("default-nsgroup"),
 	}
 
 	updated, changed := lateInitializeFields(desired, observed)
@@ -1128,6 +1129,9 @@ func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 	}
 	if updated.Comment == nil || *updated.Comment != "server comment" {
 		t.Errorf("lateInitializeFields: Comment = %v, want 'server comment'", updated.Comment)
+	}
+	if updated.UseGridZoneTimer == nil || !*updated.UseGridZoneTimer {
+		t.Errorf("lateInitializeFields: UseGridZoneTimer = %v, want true", updated.UseGridZoneTimer)
 	}
 	if updated.SoaDefaultTTL == nil || *updated.SoaDefaultTTL != 28800 {
 		t.Errorf("lateInitializeFields: SoaDefaultTTL = %v, want 28800", updated.SoaDefaultTTL)

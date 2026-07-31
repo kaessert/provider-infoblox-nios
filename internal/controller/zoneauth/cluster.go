@@ -98,6 +98,7 @@ func clusterFieldsFromSpec(p *clusterv1alpha1.ZoneAuthParameters) zoneAuthFields
 		SoaNegativeTTL:      p.SoaNegativeTTL,
 		SoaRefresh:          p.SoaRefresh,
 		SoaRetry:            p.SoaRetry,
+		UseGridZoneTimer:    p.UseGridZoneTimer,
 		NsGroup:             p.NsGroup,
 		ExtAttrs:            p.ExtAttrs,
 		GridPrimary:         clusterMemberServerValues(p.GridPrimary),
@@ -218,6 +219,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 	cr.Status.AtProvider.SoaNegativeTTL = observed.SoaNegativeTTL
 	cr.Status.AtProvider.SoaRefresh = observed.SoaRefresh
 	cr.Status.AtProvider.SoaRetry = observed.SoaRetry
+	cr.Status.AtProvider.UseGridZoneTimer = observed.UseGridZoneTimer
 	cr.Status.AtProvider.NsGroup = observed.NsGroup
 	cr.Status.AtProvider.ExtAttrs = observed.ExtAttrs
 	cr.Status.AtProvider.GridPrimary = clusterMemberServersFromValues(observed.GridPrimary)
@@ -237,6 +239,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 		p.SoaNegativeTTL = updated.SoaNegativeTTL
 		p.SoaRefresh = updated.SoaRefresh
 		p.SoaRetry = updated.SoaRetry
+		p.UseGridZoneTimer = updated.UseGridZoneTimer
 		p.NsGroup = updated.NsGroup
 		p.ExtAttrs = updated.ExtAttrs
 		p.GridPrimary = clusterMemberServersFromValues(updated.GridPrimary)
