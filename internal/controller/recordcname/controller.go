@@ -13,7 +13,6 @@ package recordcname
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -216,21 +215,9 @@ func extAttrsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// ttlOrZero converts an optional *int64 TTL into the uint32 the SDK
-// expects. TTL is a DNS time-to-live in seconds; values outside the valid
-// uint32 range (or negative) are clamped to 0 rather than silently
-// wrapping — CEL/CRD validation on the ForProvider field is expected to
-// reject out-of-range values before they ever reach this helper.
-func ttlOrZero(ttl *int64) uint32 {
-	if ttl == nil || *ttl < 0 || *ttl > math.MaxUint32 {
-		return 0
-	}
-	return uint32(*ttl)
-}
-
-// uint32PtrOrZero converts an optional *uint32 TTL (as returned by the
-// SDK) into a plain uint32 for comparison against ttlOrZero.
-func uint32PtrOrZero(ttl *uint32) uint32 {
+// ttlOrZero converts an optional *uint32 TTL into the uint32 the SDK
+// expects, treating nil as 0.
+func ttlOrZero(ttl *uint32) uint32 {
 	if ttl == nil {
 		return 0
 	}
@@ -292,7 +279,7 @@ func isNotFound(err error) bool {
 // RecordCNAME. View is immutable (WAPI ties the object's _ref to
 // view+name; the UpdateCNAMERecord SDK method has no view parameter) and
 // is intentionally excluded from this comparison.
-func isUpToDate(name, canonical, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordCNAME) bool {
+func isUpToDate(name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordCNAME) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
 	}
@@ -311,7 +298,7 @@ func isUpToDate(name, canonical, comment *string, ttl *int64, useTTL *bool, extA
 	// ignores the submitted ttl and returns the zone default on every
 	// GET — comparing it against the spec value never converges.
 	if boolOrFalse(useTTL) {
-		if ttlOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
+		if ttlOrZero(ttl) != ttlOrZero(rec.Ttl) {
 			return false
 		}
 	}
@@ -325,7 +312,7 @@ func isUpToDate(name, canonical, comment *string, ttl *int64, useTTL *bool, extA
 // late-initialized — view is always user-supplied (required on the CRD)
 // and name/canonical are always user-supplied too. Returns true if any
 // field was changed.
-func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordCNAME) bool {
+func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordCNAME) bool {
 	changed := false
 
 	if *comment == nil && rec.Comment != nil && *rec.Comment != "" {
@@ -343,7 +330,7 @@ func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[
 	// value implied by the user's config — writing it into spec would
 	// silently claim a TTL that is not in effect.
 	if *ttl == nil && rec.Ttl != nil && boolOrFalse(*useTTL) {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		*ttl = &t
 		changed = true
 	}
@@ -368,7 +355,7 @@ type observedCNAMERecord struct {
 	Name      *string
 	Canonical *string
 	Comment   *string
-	TTL       *int64
+	TTL       *uint32
 	UseTTL    *bool
 	ExtAttrs  map[string]string
 	View      *string
@@ -395,7 +382,7 @@ func observeFromRecordCNAME(externalID string, rec *ibclient.RecordCNAME) observ
 		o.Comment = &c
 	}
 	if rec.Ttl != nil {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		o.TTL = &t
 	}
 	if rec.UseTtl != nil {
@@ -420,7 +407,7 @@ func observeFromRecordCNAME(externalID string, rec *ibclient.RecordCNAME) observ
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
 // createCNAMERecord issues the WAPI create call.
-func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
+func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
 	return objMgr.CreateCNAMERecord(
 		strOrEmpty(view),
 		strOrEmpty(canonical),
@@ -435,7 +422,7 @@ func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, c
 // updateCNAMERecord issues the WAPI update call. view is intentionally
 // never passed — UpdateCNAMERecord has no view parameter (immutable
 // field).
-func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canonical, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
+func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
 	return objMgr.UpdateCNAMERecord(
 		ref,
 		strOrEmpty(canonical),
