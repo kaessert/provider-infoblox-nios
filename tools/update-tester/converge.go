@@ -192,39 +192,70 @@ func (r *Runner) waitGenerationSettled(timeout time.Duration) (settled bool, gen
 	}
 }
 
-// countUpdateEvents counts events for the given involvedObject kind/name
-// whose reason is UpdatedExternalResource or CannotUpdateExternalResource.
-// Queries across all namespaces because cluster-scoped managed resources
-// may have their events recorded outside the resource's own namespace.
+// countUpdateEvents counts occurrences of update-related events for the
+// given involvedObject kind/name, whose reason is UpdatedExternalResource
+// or CannotUpdateExternalResource. Queries across all namespaces because
+// cluster-scoped managed resources may have their events recorded outside
+// the resource's own namespace.
+//
+// client-go's event recorder aggregates repeated identical events onto a
+// single Item by incrementing that Item's .count field rather than
+// appending a new Item, so the number of matching Items is NOT the number
+// of occurrences. This function sums each matching Item's .count instead
+// of counting Items (see sumEventOccurrences).
 func (r *Runner) countUpdateEvents(kind, name string) (int, error) {
 	out, err := r.runRaw("get", "events", "--all-namespaces", "-o", "json")
 	if err != nil {
 		return 0, fmt.Errorf("listing events: %w", err)
 	}
 
-	var list struct {
-		Items []struct {
-			Reason         string `json:"reason"`
-			InvolvedObject struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			} `json:"involvedObject"`
-		} `json:"items"`
-	}
+	var list eventList
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &list); err != nil {
 		return 0, fmt.Errorf("parsing events JSON: %w", err)
 	}
 
-	count := 0
+	return sumEventOccurrences(list, kind, name), nil
+}
+
+// eventList mirrors the subset of a `kubectl get events -o json` response
+// needed to count update-related event occurrences.
+type eventList struct {
+	Items []eventItem `json:"items"`
+}
+
+// eventItem mirrors a single Kubernetes Event. Count carries the number of
+// times an aggregated event recurred; it is only populated for aggregated
+// events (client-go's event recorder increments it in place instead of
+// appending a new Item for a repeated identical event). A zero Count means
+// the event was recorded exactly once and is treated as 1 occurrence.
+type eventItem struct {
+	Reason         string `json:"reason"`
+	Count          int32  `json:"count"`
+	InvolvedObject struct {
+		Kind string `json:"kind"`
+		Name string `json:"name"`
+	} `json:"involvedObject"`
+}
+
+// sumEventOccurrences sums the aggregated .count field of every event Item
+// matching the given involvedObject kind/name and an update-related reason,
+// treating a zero .count as a single (non-aggregated) occurrence.
+func sumEventOccurrences(list eventList, kind, name string) int {
+	var total int32
 	for _, it := range list.Items {
 		if it.InvolvedObject.Kind != kind || it.InvolvedObject.Name != name {
 			continue
 		}
-		if it.Reason == eventReasonUpdated || it.Reason == eventReasonCannotUpdate {
-			count++
+		if it.Reason != eventReasonUpdated && it.Reason != eventReasonCannotUpdate {
+			continue
 		}
+		n := it.Count
+		if n <= 0 {
+			n = 1
+		}
+		total += n
 	}
-	return count, nil
+	return int(total)
 }
 
 // toInt64 converts a decoded-JSON numeric value (float64 from
