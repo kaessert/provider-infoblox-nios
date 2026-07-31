@@ -21,9 +21,14 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-alias.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-alias-namespaced.sh
+    # See record-alias.yaml for the useTtl/ttl transition rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
 spec:
   forProvider:
     name: alias-test-ns.example.com

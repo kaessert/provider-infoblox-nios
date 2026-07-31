@@ -81,3 +81,16 @@ echo "==> run-update-tester: converge $MANIFEST"
 # B. Per-field update tests.
 echo "==> run-update-tester: run $MANIFEST"
 "$UPDATE_TESTER" run "$MANIFEST"
+
+# C. Post-update convergence check — the field updates in step B just
+# proved a value round-trips correctly, but that alone does not prove the
+# controller stopped reconciling. Asserting only Ready here would have
+# missed a real field-reported bug: a resource stuck in a perpetual
+# Update loop still reports Ready on every cycle, so the loop only shows
+# up as a non-zero Update event count over a wait window. Re-running the
+# same convergence check used in step A, now after every field
+# transition in this manifest's update-test annotation (including any
+# use-flag toggles), confirms the resource settles instead of just
+# announcing Ready once.
+echo "==> run-update-tester: post-update converge $MANIFEST"
+"$UPDATE_TESTER" converge "$MANIFEST"

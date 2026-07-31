@@ -37,14 +37,17 @@ metadata:
     # Per-field update coverage for the post-assert hook. Scalar mutable
     # fields are exercised with a real value change; list/map fields and
     # identity-changing fields are explicitly skipped with a reason so the
-    # validate subcommand still reports full coverage.
+    # validate subcommand still reports full coverage. useTtl is tested
+    # BEFORE ttl: WAPI ignores a submitted ttl value on record:host until
+    # use_ttl is true, so testing ttl first would poll for a value the
+    # server has not applied yet and can time out waiting for it.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
-      - field: ttl
-        value: 3600
       - field: useTtl
         value: true
+      - field: ttl
+        value: 3600
       - field: disable
         value: true
       - field: name

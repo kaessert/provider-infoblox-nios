@@ -20,6 +20,17 @@
 #              call has no view parameter.
 #
 # Optional mutable fields: comment, ttl, useTtl, extAttrs.
+#
+# ttl: 0 / useTtl: false below is not a placeholder — it is the exact
+# configuration that triggered a perpetual reconcile loop in an earlier
+# release: the controller kept comparing the submitted ttl value against
+# the server's zone-default TTL even though useTtl was off, so the two
+# never matched and every reconcile issued a spurious Update call. The
+# resource still reported Ready throughout the loop, which is why this
+# needs an explicit convergence assertion rather than a Ready check alone
+# (see the post-update converge step in the update-tester hook). Do not
+# "clean up" this example back to a nonzero ttl / useTtl: true default —
+# it is intentionally the regression case.
 apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
 kind: CNAMERecord
 metadata:
@@ -37,19 +48,28 @@ metadata:
     # tester. name is mutable too but renaming changes the record's _ref
     # (external identity) — that behavior is already covered by controller
     # unit tests, so it is skipped here to keep the live update test
-    # scoped to identity-preserving field changes. ttl/useTtl/extAttrs are
-    # optional fields skipped for low update-test value. view is immutable.
+    # scoped to identity-preserving field changes. extAttrs is an optional
+    # map field skipped for low update-test value. view is immutable.
+    #
+    # useTtl transitions false -> true here (matching the spec below,
+    # which starts at useTtl: false / ttl: 0), then ttl is changed to a
+    # nonzero value while useTtl stays on. The hook's post-update
+    # convergence check (run after every field in this list, including
+    # this transition) fails the build if the resource keeps issuing
+    # Update calls or churns observedGeneration instead of settling —
+    # asserting Ready alone would have missed the original bug, since the
+    # looping resource reported Ready the entire time.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by uptest"
       - field: canonical
         value: "updated-target.example.com"
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
       - field: name
         skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
-      - field: ttl
-        skip: "optional pointer field, low update-test value"
-      - field: useTtl
-        skip: "optional pointer field, low update-test value"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
@@ -58,5 +78,7 @@ spec:
     canonical: www.example.com
     view: default
     comment: Managed by Crossplane
+    ttl: 0
+    useTtl: false
   providerConfigRef:
     name: default

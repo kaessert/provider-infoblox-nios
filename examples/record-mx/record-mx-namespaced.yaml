@@ -21,9 +21,14 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-mx.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-mx-namespaced.sh
+    # See record-mx.yaml for the useTtl/ttl transition rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
 spec:
   forProvider:
     name: test-mx-ns.example.com
