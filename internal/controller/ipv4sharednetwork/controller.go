@@ -494,11 +494,19 @@ func isUpToDate(name *string, networks []string, comment *string, extAttrs map[s
 	if boolOrFalse(disable) != boolOrFalse(sn.Disable) {
 		return false
 	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(useOptions) != boolOrFalse(sn.UseOptions) {
 		return false
 	}
-	if !optionsEqual(options, optionsFromSDK(sn.Options)) {
-		return false
+	// Only compare options when the flag is on. When it is off, WAPI
+	// ignores the submitted DHCP options and returns its own default set
+	// on every GET — comparing them against the spec value never
+	// converges.
+	if boolOrFalse(useOptions) {
+		if !optionsEqual(options, optionsFromSDK(sn.Options)) {
+			return false
+		}
 	}
 	return true
 }

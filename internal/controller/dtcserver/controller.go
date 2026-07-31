@@ -408,11 +408,18 @@ func isUpToDate(name, host, comment *string, disable, autoCreateHostRecord, useS
 	if boolOrFalse(autoCreateHostRecord) != boolOrFalse(rec.AutoCreateHostRecord) {
 		return false
 	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(useSniHostname) != boolOrFalse(rec.UseSniHostname) {
 		return false
 	}
-	if strOrEmpty(sniHostname) != strOrEmpty(rec.SniHostname) {
-		return false
+	// Only compare the value when the flag is on. When it is off, WAPI
+	// ignores the submitted SNI hostname and returns its own default on
+	// every GET — comparing it against the spec value never converges.
+	if boolOrFalse(useSniHostname) {
+		if strOrEmpty(sniHostname) != strOrEmpty(rec.SniHostname) {
+			return false
+		}
 	}
 	if !monitorsEqual(monitors, monitorPairsFromSDK(rec.Monitors)) {
 		return false
@@ -431,7 +438,12 @@ func lateInitialize(comment **string, disable, autoCreateHostRecord, useSniHostn
 	changed = lateInitBool(disable, rec.Disable) || changed
 	changed = lateInitBool(autoCreateHostRecord, rec.AutoCreateHostRecord) || changed
 	changed = lateInitBool(useSniHostname, rec.UseSniHostname) || changed
-	changed = lateInitString(sniHostname, rec.SniHostname) || changed
+	// Only back-fill sniHostname when useSniHostname is on (post-backfill
+	// value above). When it is off, the observed value is WAPI's own
+	// default, not one implied by the user's config.
+	if boolOrFalse(*useSniHostname) {
+		changed = lateInitString(sniHostname, rec.SniHostname) || changed
+	}
 	changed = lateInitMonitors(monitors, rec.Monitors) || changed
 	changed = lateInitExtAttrs(extAttrs, rec.Ea) || changed
 

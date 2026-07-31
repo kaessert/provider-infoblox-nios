@@ -442,11 +442,19 @@ func isUpToDate(name *string, numberOfAddresses, offset *uint32, comment *string
 	if !extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea)) {
 		return false
 	}
-	if !optionsEqual(options, dhcpOptionsToCommon(rec.Options)) {
-		return false
-	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(useOptions) != boolPtrOrFalse(rec.UseOptions) {
 		return false
+	}
+	// Only compare options when the flag is on. When it is off, WAPI
+	// ignores the submitted DHCP options and returns its own default set
+	// on every GET — comparing them against the spec value never
+	// converges.
+	if boolOrFalse(useOptions) {
+		if !optionsEqual(options, dhcpOptionsToCommon(rec.Options)) {
+			return false
+		}
 	}
 	if serverAssociationType != rec.ServerAssociationType {
 		return false
@@ -472,8 +480,13 @@ func lateInitialize(comment **string, extAttrs *map[string]string, options *[]te
 	changed := false
 	changed = lateInitComment(comment, rec) || changed
 	changed = lateInitExtAttrs(extAttrs, rec) || changed
-	changed = lateInitOptions(options, rec) || changed
 	changed = lateInitUseOptions(useOptions, rec) || changed
+	// Only back-fill options when useOptions is on (post-backfill value
+	// above). When it is off, the observed options are WAPI's own
+	// default set, not values implied by the user's config.
+	if boolOrFalse(*useOptions) {
+		changed = lateInitOptions(options, rec) || changed
+	}
 	changed = lateInitServerAssociationType(serverAssociationType, rec) || changed
 	changed = lateInitFailoverAssociation(failoverAssociation, rec) || changed
 	changed = lateInitMember(member, rec) || changed

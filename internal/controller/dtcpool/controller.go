@@ -634,13 +634,23 @@ func scalarFieldsUpToDate(name, lbPreferredMethod, lbAlternateMethod, comment, a
 	if uint32OrZero(quorum) != uint32OrZero(rec.Quorum) {
 		return false
 	}
-	if uint32OrZero(ttl) != uint32OrZero(rec.Ttl) {
-		return false
-	}
 	if boolOrFalse(disable) != boolOrFalse(rec.Disable) {
 		return false
 	}
-	return boolOrFalse(useTTL) == boolOrFalse(rec.UseTtl)
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
+	if boolOrFalse(useTTL) != boolOrFalse(rec.UseTtl) {
+		return false
+	}
+	// Only compare the value when the flag is on. When it is off, WAPI
+	// ignores the submitted ttl and returns the zone default on every
+	// GET — comparing it against the spec value never converges.
+	if boolOrFalse(useTTL) {
+		if uint32OrZero(ttl) != uint32OrZero(rec.Ttl) {
+			return false
+		}
+	}
+	return true
 }
 
 // collectionFieldsUpToDate compares the slice/composite-typed DTCPool
@@ -674,8 +684,14 @@ func lateInitialize(comment **string, disable **bool, availability **string, quo
 	changed = lateInitBool(disable, rec.Disable) || changed
 	changed = lateInitStringFromPlain(availability, rec.Availability) || changed
 	changed = lateInitUint32(quorum, rec.Quorum) || changed
-	changed = lateInitUint32(ttl, rec.Ttl) || changed
 	changed = lateInitBool(useTTL, rec.UseTtl) || changed
+	// Only back-fill ttl when useTtl is on (post-backfill value above).
+	// When it is off, the observed ttl is WAPI's zone default, not a
+	// value implied by the user's config — writing it into spec would
+	// silently claim a TTL that is not in effect.
+	if boolOrFalse(*useTTL) {
+		changed = lateInitUint32(ttl, rec.Ttl) || changed
+	}
 	changed = lateInitExtAttrs(extAttrs, rec.Ea) || changed
 	changed = lateInitLbAlternateMethod(lbAlternateMethod, rec.LbAlternateMethod) || changed
 	changed = lateInitString(lbPreferredTopology, rec.LbPreferredTopology) || changed

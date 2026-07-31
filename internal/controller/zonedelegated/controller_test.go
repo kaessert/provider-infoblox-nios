@@ -1304,6 +1304,29 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeDoesNotBackfillDelegatedTTLWhenUseDelegatedTTLOff
+// proves that when useDelegatedTtl is false the observed delegatedTtl
+// (WAPI's own default, not a value the user's config implies) is never
+// written back into spec.forProvider.delegatedTtl.
+func TestLateInitializeDoesNotBackfillDelegatedTTLWhenUseDelegatedTTLOff(t *testing.T) {
+	var comment, nsGroup, view, zoneFormat *string
+	var disable, locked *bool
+	useDelegatedTTL := boolPtr(false)
+	var delegatedTTL *uint32
+	var extAttrs map[string]string
+
+	rec := &ibclient.ZoneDelegated{
+		DelegatedTtl:    uint32Ptr(28800),
+		UseDelegatedTtl: boolPtr(false),
+	}
+
+	lateInitialize(&comment, &nsGroup, &disable, &locked, &useDelegatedTTL, &delegatedTTL, &extAttrs, &view, &zoneFormat, rec)
+
+	if delegatedTTL != nil {
+		t.Errorf("lateInitialize: delegatedTtl = %v, want nil (useDelegatedTtl is off, observed delegatedTtl is the server's own default, not a user value)", *delegatedTTL)
+	}
+}
+
 // ── isUpToDate: table-driven field comparison ───────────────────────────
 
 func TestIsUpToDate(t *testing.T) {
@@ -1449,6 +1472,66 @@ func TestIsUpToDate(t *testing.T) {
 				t.Errorf("%s: isUpToDate() = %v, want %v", tc.reason, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsUpToDateIgnoresDelegatedTTLWhenUseDelegatedTTLOff proves the
+// delegatedTtl comparison is gated on useDelegatedTtl. When it is false,
+// WAPI ignores the submitted delegatedTtl and returns its own default (a
+// realistic non-zero value, not 0) on every GET — the spec value and the
+// observed value are unrelated quantities, and comparing them
+// unconditionally can never converge.
+func TestIsUpToDateIgnoresDelegatedTTLWhenUseDelegatedTTLOff(t *testing.T) {
+	observed := &ibclient.ZoneDelegated{
+		DelegateTo:      ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+		Comment:         stringPtr("hello"),
+		DelegatedTtl:    uint32Ptr(28800),
+		UseDelegatedTtl: boolPtr(false),
+		Ea:              ibclient.EA{"env": "prod"},
+	}
+
+	got := isUpToDate(
+		[]ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}},
+		stringPtr("hello"),
+		nil,
+		nil,
+		nil,
+		boolPtr(false),
+		uint32Ptr(0),
+		map[string]string{"env": "prod"},
+		observed,
+	)
+	if !got {
+		t.Error("isUpToDate: want true when useDelegatedTtl is off and only the server-owned delegatedTtl differs, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsUseDelegatedTTLTransition proves a
+// useDelegatedTtl true -> false transition is still detected as drift
+// even though the value comparison is gated off. The flag comparison
+// must be unconditional.
+func TestIsUpToDateDetectsUseDelegatedTTLTransition(t *testing.T) {
+	observed := &ibclient.ZoneDelegated{
+		DelegateTo:      ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+		Comment:         stringPtr("hello"),
+		DelegatedTtl:    uint32Ptr(300),
+		UseDelegatedTtl: boolPtr(true),
+		Ea:              ibclient.EA{"env": "prod"},
+	}
+
+	got := isUpToDate(
+		[]ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}},
+		stringPtr("hello"),
+		nil,
+		nil,
+		nil,
+		boolPtr(false),
+		uint32Ptr(300),
+		map[string]string{"env": "prod"},
+		observed,
+	)
+	if got {
+		t.Error("isUpToDate: want false on a useDelegatedTtl true -> false transition, got true (drift not detected)")
 	}
 }
 

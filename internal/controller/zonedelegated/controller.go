@@ -321,11 +321,18 @@ func isUpToDate(delegateTo []ibclient.NameServer, comment, nsGroup *string, disa
 	if strOrEmpty(nsGroup) != strOrEmpty(rec.NsGroup) {
 		return false
 	}
-	if uint32OrZero(delegatedTTL) != uint32OrZero(rec.DelegatedTtl) {
-		return false
-	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(useDelegatedTTL) != boolOrFalse(rec.UseDelegatedTtl) {
 		return false
+	}
+	// Only compare the value when the flag is on. When it is off, WAPI
+	// ignores the submitted delegated ttl and returns its own default on
+	// every GET — comparing it against the spec value never converges.
+	if boolOrFalse(useDelegatedTTL) {
+		if uint32OrZero(delegatedTTL) != uint32OrZero(rec.DelegatedTtl) {
+			return false
+		}
 	}
 	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
 }
@@ -348,7 +355,7 @@ func lateInitialize(comment, nsGroup **string, disable, locked, useDelegatedTTL 
 	if lateInitializeFlags(disable, locked, useDelegatedTTL, rec) {
 		changed = true
 	}
-	if lateInitializeTTLAndExtAttrs(delegatedTTL, extAttrs, rec) {
+	if lateInitializeTTLAndExtAttrs(delegatedTTL, useDelegatedTTL, extAttrs, rec) {
 		changed = true
 	}
 	if lateInitializeImmutableDefaults(view, zoneFormat, rec) {
@@ -395,9 +402,13 @@ func lateInitializeFlags(disable, locked, useDelegatedTTL **bool, rec *ibclient.
 }
 
 // lateInitializeTTLAndExtAttrs back-fills delegatedTtl and extAttrs.
-func lateInitializeTTLAndExtAttrs(delegatedTTL **uint32, extAttrs *map[string]string, rec *ibclient.ZoneDelegated) bool {
+// delegatedTtl is only back-filled when useDelegatedTTL is on (the
+// caller runs lateInitializeFlags first, so *useDelegatedTTL already
+// reflects any backfill) — when it is off, the observed delegatedTtl is
+// WAPI's own default, not a value implied by the user's config.
+func lateInitializeTTLAndExtAttrs(delegatedTTL **uint32, useDelegatedTTL **bool, extAttrs *map[string]string, rec *ibclient.ZoneDelegated) bool {
 	changed := false
-	if *delegatedTTL == nil && rec.DelegatedTtl != nil {
+	if *delegatedTTL == nil && rec.DelegatedTtl != nil && boolOrFalse(*useDelegatedTTL) {
 		t := *rec.DelegatedTtl
 		*delegatedTTL = &t
 		changed = true

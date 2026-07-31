@@ -156,7 +156,10 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.I
 
 	p := &cr.Spec.ForProvider
 	lateInit := lateInitialize(&p.NetworkView, &p.Comment, &p.Disable, &p.UseOptions, &p.ExtAttrs, o)
-	if len(p.Options) == 0 && len(o.Options) > 0 {
+	// Only back-fill options when useOptions is on (post-backfill value
+	// above). When it is off, the observed options are WAPI's own
+	// default set, not values implied by the user's config.
+	if len(p.Options) == 0 && len(o.Options) > 0 && boolOrFalse(p.UseOptions) {
 		p.Options = optionsToNamespaced(o.Options)
 		lateInit = true
 	}

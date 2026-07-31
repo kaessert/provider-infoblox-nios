@@ -523,11 +523,18 @@ func isUpToDate(p hostRecordCompareFields, rec *ibclient.HostRecord) bool {
 	if boolOrFalse(p.Disable) != boolOrFalse(rec.Disable) {
 		return false
 	}
-	if uint32OrZero(p.TTL) != uint32OrZero(rec.Ttl) {
-		return false
-	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(p.UseTTL) != boolOrFalse(rec.UseTtl) {
 		return false
+	}
+	// Only compare the value when the flag is on. When it is off, WAPI
+	// ignores the submitted ttl and returns the zone default on every
+	// GET — comparing it against the spec value never converges.
+	if boolOrFalse(p.UseTTL) {
+		if uint32OrZero(p.TTL) != uint32OrZero(rec.Ttl) {
+			return false
+		}
 	}
 	return extAttrsEqual(p.ExtAttrs, extAttrsFromEA(rec.Ea))
 }
@@ -645,8 +652,14 @@ func lateInitialize(
 	rec *ibclient.HostRecord,
 ) bool {
 	changed := lateInitString(comment, rec.Comment)
-	changed = lateInitUint32(ttl, rec.Ttl) || changed
 	changed = lateInitBool(useTTL, rec.UseTtl) || changed
+	// Only back-fill ttl when useTtl is on (post-backfill value above).
+	// When it is off, the observed ttl is WAPI's zone default, not a
+	// value implied by the user's config — writing it into spec would
+	// silently claim a TTL that is not in effect.
+	if boolOrFalse(*useTTL) {
+		changed = lateInitUint32(ttl, rec.Ttl) || changed
+	}
 	changed = lateInitExtAttrs(extAttrs, rec.Ea) || changed
 	changed = lateInitString(view, rec.View) || changed
 	changed = lateInitBool(configureForDNS, rec.EnableDns) || changed
