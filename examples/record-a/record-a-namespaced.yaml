@@ -32,6 +32,8 @@ metadata:
         value: true
       - field: ttl
         value: 3600
+      - field: useTtl
+        value: false
       - field: name
         skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
       - field: extAttrs
