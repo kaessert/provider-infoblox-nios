@@ -579,3 +579,43 @@ update-test.record-mx: $(UPDATE_TESTER)
 	$(UPDATE_TESTER) run examples/record-mx/record-mx-namespaced.yaml
 
 .PHONY: update-test.record-mx
+
+# ====================================================================================
+# update-test.validate: annotation-coverage gate (the update-tester validate convention)
+#
+# Runs `update-tester validate` against every example manifest that carries a
+# crossplane.io/update-test annotation, so a field silently dropped from an
+# annotation is caught instead of going unnoticed. Unlike update-test.<resource>
+# above (which exercises the live update behavior against a deployed resource),
+# this is a static, offline check — it only reads the example YAML and the
+# generated Go types, so it belongs in the fast local dev loop.
+#
+# The --types-file for each manifest is resolved from its apiVersion: the
+# first dot-separated segment of the API group is both the apis/<scope>/<seg>
+# directory name and the <seg>_types.go file prefix. The second group segment
+# ("m" for namespace-scoped, absent for cluster-scoped) selects apis/namespaced
+# vs apis/cluster.
+update-test.validate: $(UPDATE_TESTER)
+	@if [ ! -x $(UPDATE_TESTER) ]; then \
+	  echo "update-test.validate: update-tester not available yet — no-op"; \
+	  exit 0; \
+	fi
+	@fail=0; \
+	for f in $$(grep -rl 'crossplane.io/update-test' examples --include='*.yaml' | sort); do \
+	  av=$$(awk '/^apiVersion:/ {print $$2; exit}' "$$f"); \
+	  grp=$$(echo "$$av" | cut -d/ -f1); \
+	  seg1=$$(echo "$$grp" | cut -d. -f1); \
+	  seg2=$$(echo "$$grp" | cut -d. -f2); \
+	  if [ "$$seg2" = "m" ]; then scope=namespaced; else scope=cluster; fi; \
+	  types="apis/$$scope/$$seg1/v1alpha1/$${seg1}_types.go"; \
+	  if [ ! -f "$$types" ]; then \
+	    echo "SKIP: $$f — no types file at $$types (apiVersion=$$av)"; \
+	    fail=1; \
+	    continue; \
+	  fi; \
+	  echo "=== $$f ($$types) ==="; \
+	  $(UPDATE_TESTER) validate --types-file "$$types" "$$f" || fail=1; \
+	done; \
+	exit $$fail
+
+.PHONY: update-test.validate
