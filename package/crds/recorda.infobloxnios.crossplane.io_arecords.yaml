@@ -116,7 +116,7 @@ spec:
                       not cached. Must be non-negative (0-2147483647); to inherit
                       the zone/grid default, set useTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -802,7 +802,7 @@ spec:
                       not cached. Must be non-negative (0-2147483647); to inherit
                       the zone/grid default, set useTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     type: integer
                   useTtl:
                     description: Use flag for ttl — when false the zone/grid default

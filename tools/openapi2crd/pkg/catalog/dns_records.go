@@ -68,7 +68,7 @@ func aRecord() ResourceDescriptor {
 			{
 				Name:        "TTL",
 				JSONName:    "ttl",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Minimum:     int64Ptr(ttlMinimumSeconds),
 				Maximum:     int64Ptr(ttlMaximumSeconds),
@@ -581,7 +581,7 @@ func cnameRecord() ResourceDescriptor {
 			{
 				Name:        "TTL",
 				JSONName:    "ttl",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Minimum:     int64Ptr(ttlMinimumSeconds),
 				Maximum:     int64Ptr(ttlMaximumSeconds),
@@ -694,7 +694,7 @@ func mxRecord() ResourceDescriptor {
 			{
 				Name:        "TTL",
 				JSONName:    "ttl",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Minimum:     int64Ptr(ttlMinimumSeconds),
 				Maximum:     int64Ptr(ttlMaximumSeconds),

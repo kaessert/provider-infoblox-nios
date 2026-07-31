@@ -70,7 +70,7 @@ func aaaaRecord() ResourceDescriptor {
 			{
 				Name:        "TTL",
 				JSONName:    "ttl",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Minimum:     int64Ptr(ttlMinimumSeconds),
 				Maximum:     int64Ptr(ttlMaximumSeconds),
