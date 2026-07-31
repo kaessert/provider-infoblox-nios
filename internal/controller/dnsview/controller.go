@@ -23,7 +23,6 @@ package dnsview
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -286,65 +285,23 @@ func boolPtrOrNil(b bool) *bool {
 	return &b
 }
 
-func int64OrZero(i *int64) int64 {
-	if i == nil {
+func uint32OrZero(u *uint32) uint32 {
+	if u == nil {
 		return 0
 	}
-	return *i
+	return *u
 }
 
-// int64PtrToUint32Ptr converts a CRD *int64 into the SDK's *uint32
-// representation, preserving nil (unset). Out-of-range values (negative,
-// or above uint32 max) clamp to 0 rather than silently wrapping — CEL/CRD
-// validation on the ForProvider field is expected to reject those before
-// they ever reach this helper (mirrors this provider's ttlOrZero pattern).
-func int64PtrToUint32Ptr(i *int64) *uint32 {
-	if i == nil {
-		return nil
-	}
-	v := int64ToUint32Clamped(*i)
-	return &v
-}
-
-// uint32PtrToInt64Ptr converts an SDK *uint32 into the CRD's *int64
-// representation, preserving nil (unset).
-func uint32PtrToInt64Ptr(u *uint32) *int64 {
-	if u == nil {
-		return nil
-	}
-	v := int64(*u)
-	return &v
-}
-
-// uint32ValToInt64Ptr converts a plain (non-pointer) SDK uint32 into the
-// CRD's *int64 representation, treating zero as "not set" — nested WAPI
-// structs use plain numeric fields with the same not-set/zero ambiguity
-// described in boolPtrOrNil.
-func uint32ValToInt64Ptr(u uint32) *int64 {
+// uint32PtrOrNil converts a plain (non-pointer) SDK uint32 into the CRD's
+// *uint32 representation, treating zero as "not set" — nested WAPI structs
+// use plain numeric fields with the same not-set/zero ambiguity described
+// in boolPtrOrNil.
+func uint32PtrOrNil(u uint32) *uint32 {
 	if u == 0 {
 		return nil
 	}
-	v := int64(u)
+	v := u
 	return &v
-}
-
-// int64PtrToUint32Val converts a CRD *int64 into the plain (non-pointer)
-// SDK uint32 a nested WAPI struct field expects. See int64PtrToUint32Ptr
-// for the out-of-range clamping rationale.
-func int64PtrToUint32Val(i *int64) uint32 {
-	if i == nil {
-		return 0
-	}
-	return int64ToUint32Clamped(*i)
-}
-
-// int64ToUint32Clamped converts an int64 to uint32, clamping negative or
-// overflowing values to 0 instead of wrapping.
-func int64ToUint32Clamped(i int64) uint32 {
-	if i < 0 || i > math.MaxUint32 {
-		return 0
-	}
-	return uint32(i)
 }
 
 // unixTimePtrToInt64Ptr converts the SDK's epoch-seconds UnixTime into the
@@ -416,12 +373,12 @@ func gatedStringEqual(useFlag *bool, desired, observed *string) bool {
 	return strOrEmpty(desired) == strOrEmpty(observed)
 }
 
-// gatedInt64Equal is the *int64-field variant of gatedBoolEqual.
-func gatedInt64Equal(useFlag *bool, desired, observed *int64) bool {
+// gatedUint32Equal is the *uint32-field variant of gatedBoolEqual.
+func gatedUint32Equal(useFlag *bool, desired, observed *uint32) bool {
 	if !boolOrFalse(useFlag) {
 		return true
 	}
-	return int64OrZero(desired) == int64OrZero(observed)
+	return uint32OrZero(desired) == uint32OrZero(observed)
 }
 
 // gatedStringSliceEqual is the []string-field variant of gatedBoolEqual.
@@ -1006,9 +963,9 @@ func eaExpressionOpValuesToSDKPtr(in []eaExpressionOpValue) []*ibclient.Eaexpres
 type responseRateLimitingValue struct {
 	EnableRrl          *bool
 	LogOnly            *bool
-	ResponsesPerSecond *int64
-	Window             *int64
-	Slip               *int64
+	ResponsesPerSecond *uint32
+	Window             *uint32
+	Slip               *uint32
 }
 
 func responseRateLimitingValueFromSDK(in *ibclient.GridResponseratelimiting) *responseRateLimitingValue {
@@ -1018,9 +975,9 @@ func responseRateLimitingValueFromSDK(in *ibclient.GridResponseratelimiting) *re
 	return &responseRateLimitingValue{
 		EnableRrl:          boolPtrOrNil(in.EnableRrl),
 		LogOnly:            boolPtrOrNil(in.LogOnly),
-		ResponsesPerSecond: uint32ValToInt64Ptr(in.ResponsesPerSecond),
-		Window:             uint32ValToInt64Ptr(in.Window),
-		Slip:               uint32ValToInt64Ptr(in.Slip),
+		ResponsesPerSecond: uint32PtrOrNil(in.ResponsesPerSecond),
+		Window:             uint32PtrOrNil(in.Window),
+		Slip:               uint32PtrOrNil(in.Slip),
 	}
 }
 
@@ -1031,9 +988,9 @@ func responseRateLimitingValueToSDK(in *responseRateLimitingValue) *ibclient.Gri
 	return &ibclient.GridResponseratelimiting{
 		EnableRrl:          boolOrFalse(in.EnableRrl),
 		LogOnly:            boolOrFalse(in.LogOnly),
-		ResponsesPerSecond: int64PtrToUint32Val(in.ResponsesPerSecond),
-		Window:             int64PtrToUint32Val(in.Window),
-		Slip:               int64PtrToUint32Val(in.Slip),
+		ResponsesPerSecond: uint32OrZero(in.ResponsesPerSecond),
+		Window:             uint32OrZero(in.Window),
+		Slip:               uint32OrZero(in.Slip),
 	}
 }
 
@@ -1084,12 +1041,12 @@ type scavengingScheduleValue struct {
 	TimeZone        *string
 	RecurringTime   *int64
 	Frequency       *string
-	Every           *int64
-	MinutesPastHour *int64
-	HourOfDay       *int64
-	Year            *int64
-	Month           *int64
-	DayOfMonth      *int64
+	Every           *uint32
+	MinutesPastHour *uint32
+	HourOfDay       *uint32
+	Year            *uint32
+	Month           *uint32
+	DayOfMonth      *uint32
 	Repeat          *string
 	Disable         *bool
 }
@@ -1103,12 +1060,12 @@ func scavengingScheduleValueFromSDK(in *ibclient.SettingSchedule) *scavengingSch
 		TimeZone:        strPtrOrNil(in.TimeZone),
 		RecurringTime:   unixTimePtrToInt64Ptr(in.RecurringTime),
 		Frequency:       strPtrOrNil(in.Frequency),
-		Every:           uint32ValToInt64Ptr(in.Every),
-		MinutesPastHour: uint32ValToInt64Ptr(in.MinutesPastHour),
-		HourOfDay:       uint32ValToInt64Ptr(in.HourOfDay),
-		Year:            uint32ValToInt64Ptr(in.Year),
-		Month:           uint32ValToInt64Ptr(in.Month),
-		DayOfMonth:      uint32ValToInt64Ptr(in.DayOfMonth),
+		Every:           uint32PtrOrNil(in.Every),
+		MinutesPastHour: uint32PtrOrNil(in.MinutesPastHour),
+		HourOfDay:       uint32PtrOrNil(in.HourOfDay),
+		Year:            uint32PtrOrNil(in.Year),
+		Month:           uint32PtrOrNil(in.Month),
+		DayOfMonth:      uint32PtrOrNil(in.DayOfMonth),
 		Repeat:          strPtrOrNil(in.Repeat),
 		Disable:         boolPtrOrNil(in.Disable),
 	}
@@ -1123,12 +1080,12 @@ func scavengingScheduleValueToSDK(in *scavengingScheduleValue) *ibclient.Setting
 		TimeZone:        strOrEmpty(in.TimeZone),
 		RecurringTime:   int64PtrToUnixTimePtr(in.RecurringTime),
 		Frequency:       strOrEmpty(in.Frequency),
-		Every:           int64PtrToUint32Val(in.Every),
-		MinutesPastHour: int64PtrToUint32Val(in.MinutesPastHour),
-		HourOfDay:       int64PtrToUint32Val(in.HourOfDay),
-		Year:            int64PtrToUint32Val(in.Year),
-		Month:           int64PtrToUint32Val(in.Month),
-		DayOfMonth:      int64PtrToUint32Val(in.DayOfMonth),
+		Every:           uint32OrZero(in.Every),
+		MinutesPastHour: uint32OrZero(in.MinutesPastHour),
+		HourOfDay:       uint32OrZero(in.HourOfDay),
+		Year:            uint32OrZero(in.Year),
+		Month:           uint32OrZero(in.Month),
+		DayOfMonth:      uint32OrZero(in.DayOfMonth),
 		Repeat:          strOrEmpty(in.Repeat),
 		Disable:         boolOrFalse(in.Disable),
 	}
@@ -1246,7 +1203,7 @@ type dnsViewFields struct {
 	BlacklistAction                     *string
 	BlacklistLogQuery                   *bool
 	BlacklistRedirectAddresses          []string
-	BlacklistRedirectTTL                *int64
+	BlacklistRedirectTTL                *uint32
 	BlacklistRulesets                   []string
 	UseBlacklist                        *bool
 	EnableBlacklist                     *bool
@@ -1281,26 +1238,26 @@ type dnsViewFields struct {
 	ForwardOnly                         *bool
 	Forwarders                          []string
 	UseForwarders                       *bool
-	LameTTL                             *int64
+	LameTTL                             *uint32
 	UseLameTTL                          *bool
-	MaxCacheTTL                         *int64
+	MaxCacheTTL                         *uint32
 	UseMaxCacheTTL                      *bool
-	MaxNcacheTTL                        *int64
+	MaxNcacheTTL                        *uint32
 	UseMaxNcacheTTL                     *bool
-	NotifyDelay                         *int64
+	NotifyDelay                         *uint32
 	NxdomainLogQuery                    *bool
 	NxdomainRedirect                    *bool
 	NxdomainRedirectAddresses           []string
 	NxdomainRedirectAddressesV6         []string
-	NxdomainRedirectTTL                 *int64
+	NxdomainRedirectTTL                 *uint32
 	NxdomainRulesets                    []string
 	UseNxdomainRedirect                 *bool
 	Recursion                           *bool
 	UseRecursion                        *bool
 	UseResponseRateLimiting             *bool
 	RpzDropIPRuleEnabled                *bool
-	RpzDropIPRuleMinPrefixLengthIPv4    *int64
-	RpzDropIPRuleMinPrefixLengthIPv6    *int64
+	RpzDropIPRuleMinPrefixLengthIPv4    *uint32
+	RpzDropIPRuleMinPrefixLengthIPv6    *uint32
 	UseRpzDropIPRule                    *bool
 	RpzQnameWaitRecurse                 *bool
 	UseRpzQnameWaitRecurse              *bool
@@ -1330,7 +1287,7 @@ func buildView(f dnsViewFields) *ibclient.View {
 		BlacklistAction:                     strOrEmpty(f.BlacklistAction),
 		BlacklistLogQuery:                   f.BlacklistLogQuery,
 		BlacklistRedirectAddresses:          f.BlacklistRedirectAddresses,
-		BlacklistRedirectTtl:                int64PtrToUint32Ptr(f.BlacklistRedirectTTL),
+		BlacklistRedirectTtl:                f.BlacklistRedirectTTL,
 		BlacklistRulesets:                   f.BlacklistRulesets,
 		UseBlacklist:                        f.UseBlacklist,
 		EnableBlacklist:                     f.EnableBlacklist,
@@ -1365,26 +1322,26 @@ func buildView(f dnsViewFields) *ibclient.View {
 		ForwardOnly:                         f.ForwardOnly,
 		Forwarders:                          f.Forwarders,
 		UseForwarders:                       f.UseForwarders,
-		LameTtl:                             int64PtrToUint32Ptr(f.LameTTL),
+		LameTtl:                             f.LameTTL,
 		UseLameTtl:                          f.UseLameTTL,
-		MaxCacheTtl:                         int64PtrToUint32Ptr(f.MaxCacheTTL),
+		MaxCacheTtl:                         f.MaxCacheTTL,
 		UseMaxCacheTtl:                      f.UseMaxCacheTTL,
-		MaxNcacheTtl:                        int64PtrToUint32Ptr(f.MaxNcacheTTL),
+		MaxNcacheTtl:                        f.MaxNcacheTTL,
 		UseMaxNcacheTtl:                     f.UseMaxNcacheTTL,
-		NotifyDelay:                         int64PtrToUint32Ptr(f.NotifyDelay),
+		NotifyDelay:                         f.NotifyDelay,
 		NxdomainLogQuery:                    f.NxdomainLogQuery,
 		NxdomainRedirect:                    f.NxdomainRedirect,
 		NxdomainRedirectAddresses:           f.NxdomainRedirectAddresses,
 		NxdomainRedirectAddressesV6:         f.NxdomainRedirectAddressesV6,
-		NxdomainRedirectTtl:                 int64PtrToUint32Ptr(f.NxdomainRedirectTTL),
+		NxdomainRedirectTtl:                 f.NxdomainRedirectTTL,
 		NxdomainRulesets:                    f.NxdomainRulesets,
 		UseNxdomainRedirect:                 f.UseNxdomainRedirect,
 		Recursion:                           f.Recursion,
 		UseRecursion:                        f.UseRecursion,
 		UseResponseRateLimiting:             f.UseResponseRateLimiting,
 		RpzDropIpRuleEnabled:                f.RpzDropIPRuleEnabled,
-		RpzDropIpRuleMinPrefixLengthIpv4:    int64PtrToUint32Ptr(f.RpzDropIPRuleMinPrefixLengthIPv4),
-		RpzDropIpRuleMinPrefixLengthIpv6:    int64PtrToUint32Ptr(f.RpzDropIPRuleMinPrefixLengthIPv6),
+		RpzDropIpRuleMinPrefixLengthIpv4:    f.RpzDropIPRuleMinPrefixLengthIPv4,
+		RpzDropIpRuleMinPrefixLengthIpv6:    f.RpzDropIPRuleMinPrefixLengthIPv6,
 		UseRpzDropIpRule:                    f.UseRpzDropIPRule,
 		RpzQnameWaitRecurse:                 f.RpzQnameWaitRecurse,
 		UseRpzQnameWaitRecurse:              f.UseRpzQnameWaitRecurse,
@@ -1412,7 +1369,7 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 		BlacklistAction:                     strPtrOrNil(v.BlacklistAction),
 		BlacklistLogQuery:                   v.BlacklistLogQuery,
 		BlacklistRedirectAddresses:          v.BlacklistRedirectAddresses,
-		BlacklistRedirectTTL:                uint32PtrToInt64Ptr(v.BlacklistRedirectTtl),
+		BlacklistRedirectTTL:                v.BlacklistRedirectTtl,
 		BlacklistRulesets:                   v.BlacklistRulesets,
 		UseBlacklist:                        v.UseBlacklist,
 		EnableBlacklist:                     v.EnableBlacklist,
@@ -1447,26 +1404,26 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 		ForwardOnly:                         v.ForwardOnly,
 		Forwarders:                          v.Forwarders,
 		UseForwarders:                       v.UseForwarders,
-		LameTTL:                             uint32PtrToInt64Ptr(v.LameTtl),
+		LameTTL:                             v.LameTtl,
 		UseLameTTL:                          v.UseLameTtl,
-		MaxCacheTTL:                         uint32PtrToInt64Ptr(v.MaxCacheTtl),
+		MaxCacheTTL:                         v.MaxCacheTtl,
 		UseMaxCacheTTL:                      v.UseMaxCacheTtl,
-		MaxNcacheTTL:                        uint32PtrToInt64Ptr(v.MaxNcacheTtl),
+		MaxNcacheTTL:                        v.MaxNcacheTtl,
 		UseMaxNcacheTTL:                     v.UseMaxNcacheTtl,
-		NotifyDelay:                         uint32PtrToInt64Ptr(v.NotifyDelay),
+		NotifyDelay:                         v.NotifyDelay,
 		NxdomainLogQuery:                    v.NxdomainLogQuery,
 		NxdomainRedirect:                    v.NxdomainRedirect,
 		NxdomainRedirectAddresses:           v.NxdomainRedirectAddresses,
 		NxdomainRedirectAddressesV6:         v.NxdomainRedirectAddressesV6,
-		NxdomainRedirectTTL:                 uint32PtrToInt64Ptr(v.NxdomainRedirectTtl),
+		NxdomainRedirectTTL:                 v.NxdomainRedirectTtl,
 		NxdomainRulesets:                    v.NxdomainRulesets,
 		UseNxdomainRedirect:                 v.UseNxdomainRedirect,
 		Recursion:                           v.Recursion,
 		UseRecursion:                        v.UseRecursion,
 		UseResponseRateLimiting:             v.UseResponseRateLimiting,
 		RpzDropIPRuleEnabled:                v.RpzDropIpRuleEnabled,
-		RpzDropIPRuleMinPrefixLengthIPv4:    uint32PtrToInt64Ptr(v.RpzDropIpRuleMinPrefixLengthIpv4),
-		RpzDropIPRuleMinPrefixLengthIPv6:    uint32PtrToInt64Ptr(v.RpzDropIpRuleMinPrefixLengthIpv6),
+		RpzDropIPRuleMinPrefixLengthIPv4:    v.RpzDropIpRuleMinPrefixLengthIpv4,
+		RpzDropIPRuleMinPrefixLengthIPv6:    v.RpzDropIpRuleMinPrefixLengthIpv6,
 		UseRpzDropIPRule:                    v.UseRpzDropIpRule,
 		RpzQnameWaitRecurse:                 v.RpzQnameWaitRecurse,
 		UseRpzQnameWaitRecurse:              v.UseRpzQnameWaitRecurse,
@@ -1525,7 +1482,7 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 		return gatedStringSliceEqual(desired.UseBlacklist, desired.BlacklistRedirectAddresses, observed.BlacklistRedirectAddresses)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseBlacklist, desired.BlacklistRedirectTTL, observed.BlacklistRedirectTTL)
+		return gatedUint32Equal(desired.UseBlacklist, desired.BlacklistRedirectTTL, observed.BlacklistRedirectTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return gatedStringSliceEqual(desired.UseBlacklist, desired.BlacklistRulesets, observed.BlacklistRulesets)
@@ -1653,21 +1610,21 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	},
 	// use_lame_ttl is the use flag for lame_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseLameTTL, desired.LameTTL, observed.LameTTL)
+		return gatedUint32Equal(desired.UseLameTTL, desired.LameTTL, observed.LameTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseLameTTL) == boolOrFalse(observed.UseLameTTL)
 	},
 	// use_max_cache_ttl is the use flag for max_cache_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseMaxCacheTTL, desired.MaxCacheTTL, observed.MaxCacheTTL)
+		return gatedUint32Equal(desired.UseMaxCacheTTL, desired.MaxCacheTTL, observed.MaxCacheTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseMaxCacheTTL) == boolOrFalse(observed.UseMaxCacheTTL)
 	},
 	// use_max_ncache_ttl is the use flag for max_ncache_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseMaxNcacheTTL, desired.MaxNcacheTTL, observed.MaxNcacheTTL)
+		return gatedUint32Equal(desired.UseMaxNcacheTTL, desired.MaxNcacheTTL, observed.MaxNcacheTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseMaxNcacheTTL) == boolOrFalse(observed.UseMaxNcacheTTL)
@@ -1675,7 +1632,7 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	// notify_delay has no use flag at all in the view object — always
 	// compared.
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.NotifyDelay) == int64OrZero(observed.NotifyDelay)
+		return uint32OrZero(desired.NotifyDelay) == uint32OrZero(observed.NotifyDelay)
 	},
 	// use_nxdomain_redirect is the use flag for nxdomain_redirect,
 	// nxdomain_redirect_addresses, nxdomain_redirect_addresses_v6,
@@ -1693,7 +1650,7 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 		return gatedStringSliceEqual(desired.UseNxdomainRedirect, desired.NxdomainRedirectAddressesV6, observed.NxdomainRedirectAddressesV6)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseNxdomainRedirect, desired.NxdomainRedirectTTL, observed.NxdomainRedirectTTL)
+		return gatedUint32Equal(desired.UseNxdomainRedirect, desired.NxdomainRedirectTTL, observed.NxdomainRedirectTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return gatedStringSliceEqual(desired.UseNxdomainRedirect, desired.NxdomainRulesets, observed.NxdomainRulesets)
@@ -1718,10 +1675,10 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 		return gatedBoolEqual(desired.UseRpzDropIPRule, desired.RpzDropIPRuleEnabled, observed.RpzDropIPRuleEnabled)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv4, observed.RpzDropIPRuleMinPrefixLengthIPv4)
+		return gatedUint32Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv4, observed.RpzDropIPRuleMinPrefixLengthIPv4)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return gatedInt64Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv6, observed.RpzDropIPRuleMinPrefixLengthIPv6)
+		return gatedUint32Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv6, observed.RpzDropIPRuleMinPrefixLengthIPv6)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseRpzDropIPRule) == boolOrFalse(observed.UseRpzDropIPRule)
