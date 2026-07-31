@@ -33,11 +33,23 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-aaaa.sh
-    # comment is the only mutable scalar exercised here — ttl/useTtl/extAttrs
-    # are also mutable but comment alone is sufficient update coverage.
+    # comment, useTtl, and ttl are exercised here. useTtl transitions to
+    # true (absent useTtl is treated as false by the controller), then
+    # ttl is changed to a nonzero value while useTtl stays on. This
+    # sequence, together with the hook's post-update convergence check,
+    # proves the fix for a field-reported perpetual reconcile loop: the
+    # controller used to keep comparing the submitted ttl against the
+    # server's zone-default TTL even with useTtl off, so the two never
+    # matched and every reconcile issued a spurious Update call — a state
+    # that still reports Ready throughout, hence the explicit convergence
+    # assertion rather than a Ready check alone.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
 spec:
   forProvider:
     name: www6.example.com
