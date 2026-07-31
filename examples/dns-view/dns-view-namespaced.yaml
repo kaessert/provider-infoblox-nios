@@ -21,9 +21,162 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # dns-view.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dns-view-namespaced.sh
+    # See dns-view.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: disable
+        value: true
+      - field: notifyDelay
+        value: 5
+      - field: useBlacklist
+        value: true
+      - field: enableBlacklist
+        value: true
+      - field: blacklistAction
+        value: "REDIRECT"
+      - field: blacklistLogQuery
+        value: true
+      - field: blacklistRedirectTtl
+        value: 300
+      - field: useDdnsForceCreationTimestampUpdate
+        value: true
+      - field: ddnsForceCreationTimestampUpdate
+        value: true
+      - field: useDdnsPrincipalSecurity
+        value: true
+      - field: ddnsPrincipalTracking
+        value: true
+      - field: ddnsRestrictSecure
+        value: true
+      - field: useDdnsPatternsRestriction
+        value: true
+      - field: ddnsRestrictPatterns
+        value: true
+      - field: useDdnsRestrictProtected
+        value: true
+      - field: ddnsRestrictProtected
+        value: true
+      - field: useDdnsRestrictStatic
+        value: true
+      - field: ddnsRestrictStatic
+        value: true
+      - field: useDns64
+        value: true
+      - field: dns64Enabled
+        value: true
+      - field: useDnssec
+        value: true
+      - field: dnssecEnabled
+        value: true
+      - field: dnssecExpiredSignaturesEnabled
+        value: true
+      - field: dnssecValidationEnabled
+        value: true
+      - field: useFixedRrsetOrderFqdns
+        value: true
+      - field: enableFixedRrsetOrderFqdns
+        value: true
+      - field: enableMatchRecursiveOnly
+        value: true
+      - field: useFilterAaaa
+        value: true
+      - field: useForwarders
+        value: true
+      - field: useLameTtl
+        value: true
+      - field: lameTtl
+        value: 60
+      - field: useMaxCacheTtl
+        value: true
+      - field: maxCacheTtl
+        value: 3600
+      - field: useMaxNcacheTtl
+        value: true
+      - field: maxNcacheTtl
+        value: 900
+      - field: useNxdomainRedirect
+        value: true
+      - field: nxdomainLogQuery
+        value: true
+      - field: nxdomainRedirectTtl
+        value: 300
+      - field: useRecursion
+        value: true
+      - field: recursion
+        value: true
+      - field: useResponseRateLimiting
+        value: true
+      - field: useRootNameServer
+        value: true
+      - field: useRpzDropIpRule
+        value: true
+      - field: rpzDropIpRuleEnabled
+        value: true
+      - field: rpzDropIpRuleMinPrefixLengthIpv4
+        value: 24
+      - field: rpzDropIpRuleMinPrefixLengthIpv6
+        value: 64
+      - field: useRpzQnameWaitRecurse
+        value: true
+      - field: rpzQnameWaitRecurse
+        value: true
+      - field: useScavengingSettings
+        value: true
+      - field: useSortlist
+        value: true
+      - field: name
+        skip: "renaming rotates the WAPI _ref (DNSView is in the _ref-unstable resource group); covered by controller unit tests instead"
+      - field: networkView
+        skip: "structural reassociation requiring a second NetworkView object not created by this standalone example"
+      - field: ddnsPrincipalGroup
+        skip: "references a pre-existing Grid DDNS principal cluster group not modeled by this standalone example"
+      - field: filterAaaa
+        skip: "Grid-specific string enumeration not enforced by the CRD schema; no safe value can be assumed without a live Grid to validate against"
+      - field: rootNameServerType
+        skip: "Grid-specific string enumeration not enforced by the CRD schema; no safe value can be assumed without a live Grid to validate against"
+      - field: forwardOnly
+        skip: "requires the forwarders list (skipped below) to be non-empty per WAPI business rules"
+      - field: nxdomainRedirect
+        skip: "requires nxdomainRedirectAddresses (skipped below) to be non-empty per WAPI business rules"
+      - field: blacklistRedirectAddresses
+        skip: "list field, not a scalar update-test target"
+      - field: blacklistRulesets
+        skip: "list field, not a scalar update-test target"
+      - field: customRootNameServers
+        skip: "list field, not a scalar update-test target"
+      - field: ddnsRestrictPatternsList
+        skip: "list field, not a scalar update-test target"
+      - field: dns64Groups
+        skip: "list field, not a scalar update-test target"
+      - field: dnssecNegativeTrustAnchors
+        skip: "list field, not a scalar update-test target"
+      - field: dnssecTrustedKeys
+        skip: "list field, not a scalar update-test target"
+      - field: filterAaaaList
+        skip: "list field, not a scalar update-test target"
+      - field: fixedRrsetOrderFqdns
+        skip: "list field, not a scalar update-test target"
+      - field: forwarders
+        skip: "list field, not a scalar update-test target"
+      - field: matchClients
+        skip: "list field, not a scalar update-test target"
+      - field: matchDestinations
+        skip: "list field, not a scalar update-test target"
+      - field: nxdomainRedirectAddresses
+        skip: "list field, not a scalar update-test target"
+      - field: nxdomainRedirectAddressesV6
+        skip: "list field, not a scalar update-test target"
+      - field: nxdomainRulesets
+        skip: "list field, not a scalar update-test target"
+      - field: responseRateLimiting
+        skip: "struct field, not a scalar update-test target"
+      - field: scavengingSettings
+        skip: "struct field, not a scalar update-test target"
+      - field: sortlist
+        skip: "list field, not a scalar update-test target"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: crossplane-test-view-ns

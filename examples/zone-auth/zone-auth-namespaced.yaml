@@ -21,9 +21,34 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # zone-auth.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-auth-namespaced.sh
+    # See zone-auth.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: disable
+        value: true
+      - field: soaDefaultTtl
+        value: 3600
+      - field: soaExpire
+        value: 2419200
+      - field: soaNegativeTtl
+        value: 900
+      - field: soaRefresh
+        value: 10800
+      - field: soaRetry
+        value: 3600
+      - field: nsGroup
+        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
+      - field: gridPrimary
+        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
+      - field: gridSecondaries
+        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
+      - field: externalPrimaries
+        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+      - field: externalSecondaries
+        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     fqdn: example-ns.com

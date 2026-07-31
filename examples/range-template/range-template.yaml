@@ -35,13 +35,44 @@ metadata:
     meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
     uptest.upbound.io/timeout: "120"
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template.sh
-    # comment is the only mutable scalar exercised here — the other mutable
-    # fields (extattrs, options, useOptions, serverAssociationType,
-    # failoverAssociation, member, cloudApiCompatible, msServer) are also
-    # mutable but comment alone is sufficient update coverage.
+    # comment, numberOfAddresses, offset, useOptions, and
+    # cloudApiCompatible are the mutable scalars exercised here. name is
+    # also mutable (RangeTemplate's Update call accepts every Create
+    # parameter, including name), but renaming can change the WAPI
+    # `_ref` (like ARecord); that rotation is already exercised by
+    # controller unit tests, so it is skipped here. serverAssociationType
+    # and its dependents (failoverAssociation, member) require a
+    # specific, mutually-consistent combination of Grid objects
+    # (an existing failover association or Grid member) not modeled by
+    # this standalone example, so they are skipped. msServer is a
+    # write-only convenience parameter never mirrored into the observed
+    # state. extattrs and options are map/list fields skipped for low
+    # update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: numberOfAddresses
+        value: 20
+      - field: offset
+        value: 20
+      - field: useOptions
+        value: true
+      - field: cloudApiCompatible
+        value: true
+      - field: name
+        skip: "renaming a range template can change the WAPI _ref (like ARecord); covered by controller unit tests instead"
+      - field: serverAssociationType
+        skip: "requires a specific, mutually-consistent Grid association (member/failover) not modeled by this standalone example"
+      - field: failoverAssociation
+        skip: "only meaningful when serverAssociationType=FAILOVER, referencing a pre-existing Grid failover association not modeled by this example"
+      - field: member
+        skip: "only meaningful when serverAssociationType=MEMBER; not a scalar update-test target"
+      - field: msServer
+        skip: "write-only convenience parameter, never mirrored into the observed state"
+      - field: extattrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
     name: example-range-template

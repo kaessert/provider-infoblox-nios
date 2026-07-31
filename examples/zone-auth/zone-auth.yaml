@@ -45,9 +45,44 @@ metadata:
     meta.upbound.io/example-id: zoneauth/v1alpha1/zoneauth
     uptest.upbound.io/timeout: "120"
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-auth.sh
+    # comment, disable, and the SOA scalars (soaDefaultTtl, soaExpire,
+    # soaNegativeTtl, soaRefresh, soaRetry) are the mutable scalars
+    # exercised here — WAPI supports PUT for all of them, updating the
+    # zone in place. nsGroup references a pre-existing Grid delegation
+    # name server group not created by this standalone example.
+    # gridPrimary/gridSecondaries/externalPrimaries/externalSecondaries
+    # require real Grid member or external-server names/addresses and
+    # switching between them is a structural primary/secondary type
+    # change, not modeled by this example (which relies on the WAPI
+    # default primary-on-Grid-Master behavior). extAttrs is an optional
+    # map field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: disable
+        value: true
+      - field: soaDefaultTtl
+        value: 3600
+      - field: soaExpire
+        value: 2419200
+      - field: soaNegativeTtl
+        value: 900
+      - field: soaRefresh
+        value: 10800
+      - field: soaRetry
+        value: 3600
+      - field: nsGroup
+        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
+      - field: gridPrimary
+        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
+      - field: gridSecondaries
+        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
+      - field: externalPrimaries
+        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+      - field: externalSecondaries
+        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     fqdn: zoneauth-example.com

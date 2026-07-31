@@ -21,9 +21,24 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # zone-delegated.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-delegated-namespaced.sh
+    # See zone-delegated.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: disable
+        value: true
+      - field: useDelegatedTtl
+        value: true
+      - field: delegatedTtl
+        value: 3600
+      - field: delegateTo
+        skip: "required list field, not a scalar update-test target"
+      - field: locked
+        skip: "administrative UI lock; toggling it mid-test risks blocking the remaining field updates in this same run"
+      - field: nsGroup
+        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     fqdn: delegated-ns.example.com

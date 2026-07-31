@@ -19,11 +19,40 @@ metadata:
     meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
     uptest.upbound.io/timeout: "120"
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address-namespaced.sh
-    # comment is the only mutable scalar exercised here — see
-    # fixed-address.yaml for full field documentation.
+    # See fixed-address.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
-        value: "Updated by update-tester"
+        value: "Updated by update-tester (namespaced)"
+      - field: mac
+        value: "00:00:00:00:00:02"
+      - field: name
+        value: "updated-fixed-address-ns"
+      - field: matchClient
+        value: "MAC_ADDRESS"
+      - field: disable
+        value: true
+      - field: useOptions
+        value: true
+      - field: ipv4addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv6addr"
+      - field: ipv6addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+      - field: networkView
+        skip: "only safely mutable prior to first apply per the field documentation; not exercised post-create"
+      - field: network
+        skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv4addr"
+      - field: agentCircuitId
+        skip: "only relevant when matchClient=CIRCUIT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: agentRemoteId
+        skip: "only relevant when matchClient=REMOTE_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: dhcpClientIdentifier
+        skip: "only relevant when matchClient=CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: clientIdentifierPrependZero
+        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
     ipv4addr: 10.0.0.51

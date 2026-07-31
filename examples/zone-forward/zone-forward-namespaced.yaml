@@ -21,9 +21,24 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # zone-forward.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-forward-namespaced.sh
+    # See zone-forward.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: disable
+        value: true
+      - field: forwardersOnly
+        value: true
+      - field: forwardTo
+        skip: "list field, not a scalar update-test target"
+      - field: forwardingServers
+        skip: "list field of per-Grid-member forwarding overrides, not a scalar update-test target"
+      - field: nsGroup
+        skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
+      - field: externalNsGroup
+        skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
+      - field: extattrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     fqdn: forward-ns.example.com

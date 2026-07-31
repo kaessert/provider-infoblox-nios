@@ -68,6 +68,14 @@ metadata:
         skip: "reference field resolving to networkView, which is immutable after creation"
       - field: networkViewSelector
         skip: "reference field resolving to networkView, which is immutable after creation"
+      - field: ipv4Cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update; mutually exclusive with static ipv4Addrs entries"
+      - field: ipv6Cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update; mutually exclusive with static ipv6Addrs entries"
+      - field: filterParams
+        skip: "EA-based IP allocation filter, mutually exclusive with ipv4Cidr/ipv6Cidr; not used by this example's static-address allocation"
+      - field: ipAddressType
+        skip: "only required/applicable when filterParams is set; not used by this example's static-address allocation"
 spec:
   forProvider:
     name: test-host.example.com

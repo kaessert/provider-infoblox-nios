@@ -32,11 +32,25 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network.sh
-    # comment is the only mutable scalar exercised here — extAttrs is also
-    # mutable but comment alone is sufficient update coverage.
+    # comment is the only mutable scalar exercised here. extAttrs is an
+    # optional map field skipped for low update-test value. parentCidr,
+    # allocatePrefixLen, filterParams, and object are create-time-only
+    # allocation inputs (drive AllocateNetwork/AllocateNetworkByEA at
+    # Create) and are mutually exclusive with the static `network` CIDR
+    # this example uses, so they are not applicable here.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: allocatePrefixLen
+        skip: "only required when parentCidr or filterParams is set; not used by this example's static CIDR"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: object
+        skip: "only valid when filterParams is set; not used by this example's static CIDR"
 spec:
   forProvider:
     networkView: default

@@ -21,7 +21,8 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-mx.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-mx-namespaced.sh
-    # See record-mx.yaml for the useTtl/ttl transition rationale.
+    # See record-mx.yaml for the useTtl/ttl transition rationale and the
+    # skip rationale for name/mailExchanger/preference/extAttrs.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
@@ -29,6 +30,14 @@ metadata:
         value: true
       - field: ttl
         value: 3600
+      - field: name
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: mailExchanger
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: preference
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: test-mx-ns.example.com

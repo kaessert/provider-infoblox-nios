@@ -49,13 +49,20 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
     # Runs the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
-    # nameserver is the mutable scalar exercised here. It is intentionally
-    # NOT one of the record's identity fields (name, view) — changing
-    # either of those would rotate the WAPI `_ref` mid-test and
-    # destabilize the update-tester's convergence check.
+    # nameserver and msDelegationName are the mutable scalars exercised
+    # here. They are intentionally NOT one of the record's identity
+    # fields (name, view) — changing either of those would rotate the
+    # WAPI `_ref` mid-test and destabilize the update-tester's
+    # convergence check. addresses is a list of glue address records —
+    # not a safe scalar update-test target (see the uptest
+    # update-parameter note above).
     crossplane.io/update-test: |
       - field: nameserver
         value: "ns2.example.com"
+      - field: msDelegationName
+        value: "ms-delegation.example.com"
+      - field: addresses
+        skip: "list field of glue address records; not a safe scalar update-test target"
 spec:
   forProvider:
     name: peatestinglab.com

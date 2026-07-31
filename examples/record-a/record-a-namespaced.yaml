@@ -21,14 +21,27 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-a.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-namespaced.sh
-    # See record-a.yaml for the useTtl/ttl transition rationale.
+    # See record-a.yaml for the useTtl/ttl transition rationale and the
+    # skip rationale for name/extAttrs/cidr/networkView/removeAssociatedPtr.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: ipv4Addr
+        value: "192.0.2.21"
       - field: useTtl
         value: true
       - field: ttl
         value: 3600
+      - field: name
+        skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: networkView
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: removeAssociatedPtr
+        skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
     name: www-ns.example.com

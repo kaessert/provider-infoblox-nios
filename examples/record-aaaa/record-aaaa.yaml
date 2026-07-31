@@ -33,23 +33,42 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-aaaa.sh
-    # comment, useTtl, and ttl are exercised here. useTtl transitions to
-    # true (absent useTtl is treated as false by the controller), then
-    # ttl is changed to a nonzero value while useTtl stays on. This
-    # sequence, together with the hook's post-update convergence check,
-    # proves the fix for a field-reported perpetual reconcile loop: the
-    # controller used to keep comparing the submitted ttl against the
-    # server's zone-default TTL even with useTtl off, so the two never
-    # matched and every reconcile issued a spurious Update call — a state
-    # that still reports Ready throughout, hence the explicit convergence
-    # assertion rather than a Ready check alone.
+    # comment, ipv6Addr, useTtl, and ttl are exercised here. useTtl
+    # transitions to true (absent useTtl is treated as false by the
+    # controller), then ttl is changed to a nonzero value while useTtl
+    # stays on. This sequence, together with the hook's post-update
+    # convergence check, proves the fix for a field-reported perpetual
+    # reconcile loop: the controller used to keep comparing the submitted
+    # ttl against the server's zone-default TTL even with useTtl off, so
+    # the two never matched and every reconcile issued a spurious Update
+    # call — a state that still reports Ready throughout, hence the
+    # explicit convergence assertion rather than a Ready check alone.
+    # name is mutable but renaming changes the record's _ref (external
+    # identity); that behavior is already covered by controller unit
+    # tests, so it is skipped here. extAttrs is an optional map field
+    # skipped for low update-test value. cidr and networkView are
+    # create-time-only next-available-IP allocation inputs (ignored on
+    # Update per the SDK). removeAssociatedPtr is a write-only delete-time
+    # option, never present in the observed state.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: ipv6Addr
+        value: "2001:db8::11"
       - field: useTtl
         value: true
       - field: ttl
         value: 3600
+      - field: name
+        skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: networkView
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: removeAssociatedPtr
+        skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
     name: www6.example.com

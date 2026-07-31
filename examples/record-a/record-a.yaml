@@ -30,18 +30,37 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a.sh
-    # comment, useTtl, and ttl are exercised here. useTtl transitions to
-    # true (absent useTtl is treated as false by the controller), then
-    # ttl is changed to a nonzero value while useTtl stays on — see
-    # record-cname.yaml for the field-reported reconcile-loop rationale
-    # behind this sequence and the hook's post-update convergence check.
+    # comment, ipv4Addr, useTtl, and ttl are exercised here. useTtl
+    # transitions to true (absent useTtl is treated as false by the
+    # controller), then ttl is changed to a nonzero value while useTtl
+    # stays on — see record-cname.yaml for the field-reported
+    # reconcile-loop rationale behind this sequence and the hook's
+    # post-update convergence check. name is mutable but renaming changes
+    # the record's _ref (external identity); that behavior is already
+    # covered by controller unit tests, so it is skipped here. extAttrs
+    # is an optional map field skipped for low update-test value. cidr
+    # and networkView are create-time-only next-available-IP allocation
+    # inputs (ignored on Update per the SDK). removeAssociatedPtr is a
+    # write-only delete-time option, never present in the observed state.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: ipv4Addr
+        value: "192.0.2.11"
       - field: useTtl
         value: true
       - field: ttl
         value: 3600
+      - field: name
+        skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: networkView
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: removeAssociatedPtr
+        skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
     name: www.example.com

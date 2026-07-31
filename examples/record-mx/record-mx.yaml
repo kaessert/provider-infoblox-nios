@@ -39,6 +39,13 @@ metadata:
     # ttl is changed to a nonzero value while useTtl stays on — see
     # record-cname.yaml for the field-reported reconcile-loop rationale
     # behind this sequence and the hook's post-update convergence check.
+    # name, mailExchanger, and preference are mutable but each is part of
+    # the record's identity tuple (view, name, mailExchanger, preference)
+    # that WAPI uses to compute the _ref; changing any of them mutates
+    # the _ref and is already covered by controller unit tests, so they
+    # are skipped here to keep the live update test scoped to
+    # identity-preserving field changes. extAttrs is an optional map
+    # field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
@@ -46,6 +53,14 @@ metadata:
         value: true
       - field: ttl
         value: 3600
+      - field: name
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: mailExchanger
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: preference
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: test-mx.example.com

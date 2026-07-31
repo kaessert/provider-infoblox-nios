@@ -32,11 +32,30 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-extensible-attribute-def.sh
-    # comment is a safe mutable scalar for update coverage — type/min/max
-    # are immutable (CEL-enforced) and can't be exercised here.
+    # comment, defaultValue, and flags are the mutable scalars exercised
+    # here — type/min/max are immutable (CEL-enforced) and can't be
+    # exercised. name is also mutable but renaming rotates the WAPI
+    # `_ref`; that rotation is already exercised by controller unit
+    # tests, so it is skipped here. listValues only applies when
+    # type=ENUM (this example uses type=STRING). allowedObjectTypes is a
+    # list field skipped for low update-test value. descendantsAction is
+    # write-only — never mirrored into the observed state, so it has no
+    # comparable value for a convergence check.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: defaultValue
+        value: "updated-default"
+      - field: flags
+        value: "A"
+      - field: name
+        skip: "renaming rotates the WAPI _ref; covered by controller unit tests instead"
+      - field: listValues
+        skip: "applicable only when type=ENUM; this example uses type=STRING"
+      - field: allowedObjectTypes
+        skip: "list field, low update-test value"
+      - field: descendantsAction
+        skip: "write-only field, never mirrored into the observed state; not comparable for a convergence check"
 spec:
   forProvider:
     name: example-ea-def

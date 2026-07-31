@@ -22,9 +22,26 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # dtc-server.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-server-namespaced.sh
+    # See dtc-server.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: host
+        value: "192.0.2.32"
+      - field: disable
+        value: true
+      - field: autoCreateHostRecord
+        value: true
+      - field: useSniHostname
+        value: true
+      - field: sniHostname
+        value: "sni-ns.example.com"
+      - field: name
+        skip: "renaming a DTC Server may change its WAPI _ref; covered by controller unit tests instead"
+      - field: monitors
+        skip: "list field of IP/FQDN and monitor pairs, not a scalar update-test target"
+      - field: extattrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: example-server-ns.example.com

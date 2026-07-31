@@ -28,10 +28,19 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-view.sh
-    # comment is the only mutable scalar exercised here.
+    # comment is the mutable scalar exercised here. name is also mutable
+    # (UpdateNetworkView accepts a new name), but renaming rotates the
+    # WAPI `_ref`; that rotation is already exercised by controller unit
+    # tests, so it is skipped here to keep the live update test scoped
+    # to identity-preserving field changes. extAttrs is an optional map
+    # field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: name
+        skip: "renaming rotates the WAPI _ref; covered by controller unit tests instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: "test-network-view"

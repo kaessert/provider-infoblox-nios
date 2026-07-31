@@ -22,9 +22,22 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # extensible-attribute-def.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-extensible-attribute-def-namespaced.sh
+    # See extensible-attribute-def.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: defaultValue
+        value: "updated-default-ns"
+      - field: flags
+        value: "A"
+      - field: name
+        skip: "renaming rotates the WAPI _ref; covered by controller unit tests instead"
+      - field: listValues
+        skip: "applicable only when type=ENUM; this example uses type=STRING"
+      - field: allowedObjectTypes
+        skip: "list field, low update-test value"
+      - field: descendantsAction
+        skip: "write-only field, never mirrored into the observed state; not comparable for a convergence check"
 spec:
   forProvider:
     name: example-ea-def-ns

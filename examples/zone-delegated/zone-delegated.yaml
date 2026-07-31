@@ -34,9 +34,34 @@ metadata:
     # comment field below is a safe mutable scalar for update coverage;
     # field-level update testing is wired via the hook annotation below.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-delegated.sh
+    # comment, disable, useDelegatedTtl, and delegatedTtl are the mutable
+    # scalars exercised here. useDelegatedTtl is tested before
+    # delegatedTtl: WAPI ignores a submitted TTL until the use flag is on
+    # (same ordering rationale as the DNS record types — see
+    # record-cname.yaml). delegateTo is a required list field, not a
+    # scalar update-test target. locked is an administrative UI lock —
+    # toggling it mid-test risks blocking the remaining field updates in
+    # this same run, so it is not exercised live. nsGroup references a
+    # pre-existing Grid delegation name server group not created by this
+    # standalone example. extAttrs is an optional map field skipped for
+    # low update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: disable
+        value: true
+      - field: useDelegatedTtl
+        value: true
+      - field: delegatedTtl
+        value: 3600
+      - field: delegateTo
+        skip: "required list field, not a scalar update-test target"
+      - field: locked
+        skip: "administrative UI lock; toggling it mid-test risks blocking the remaining field updates in this same run"
+      - field: nsGroup
+        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     fqdn: delegated.example.com

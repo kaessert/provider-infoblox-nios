@@ -52,12 +52,53 @@ metadata:
     # field-level update testing runs through the post-assert hook wiring
     # and the crossplane.io/update-test annotation below.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address.sh
-    # comment is the only mutable scalar exercised here — the other mutable
-    # fields are also mutable but comment alone is sufficient update
-    # coverage.
+    # comment, mac, name, matchClient, disable, and useOptions are the
+    # mutable scalars exercised here. matchClient is set to MAC_ADDRESS,
+    # which is compatible with the mac value already set in spec (no
+    # extra business-rule-required fields needed). ipv4addr/ipv6addr are
+    # skipped: changing either changes the record's UNSTABLE `_ref`
+    # (ADR-IN-0004) and they are mutually exclusive. networkView is only
+    # safely mutable prior to first apply (see the field doc above), so
+    # it is not exercised post-create here. network only applies to
+    # dynamic CIDR allocation, which this example does not use (it sets
+    # a literal ipv4addr). agentCircuitId/agentRemoteId/
+    # dhcpClientIdentifier/clientIdentifierPrependZero are only relevant
+    # to matchClient modes (CIRCUIT_ID/REMOTE_ID/CLIENT_ID) not exercised
+    # by this example's MAC_ADDRESS test. extAttrs and options are
+    # map/list fields skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
+      - field: mac
+        value: "00:00:00:00:00:01"
+      - field: name
+        value: "updated-fixed-address"
+      - field: matchClient
+        value: "MAC_ADDRESS"
+      - field: disable
+        value: true
+      - field: useOptions
+        value: true
+      - field: ipv4addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv6addr"
+      - field: ipv6addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+      - field: networkView
+        skip: "only safely mutable prior to first apply per the field documentation; not exercised post-create"
+      - field: network
+        skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv4addr"
+      - field: agentCircuitId
+        skip: "only relevant when matchClient=CIRCUIT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: agentRemoteId
+        skip: "only relevant when matchClient=REMOTE_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: dhcpClientIdentifier
+        skip: "only relevant when matchClient=CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: clientIdentifierPrependZero
+        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
     ipv4addr: 10.0.0.50

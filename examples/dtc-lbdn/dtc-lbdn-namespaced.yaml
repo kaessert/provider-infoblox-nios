@@ -22,9 +22,38 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # dtc-lbdn.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-lbdn-namespaced.sh
+    # See dtc-lbdn.yaml for the field coverage rationale.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
+      - field: lbMethod
+        value: "RATIO"
+      - field: priority
+        value: 5
+      - field: persistence
+        value: 300
+      - field: disable
+        value: true
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
+      - field: name
+        skip: "mutable but changes the WAPI _ref per the field documentation; covered by controller unit tests instead"
+      - field: patterns
+        skip: "required list field, not a scalar update-test target"
+      - field: types
+        skip: "list field of enum values, not a scalar update-test target"
+      - field: pools
+        skip: "references DTCPool resources, intentionally omitted from this standalone example"
+      - field: authZones
+        skip: "references ZoneAuth resources, intentionally omitted from this standalone example"
+      - field: authZonesRefs
+        skip: "references ZoneAuth resources, intentionally omitted from this standalone example"
+      - field: topology
+        skip: "only meaningful when lbMethod=TOPOLOGY; not used by this example's RATIO method"
+      - field: extattrs
+        skip: "optional map field, low update-test value"
 spec:
   forProvider:
     name: test-dtc-lbdn-ns
