@@ -74,11 +74,11 @@ type DNSViewResponseRateLimiting struct {
 	// Determines if logging for response rate limiting without dropping any requests is enabled or not.
 	LogOnly *bool `json:"logOnly,omitempty"`
 	// The number of responses per client per second.
-	ResponsesPerSecond *int64 `json:"responsesPerSecond,omitempty"`
+	ResponsesPerSecond *uint32 `json:"responsesPerSecond,omitempty"`
 	// The time interval in seconds over which responses are tracked.
-	Window *int64 `json:"window,omitempty"`
+	Window *uint32 `json:"window,omitempty"`
 	// The response rate limiting slip. If slip is not 0, every n-th rate-limited UDP request is sent a truncated response instead of being dropped.
-	Slip *int64 `json:"slip,omitempty"`
+	Slip *uint32 `json:"slip,omitempty"`
 }
 
 // DNSViewScavengingSettings carries resource-record scavenging settings for the DNS view (mirrors the SDK's SettingScavenging struct).
@@ -117,17 +117,17 @@ type DNSViewScavengingSchedule struct {
 	// The frequency for the scheduled task.
 	Frequency *string `json:"frequency,omitempty"`
 	// The number of frequency units to wait before repeating the scheduled task.
-	Every *int64 `json:"every,omitempty"`
+	Every *uint32 `json:"every,omitempty"`
 	// The minutes past the hour for the scheduled task.
-	MinutesPastHour *int64 `json:"minutesPastHour,omitempty"`
+	MinutesPastHour *uint32 `json:"minutesPastHour,omitempty"`
 	// The hour of day for the scheduled task.
-	HourOfDay *int64 `json:"hourOfDay,omitempty"`
+	HourOfDay *uint32 `json:"hourOfDay,omitempty"`
 	// The year for the scheduled task.
-	Year *int64 `json:"year,omitempty"`
+	Year *uint32 `json:"year,omitempty"`
 	// The month for the scheduled task.
-	Month *int64 `json:"month,omitempty"`
+	Month *uint32 `json:"month,omitempty"`
 	// The day of the month for the scheduled task.
-	DayOfMonth *int64 `json:"dayOfMonth,omitempty"`
+	DayOfMonth *uint32 `json:"dayOfMonth,omitempty"`
 	// Indicates if the scheduled task repeats or runs only once.
 	Repeat *string `json:"repeat,omitempty"`
 	// If set to true, the scheduled task is disabled.
@@ -223,7 +223,7 @@ type DNSViewParameters struct {
 	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=2147483647
-	BlacklistRedirectTTL *int64 `json:"blacklistRedirectTtl,omitempty"`
+	BlacklistRedirectTTL *uint32 `json:"blacklistRedirectTtl,omitempty"`
 	// The name of the Ruleset object assigned at the Grid level for blacklist redirection.
 	// +optional
 	BlacklistRulesets []string `json:"blacklistRulesets"`
@@ -315,7 +315,7 @@ type DNSViewParameters struct {
 	// The number of seconds to cache lame delegations or lame servers. Must be non-negative (0-2147483647); to inherit the grid default, set useLameTtl to false rather than passing a negative sentinel value.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=2147483647
-	LameTTL *int64 `json:"lameTtl,omitempty"`
+	LameTTL *uint32 `json:"lameTtl,omitempty"`
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"`
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of clients that are allowed or denied access to the DNS view.
@@ -327,17 +327,17 @@ type DNSViewParameters struct {
 	// The maximum number of seconds to cache ordinary (positive) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxCacheTtl to false rather than passing a negative sentinel value.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=2147483647
-	MaxCacheTTL *int64 `json:"maxCacheTtl,omitempty"`
+	MaxCacheTTL *uint32 `json:"maxCacheTtl,omitempty"`
 	// Use flag for: max_cache_ttl.
 	UseMaxCacheTTL *bool `json:"useMaxCacheTtl,omitempty"`
 	// The maximum number of seconds to cache negative (NXDOMAIN) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxNcacheTtl to false rather than passing a negative sentinel value.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=2147483647
-	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"`
+	MaxNcacheTTL *uint32 `json:"maxNcacheTtl,omitempty"`
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"`
 	// The number of seconds of delay before notify messages are sent to secondaries.
-	NotifyDelay *int64 `json:"notifyDelay,omitempty"`
+	NotifyDelay *uint32 `json:"notifyDelay,omitempty"`
 	// The flag that indicates whether NXDOMAIN redirection queries are logged. The default value is false.
 	NxdomainLogQuery *bool `json:"nxdomainLogQuery,omitempty"`
 	// Determines if NXDOMAIN redirection in a DNS view is enabled or not.
@@ -351,7 +351,7 @@ type DNSViewParameters struct {
 	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=2147483647
-	NxdomainRedirectTTL *int64 `json:"nxdomainRedirectTtl,omitempty"`
+	NxdomainRedirectTTL *uint32 `json:"nxdomainRedirectTtl,omitempty"`
 	// The names of the Ruleset objects assigned at the grid level for NXDOMAIN redirection.
 	// +optional
 	NxdomainRulesets []string `json:"nxdomainRulesets"`
@@ -368,9 +368,9 @@ type DNSViewParameters struct {
 	// Enables the appliance to ignore RPZ-IP triggers with prefix lengths less than the specified minimum prefix length.
 	RpzDropIPRuleEnabled *bool `json:"rpzDropIpRuleEnabled,omitempty"`
 	// The minimum prefix length for IPv4 RPZ-IP triggers. The appliance ignores RPZ-IP triggers with prefix lengths less than this value.
-	RpzDropIPRuleMinPrefixLengthIPv4 *int64 `json:"rpzDropIpRuleMinPrefixLengthIpv4,omitempty"`
+	RpzDropIPRuleMinPrefixLengthIPv4 *uint32 `json:"rpzDropIpRuleMinPrefixLengthIpv4,omitempty"`
 	// The minimum prefix length for IPv6 RPZ-IP triggers. The appliance ignores RPZ-IP triggers with prefix lengths less than this value.
-	RpzDropIPRuleMinPrefixLengthIPv6 *int64 `json:"rpzDropIpRuleMinPrefixLengthIpv6,omitempty"`
+	RpzDropIPRuleMinPrefixLengthIPv6 *uint32 `json:"rpzDropIpRuleMinPrefixLengthIpv6,omitempty"`
 	// Use flag for: rpz_drop_ip_rule_enabled, rpz_drop_ip_rule_min_prefix_length_ipv4, rpz_drop_ip_rule_min_prefix_length_ipv6.
 	UseRpzDropIPRule *bool `json:"useRpzDropIpRule,omitempty"`
 	// The flag that indicates whether recursive RPZ lookups are enabled.
@@ -415,7 +415,7 @@ type DNSViewObservation struct {
 	// +optional
 	BlacklistRedirectAddresses []string `json:"blacklistRedirectAddresses"` // atProvider
 	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from blacklist redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
-	BlacklistRedirectTTL *int64 `json:"blacklistRedirectTtl,omitempty"` // atProvider
+	BlacklistRedirectTTL *uint32 `json:"blacklistRedirectTtl,omitempty"` // atProvider
 	// The name of the Ruleset object assigned at the Grid level for blacklist redirection.
 	// +optional
 	BlacklistRulesets []string `json:"blacklistRulesets"` // atProvider
@@ -505,7 +505,7 @@ type DNSViewObservation struct {
 	// Use flag for: forwarders, forward_only.
 	UseForwarders *bool `json:"useForwarders,omitempty"` // atProvider
 	// The number of seconds to cache lame delegations or lame servers. Must be non-negative (0-2147483647); to inherit the grid default, set useLameTtl to false rather than passing a negative sentinel value.
-	LameTTL *int64 `json:"lameTtl,omitempty"` // atProvider
+	LameTTL *uint32 `json:"lameTtl,omitempty"` // atProvider
 	// Use flag for: lame_ttl.
 	UseLameTTL *bool `json:"useLameTtl,omitempty"` // atProvider
 	// A named ACL, or a list of IPv4/IPv6 addresses, networks, or TSIG keys of clients that are allowed or denied access to the DNS view.
@@ -515,15 +515,15 @@ type DNSViewObservation struct {
 	// +optional
 	MatchDestinations []*DNSViewAddressAc `json:"matchDestinations"` // atProvider
 	// The maximum number of seconds to cache ordinary (positive) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxCacheTtl to false rather than passing a negative sentinel value.
-	MaxCacheTTL *int64 `json:"maxCacheTtl,omitempty"` // atProvider
+	MaxCacheTTL *uint32 `json:"maxCacheTtl,omitempty"` // atProvider
 	// Use flag for: max_cache_ttl.
 	UseMaxCacheTTL *bool `json:"useMaxCacheTtl,omitempty"` // atProvider
 	// The maximum number of seconds to cache negative (NXDOMAIN) answers. Must be non-negative (0-2147483647); to inherit the grid default, set useMaxNcacheTtl to false rather than passing a negative sentinel value.
-	MaxNcacheTTL *int64 `json:"maxNcacheTtl,omitempty"` // atProvider
+	MaxNcacheTTL *uint32 `json:"maxNcacheTtl,omitempty"` // atProvider
 	// Use flag for: max_ncache_ttl.
 	UseMaxNcacheTTL *bool `json:"useMaxNcacheTtl,omitempty"` // atProvider
 	// The number of seconds of delay before notify messages are sent to secondaries.
-	NotifyDelay *int64 `json:"notifyDelay,omitempty"` // atProvider
+	NotifyDelay *uint32 `json:"notifyDelay,omitempty"` // atProvider
 	// The flag that indicates whether NXDOMAIN redirection queries are logged. The default value is false.
 	NxdomainLogQuery *bool `json:"nxdomainLogQuery,omitempty"` // atProvider
 	// Determines if NXDOMAIN redirection in a DNS view is enabled or not.
@@ -535,7 +535,7 @@ type DNSViewObservation struct {
 	// +optional
 	NxdomainRedirectAddressesV6 []string `json:"nxdomainRedirectAddressesV6"` // atProvider
 	// The Time To Live (TTL), in seconds, of the synthetic DNS responses resulting from NXDOMAIN redirection. Must be non-negative (0-2147483647); NIOS has no zone/grid-default sentinel for this field, so out-of-range values are rejected outright.
-	NxdomainRedirectTTL *int64 `json:"nxdomainRedirectTtl,omitempty"` // atProvider
+	NxdomainRedirectTTL *uint32 `json:"nxdomainRedirectTtl,omitempty"` // atProvider
 	// The names of the Ruleset objects assigned at the grid level for NXDOMAIN redirection.
 	// +optional
 	NxdomainRulesets []string `json:"nxdomainRulesets"` // atProvider
@@ -552,9 +552,9 @@ type DNSViewObservation struct {
 	// Enables the appliance to ignore RPZ-IP triggers with prefix lengths less than the specified minimum prefix length.
 	RpzDropIPRuleEnabled *bool `json:"rpzDropIpRuleEnabled,omitempty"` // atProvider
 	// The minimum prefix length for IPv4 RPZ-IP triggers. The appliance ignores RPZ-IP triggers with prefix lengths less than this value.
-	RpzDropIPRuleMinPrefixLengthIPv4 *int64 `json:"rpzDropIpRuleMinPrefixLengthIpv4,omitempty"` // atProvider
+	RpzDropIPRuleMinPrefixLengthIPv4 *uint32 `json:"rpzDropIpRuleMinPrefixLengthIpv4,omitempty"` // atProvider
 	// The minimum prefix length for IPv6 RPZ-IP triggers. The appliance ignores RPZ-IP triggers with prefix lengths less than this value.
-	RpzDropIPRuleMinPrefixLengthIPv6 *int64 `json:"rpzDropIpRuleMinPrefixLengthIpv6,omitempty"` // atProvider
+	RpzDropIPRuleMinPrefixLengthIPv6 *uint32 `json:"rpzDropIpRuleMinPrefixLengthIpv6,omitempty"` // atProvider
 	// Use flag for: rpz_drop_ip_rule_enabled, rpz_drop_ip_rule_min_prefix_length_ipv4, rpz_drop_ip_rule_min_prefix_length_ipv6.
 	UseRpzDropIPRule *bool `json:"useRpzDropIpRule,omitempty"` // atProvider
 	// The flag that indicates whether recursive RPZ lookups are enabled.
