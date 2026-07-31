@@ -1318,20 +1318,27 @@ func TestIsUpToDateExtAttrsMismatch(t *testing.T) {
 }
 
 func TestIsUpToDateNestedListMismatch(t *testing.T) {
-	desired := dnsViewFields{Name: stringPtr("v"), Forwarders: []string{"8.8.8.8"}}
-	observed := dnsViewFields{Name: stringPtr("v"), Forwarders: []string{"1.1.1.1"}}
+	// Forwarders is gated by UseForwarders (drift is only checked while
+	// the flag is on) — set it true on both sides so this is a genuine
+	// forwarders mismatch, not a flag-off no-op.
+	desired := dnsViewFields{Name: stringPtr("v"), UseForwarders: boolPtr(true), Forwarders: []string{"8.8.8.8"}}
+	observed := dnsViewFields{Name: stringPtr("v"), UseForwarders: boolPtr(true), Forwarders: []string{"1.1.1.1"}}
 	if isUpToDate(desired, observed) {
 		t.Error("isUpToDate: want false on Forwarders mismatch, got true")
 	}
 }
 
 func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
+	// NotifyDelay carries no use flag in the WAPI view object (unlike
+	// LameTTL/MaxCacheTTL/MaxNcacheTTL, which are use-flag-gated override
+	// fields — see TestLateInitializeSkipsGatedValueWhenFlagOff), so it
+	// back-fills unconditionally.
 	desired := dnsViewFields{Name: stringPtr("v")}
 	observed := dnsViewFields{
 		Name:        stringPtr("v"),
 		Comment:     stringPtr("server default"),
 		NetworkView: stringPtr("default"),
-		LameTTL:     int64Ptr(600),
+		NotifyDelay: int64Ptr(600),
 	}
 
 	got, changed := lateInitializeFields(desired, observed)
@@ -1344,8 +1351,26 @@ func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 	if got.NetworkView == nil || *got.NetworkView != "default" {
 		t.Errorf("NetworkView = %v, want 'default'", got.NetworkView)
 	}
-	if got.LameTTL == nil || *got.LameTTL != 600 {
-		t.Errorf("LameTTL = %v, want 600", got.LameTTL)
+	if got.NotifyDelay == nil || *got.NotifyDelay != 600 {
+		t.Errorf("NotifyDelay = %v, want 600", got.NotifyDelay)
+	}
+}
+
+// TestLateInitializeSkipsGatedValueWhenFlagOff proves lateInitializeFields
+// does not back-fill LameTTL from the observed zone/grid default while
+// UseLameTTL is off — the value is server-owned, not something the user's
+// spec implies, so writing it into spec would misrepresent intent.
+func TestLateInitializeSkipsGatedValueWhenFlagOff(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(false)}
+	observed := dnsViewFields{
+		Name:       stringPtr("v"),
+		UseLameTTL: boolPtr(false),
+		LameTTL:    int64Ptr(600), // realistic non-zero zone default, not 0
+	}
+
+	got, _ := lateInitializeFields(desired, observed)
+	if got.LameTTL != nil {
+		t.Errorf("lateInitializeFields: LameTTL = %v, want nil (UseLameTTL is off, observed value is the zone default)", *got.LameTTL)
 	}
 }
 
@@ -1539,5 +1564,602 @@ func TestNamespacedObserveFullFieldMirror(t *testing.T) {
 	// Round-trip through Update() — same rationale as the cluster-scope test.
 	if _, err := e.Update(context.Background(), cr); err != nil {
 		t.Fatalf("Update: unexpected error round-tripping full field set: %v", err)
+	}
+}
+
+// ── use-flag/value pair gating (isUpToDate can never see false drift when
+// a use flag is off) ────────────────────────────────────────────────────
+//
+// The View object is compared as isUpToDate(desired, observed dnsViewFields)
+// — a single internal struct on both sides — which is exactly the shape a
+// mechanical "does this file contain rec.UseX alongside rec.X from a
+// different SDK type" scan cannot infer pairs from. Every field this
+// provider's own SDK dependency documents as "Use flag for: X" is
+// enumerated here by hand instead.
+
+// TestIsUpToDateIgnoresGatedValueWhenFlagOff is a table-driven regression
+// test for every use-flag/value pair in the DNSView field comparator
+// table. Each case seeds the observed side with a realistic non-zero server
+// default while the corresponding use flag is off on both sides (so the
+// flag's own unconditional comparator does not itself report drift), and
+// asserts isUpToDate still reports convergence — proving the value
+// comparison is gated, not compared unconditionally. A test that seeded the
+// observed value with a zero value would pass against the broken,
+// unguarded code and prove nothing.
+func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
+	base := func() dnsViewFields { return dnsViewFields{Name: stringPtr("v")} }
+
+	cases := []struct {
+		name     string
+		desired  dnsViewFields
+		observed dnsViewFields
+	}{
+		{
+			name:    "UseBlacklist/BlacklistAction",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.BlacklistAction = strPtrOrNil("REDIRECT")
+				return f
+			}(),
+		},
+		{
+			name:    "UseBlacklist/BlacklistLogQuery",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.BlacklistLogQuery = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseBlacklist/BlacklistRedirectAddresses",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.BlacklistRedirectAddresses = []string{"10.0.0.1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseBlacklist/BlacklistRedirectTTL",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.BlacklistRedirectTTL = int64Ptr(3600)
+				return f
+			}(),
+		},
+		{
+			name:    "UseBlacklist/BlacklistRulesets",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.BlacklistRulesets = []string{"ruleset1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseBlacklist/EnableBlacklist",
+			desired: func() dnsViewFields { f := base(); f.UseBlacklist = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseBlacklist = boolPtr(false)
+				f.EnableBlacklist = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseRootNameServer/RootNameServerType",
+			desired: func() dnsViewFields { f := base(); f.UseRootNameServer = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRootNameServer = boolPtr(false)
+				f.RootNameServerType = strPtrOrNil("INTERNET")
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsForceCreationTimestampUpdate/DdnsForceCreationTimestampUpdate",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsForceCreationTimestampUpdate = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsForceCreationTimestampUpdate = boolPtr(false)
+				f.DdnsForceCreationTimestampUpdate = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsPrincipalSecurity/DdnsPrincipalGroup",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsPrincipalSecurity = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsPrincipalSecurity = boolPtr(false)
+				f.DdnsPrincipalGroup = strPtrOrNil("group1")
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsPrincipalSecurity/DdnsPrincipalTracking",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsPrincipalSecurity = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsPrincipalSecurity = boolPtr(false)
+				f.DdnsPrincipalTracking = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsPrincipalSecurity/DdnsRestrictSecure",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsPrincipalSecurity = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsPrincipalSecurity = boolPtr(false)
+				f.DdnsRestrictSecure = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsPatternsRestriction/DdnsRestrictPatterns",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsPatternsRestriction = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsPatternsRestriction = boolPtr(false)
+				f.DdnsRestrictPatterns = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsPatternsRestriction/DdnsRestrictPatternsList",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsPatternsRestriction = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsPatternsRestriction = boolPtr(false)
+				f.DdnsRestrictPatternsList = []string{"*.example.com"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsRestrictProtected/DdnsRestrictProtected",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsRestrictProtected = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsRestrictProtected = boolPtr(false)
+				f.DdnsRestrictProtected = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDdnsRestrictStatic/DdnsRestrictStatic",
+			desired: func() dnsViewFields { f := base(); f.UseDdnsRestrictStatic = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDdnsRestrictStatic = boolPtr(false)
+				f.DdnsRestrictStatic = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDns64/Dns64Enabled",
+			desired: func() dnsViewFields { f := base(); f.UseDns64 = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDns64 = boolPtr(false)
+				f.Dns64Enabled = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDns64/Dns64Groups",
+			desired: func() dnsViewFields { f := base(); f.UseDns64 = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDns64 = boolPtr(false)
+				f.Dns64Groups = []string{"group1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseDnssec/DnssecEnabled",
+			desired: func() dnsViewFields { f := base(); f.UseDnssec = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDnssec = boolPtr(false)
+				f.DnssecEnabled = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDnssec/DnssecExpiredSignaturesEnabled",
+			desired: func() dnsViewFields { f := base(); f.UseDnssec = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDnssec = boolPtr(false)
+				f.DnssecExpiredSignaturesEnabled = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseDnssec/DnssecValidationEnabled",
+			desired: func() dnsViewFields { f := base(); f.UseDnssec = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseDnssec = boolPtr(false)
+				f.DnssecValidationEnabled = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseFixedRrsetOrderFqdns/EnableFixedRrsetOrderFqdns",
+			desired: func() dnsViewFields { f := base(); f.UseFixedRrsetOrderFqdns = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseFixedRrsetOrderFqdns = boolPtr(false)
+				f.EnableFixedRrsetOrderFqdns = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseFilterAaaa/FilterAaaa",
+			desired: func() dnsViewFields { f := base(); f.UseFilterAaaa = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseFilterAaaa = boolPtr(false)
+				f.FilterAaaa = strPtrOrNil("BREAK_DNSSEC")
+				return f
+			}(),
+		},
+		{
+			name:    "UseForwarders/ForwardOnly",
+			desired: func() dnsViewFields { f := base(); f.UseForwarders = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseForwarders = boolPtr(false)
+				f.ForwardOnly = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseForwarders/Forwarders",
+			desired: func() dnsViewFields { f := base(); f.UseForwarders = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseForwarders = boolPtr(false)
+				f.Forwarders = []string{"8.8.8.8"}
+				return f
+			}(),
+		},
+		{
+			name:     "UseLameTTL/LameTTL",
+			desired:  func() dnsViewFields { f := base(); f.UseLameTTL = boolPtr(false); return f }(),
+			observed: func() dnsViewFields { f := base(); f.UseLameTTL = boolPtr(false); f.LameTTL = int64Ptr(600); return f }(),
+		},
+		{
+			name:    "UseMaxCacheTTL/MaxCacheTTL",
+			desired: func() dnsViewFields { f := base(); f.UseMaxCacheTTL = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseMaxCacheTTL = boolPtr(false)
+				f.MaxCacheTTL = int64Ptr(86400)
+				return f
+			}(),
+		},
+		{
+			name:    "UseMaxNcacheTTL/MaxNcacheTTL",
+			desired: func() dnsViewFields { f := base(); f.UseMaxNcacheTTL = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseMaxNcacheTTL = boolPtr(false)
+				f.MaxNcacheTTL = int64Ptr(10800)
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainLogQuery",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainLogQuery = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainRedirect",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainRedirect = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainRedirectAddresses",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainRedirectAddresses = []string{"10.0.0.1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainRedirectAddressesV6",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainRedirectAddressesV6 = []string{"::1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainRedirectTTL",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainRedirectTTL = int64Ptr(60)
+				return f
+			}(),
+		},
+		{
+			name:    "UseNxdomainRedirect/NxdomainRulesets",
+			desired: func() dnsViewFields { f := base(); f.UseNxdomainRedirect = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseNxdomainRedirect = boolPtr(false)
+				f.NxdomainRulesets = []string{"ruleset1"}
+				return f
+			}(),
+		},
+		{
+			name:    "UseRecursion/Recursion",
+			desired: func() dnsViewFields { f := base(); f.UseRecursion = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRecursion = boolPtr(false)
+				f.Recursion = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseRpzDropIPRule/RpzDropIPRuleEnabled",
+			desired: func() dnsViewFields { f := base(); f.UseRpzDropIPRule = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRpzDropIPRule = boolPtr(false)
+				f.RpzDropIPRuleEnabled = boolPtr(true)
+				return f
+			}(),
+		},
+		{
+			name:    "UseRpzDropIPRule/RpzDropIPRuleMinPrefixLengthIPv4",
+			desired: func() dnsViewFields { f := base(); f.UseRpzDropIPRule = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRpzDropIPRule = boolPtr(false)
+				f.RpzDropIPRuleMinPrefixLengthIPv4 = int64Ptr(24)
+				return f
+			}(),
+		},
+		{
+			name:    "UseRpzDropIPRule/RpzDropIPRuleMinPrefixLengthIPv6",
+			desired: func() dnsViewFields { f := base(); f.UseRpzDropIPRule = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRpzDropIPRule = boolPtr(false)
+				f.RpzDropIPRuleMinPrefixLengthIPv6 = int64Ptr(64)
+				return f
+			}(),
+		},
+		{
+			name:    "UseRpzQnameWaitRecurse/RpzQnameWaitRecurse",
+			desired: func() dnsViewFields { f := base(); f.UseRpzQnameWaitRecurse = boolPtr(false); return f }(),
+			observed: func() dnsViewFields {
+				f := base()
+				f.UseRpzQnameWaitRecurse = boolPtr(false)
+				f.RpzQnameWaitRecurse = boolPtr(true)
+				return f
+			}(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !isUpToDate(tc.desired, tc.observed) {
+				t.Errorf("isUpToDate(%s): want true (flag off, value is server-owned), got false (non-convergent drift comparison)", tc.name)
+			}
+		})
+	}
+}
+
+// TestIsUpToDateDetectsGatedValueWhenFlagOn is the flag-on counterpart of
+// TestIsUpToDateIgnoresGatedValueWhenFlagOff: a representative sample of
+// gated pairs still detect a genuine mismatch once the flag is on.
+func TestIsUpToDateDetectsGatedValueWhenFlagOn(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(30)}
+	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(600)}
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (UseLameTTL on, LameTTL differs), got true")
+	}
+}
+
+// TestIsUpToDateDetectsUseFlagTransition proves the flag's own comparison
+// stays unconditional: a true -> false transition on the flag itself is
+// still reported as drift even though the gate suppresses the paired
+// value's comparison in that state.
+func TestIsUpToDateDetectsUseFlagTransition(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(false)}
+	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(600)}
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (UseLameTTL transitioned true -> false), got true")
+	}
+}
+
+// TestIsUpToDateGatedPointerStruct covers the *responseRateLimitingValue /
+// *scavengingSettingsValue shape: gated on a use flag but compared as a
+// whole nested struct pointer via gatedPtrDeepEqual.
+func TestIsUpToDateGatedPointerStruct(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseResponseRateLimiting: boolPtr(false)}
+	observed := dnsViewFields{
+		Name:                    stringPtr("v"),
+		UseResponseRateLimiting: boolPtr(false),
+		ResponseRateLimiting:    &responseRateLimitingValue{ResponsesPerSecond: int64Ptr(20)},
+	}
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true (UseResponseRateLimiting off, ResponseRateLimiting is server-owned), got false")
+	}
+}
+
+// TestIsUpToDateGatedNestedSlice covers the CustomRootNameServers /
+// DnssecTrustedKeys / FixedRrsetOrderFqdns / FilterAaaaList / Sortlist
+// shape: a nested-value-bag slice gated on an outer use flag via
+// gatedNestedSliceEqual.
+func TestIsUpToDateGatedNestedSlice(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseRootNameServer: boolPtr(false)}
+	observed := dnsViewFields{
+		Name:                  stringPtr("v"),
+		UseRootNameServer:     boolPtr(false),
+		CustomRootNameServers: []nameServerValue{{Name: strPtrOrNil("ns1.example.com")}},
+	}
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true (UseRootNameServer off, CustomRootNameServers is server-owned), got false")
+	}
+}
+
+// ── nested use_tsig_key_name gating (dnssec/root-server/filter/match ACL
+// entries) — the SDK documents use_tsig_key_name as the use flag for
+// tsig_key_name on each ACL/name-server entry individually, not on the
+// View object as a whole, so the gate lives inside nameServerValueEqual /
+// addressAcValueEqual rather than dnsViewFieldComparators. ───────────────
+
+// TestNameServerValuesEqualIgnoresTsigKeyNameWhenFlagOff proves a
+// CustomRootNameServers entry ignores a tsig_key_name mismatch while its
+// own use_tsig_key_name is off.
+func TestNameServerValuesEqualIgnoresTsigKeyNameWhenFlagOff(t *testing.T) {
+	a := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(false), TsigKeyName: strPtrOrNil("key-a")}}
+	b := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(false), TsigKeyName: strPtrOrNil("key-b")}}
+	if !nameServerValuesEqual(a, b) {
+		t.Error("nameServerValuesEqual: want true (use_tsig_key_name off, tsig_key_name is server-owned), got false")
+	}
+}
+
+// TestNameServerValuesEqualDetectsTsigKeyNameWhenFlagOn is the flag-on
+// counterpart: the same mismatch is real drift once the flag is on.
+func TestNameServerValuesEqualDetectsTsigKeyNameWhenFlagOn(t *testing.T) {
+	a := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(true), TsigKeyName: strPtrOrNil("key-a")}}
+	b := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(true), TsigKeyName: strPtrOrNil("key-b")}}
+	if nameServerValuesEqual(a, b) {
+		t.Error("nameServerValuesEqual: want false (use_tsig_key_name on, tsig_key_name differs), got true")
+	}
+}
+
+// TestNameServerValuesEqualDetectsUseTsigKeyNameTransition proves the
+// per-item flag comparison stays unconditional even though the value
+// comparison is gated.
+func TestNameServerValuesEqualDetectsUseTsigKeyNameTransition(t *testing.T) {
+	a := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(false)}}
+	b := []nameServerValue{{Name: strPtrOrNil("ns1.example.com"), UseTsigKeyName: boolPtr(true), TsigKeyName: strPtrOrNil("key-b")}}
+	if nameServerValuesEqual(a, b) {
+		t.Error("nameServerValuesEqual: want false (use_tsig_key_name transitioned false -> true), got true")
+	}
+}
+
+// TestAddressAcValuesEqualIgnoresTsigKeyNameWhenFlagOff proves a
+// MatchClients/MatchDestinations/FilterAaaaList entry (which has no outer
+// use flag of its own — see the comparator table's doc comment) still
+// gates its own tsig_key_name on use_tsig_key_name.
+func TestAddressAcValuesEqualIgnoresTsigKeyNameWhenFlagOff(t *testing.T) {
+	a := []addressAcValue{{Address: strPtrOrNil("10.0.0.0/24"), UseTsigKeyName: boolPtr(false), TsigKeyName: strPtrOrNil("key-a")}}
+	b := []addressAcValue{{Address: strPtrOrNil("10.0.0.0/24"), UseTsigKeyName: boolPtr(false), TsigKeyName: strPtrOrNil("key-b")}}
+	if !addressAcValuesEqual(a, b) {
+		t.Error("addressAcValuesEqual: want true (use_tsig_key_name off, tsig_key_name is server-owned), got false")
+	}
+}
+
+// TestAddressAcValuesEqualDetectsTsigKeyNameWhenFlagOn is the flag-on
+// counterpart.
+func TestAddressAcValuesEqualDetectsTsigKeyNameWhenFlagOn(t *testing.T) {
+	a := []addressAcValue{{Address: strPtrOrNil("10.0.0.0/24"), UseTsigKeyName: boolPtr(true), TsigKeyName: strPtrOrNil("key-a")}}
+	b := []addressAcValue{{Address: strPtrOrNil("10.0.0.0/24"), UseTsigKeyName: boolPtr(true), TsigKeyName: strPtrOrNil("key-b")}}
+	if addressAcValuesEqual(a, b) {
+		t.Error("addressAcValuesEqual: want false (use_tsig_key_name on, tsig_key_name differs), got true")
+	}
+}
+
+// ── lateInitializeFields gating (mirrors the isUpToDate gate) ───────────
+
+// TestLateInitializeGatesStringSliceWhenFlagOff proves a []string field
+// gated by a use flag (Forwarders/UseForwarders) is not back-filled while
+// the flag is off.
+func TestLateInitializeGatesStringSliceWhenFlagOff(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseForwarders: boolPtr(false)}
+	observed := dnsViewFields{Name: stringPtr("v"), UseForwarders: boolPtr(false), Forwarders: []string{"8.8.8.8"}}
+
+	got, _ := lateInitializeFields(desired, observed)
+	if len(got.Forwarders) != 0 {
+		t.Errorf("lateInitializeFields: Forwarders = %v, want empty (UseForwarders is off)", got.Forwarders)
+	}
+}
+
+// TestLateInitializeGatesNestedSliceWhenFlagOff proves a nested-value-bag
+// slice gated by an outer use flag (CustomRootNameServers/
+// UseRootNameServer) is not back-filled while the flag is off.
+func TestLateInitializeGatesNestedSliceWhenFlagOff(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v"), UseRootNameServer: boolPtr(false)}
+	observed := dnsViewFields{
+		Name:                  stringPtr("v"),
+		UseRootNameServer:     boolPtr(false),
+		CustomRootNameServers: []nameServerValue{{Name: strPtrOrNil("ns1.example.com")}},
+	}
+
+	got, _ := lateInitializeFields(desired, observed)
+	if len(got.CustomRootNameServers) != 0 {
+		t.Errorf("lateInitializeFields: CustomRootNameServers = %v, want empty (UseRootNameServer is off)", got.CustomRootNameServers)
+	}
+}
+
+// TestLateInitializeGatesUsingEffectiveFlagFromObserved proves the gate
+// resolves the flag's *effective* value — the one observed will back-fill
+// to, since desired leaves it nil — rather than depending on which op in
+// the table happens to run first. Op ordering in dnsViewLateInitOps places
+// several gated values before their own flag's op; if the gate read
+// desired.UseX directly (nil at that point) instead of falling through to
+// observed.UseX, it would wrongly treat "unset" as "off" even when
+// observed will back-fill the flag to true in the very same call.
+func TestLateInitializeGatesUsingEffectiveFlagFromObserved(t *testing.T) {
+	desired := dnsViewFields{Name: stringPtr("v")} // UseLameTTL unset
+	observed := dnsViewFields{
+		Name:       stringPtr("v"),
+		UseLameTTL: boolPtr(true),
+		LameTTL:    int64Ptr(45),
+	}
+
+	got, _ := lateInitializeFields(desired, observed)
+	if got.LameTTL == nil || *got.LameTTL != 45 {
+		t.Errorf("lateInitializeFields: LameTTL = %v, want 45 (UseLameTTL will back-fill to true from observed)", got.LameTTL)
+	}
+}
+
+// ── V.C51-class fix: nestedSliceEqual empty/nil equivalence ─────────────
+
+// TestNestedSliceEqualTreatsNilAndEmptyAsEqual proves nestedSliceEqual
+// (used for DnssecTrustedKeys, FixedRrsetOrderFqdns, Sortlist, and every
+// other nested-value-bag list without its own use-flag pair) does not
+// report drift when one side is an explicit nil slice (as would arrive
+// from a WAPI response that omits an empty list) and the other is a
+// non-nil empty slice built by the CRD's own conversion helpers.
+func TestNestedSliceEqualTreatsNilAndEmptyAsEqual(t *testing.T) {
+	var nilSide []dnssecTrustedKeyValue
+	emptySide := []dnssecTrustedKeyValue{}
+	if !nestedSliceEqual(nilSide, emptySide) {
+		t.Error("nestedSliceEqual: want true for nil vs empty slice, got false (non-convergent drift comparison)")
 	}
 }
