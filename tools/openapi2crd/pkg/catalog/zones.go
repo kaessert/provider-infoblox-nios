@@ -117,6 +117,13 @@ func zoneAuth() ResourceDescriptor {
 				Description: "Number of seconds a secondary server waits before retrying the primary server after a failed connection.",
 			},
 			{
+				Name:        "UseGridZoneTimer",
+				JSONName:    "useGridZoneTimer",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Whether the zone uses the Grid's SOA timer settings (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry) or its own. When false, the zone inherits the Grid's timer values regardless of what is set on this resource.",
+			},
+			{
 				Name:        "NsGroup",
 				JSONName:    "nsGroup",
 				GoType:      goTypeString,
