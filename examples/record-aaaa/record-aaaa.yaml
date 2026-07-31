@@ -50,6 +50,14 @@ metadata:
     # create-time-only next-available-IP allocation inputs (ignored on
     # Update per the SDK). removeAssociatedPtr is a write-only delete-time
     # option, never present in the observed state.
+    # useTtl is then flipped back to false as the final tested entry.
+    # That reverse direction is the half that regressed in the field: the
+    # flip must still be detected as drift, and once the flag is off the
+    # ttl value must stop being compared at all — spec.forProvider.ttl
+    # stays at 3600 while WAPI reports the zone default in
+    # status.atProvider.ttl, and that divergence is correct. Step C of
+    # the hook runs with the flag off and fails the build if the
+    # resource keeps issuing Update calls in that state.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester"
@@ -59,6 +67,8 @@ metadata:
         value: true
       - field: ttl
         value: 3600
+      - field: useTtl
+        value: false
       - field: name
         skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
       - field: extAttrs
