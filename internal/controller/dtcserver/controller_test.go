@@ -1335,6 +1335,29 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeDoesNotBackfillSniHostnameWhenUseSniHostnameOff
+// proves that when useSniHostname is false the observed sniHostname
+// (WAPI's own default, not a value the user's config implies) is never
+// written back into spec.forProvider.sniHostname.
+func TestLateInitializeDoesNotBackfillSniHostnameWhenUseSniHostnameOff(t *testing.T) {
+	var comment, sniHostname *string
+	var disable, autoCreateHostRecord *bool
+	useSniHostname := boolPtr(false)
+	var monitors []monitorPair
+	var extAttrs map[string]string
+
+	rec := &ibclient.DtcServer{
+		SniHostname:    stringPtr("server-default.example.com"),
+		UseSniHostname: boolPtr(false),
+	}
+
+	lateInitialize(&comment, &disable, &autoCreateHostRecord, &useSniHostname, &sniHostname, &monitors, &extAttrs, rec)
+
+	if sniHostname != nil {
+		t.Errorf("lateInitialize: sniHostname = %v, want nil (useSniHostname is off, observed sniHostname is the server's own default, not a user value)", *sniHostname)
+	}
+}
+
 func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 	// name and host are required fields — lateInitialize has no
 	// parameters for them at all, so this test simply pins that
@@ -1424,6 +1447,43 @@ func TestIsUpToDate(t *testing.T) {
 				t.Errorf("%s: isUpToDate() = %v, want %v", name, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsUpToDateIgnoresSniHostnameWhenUseSniHostnameOff proves the
+// sniHostname comparison is gated on useSniHostname. When it is false,
+// WAPI ignores the submitted sniHostname and returns its own default on
+// every GET — the spec value and the observed value are unrelated
+// quantities, and comparing them unconditionally can never converge.
+func TestIsUpToDateIgnoresSniHostnameWhenUseSniHostnameOff(t *testing.T) {
+	rec := &ibclient.DtcServer{
+		Name:           stringPtr("my-dtc-server"),
+		Host:           stringPtr("2.3.4.5"),
+		SniHostname:    stringPtr("server-default.example.com"),
+		UseSniHostname: boolPtr(false),
+	}
+
+	got := isUpToDate(rec.Name, rec.Host, nil, nil, nil, boolPtr(false), stringPtr("user-value.example.com"), nil, nil, rec)
+	if !got {
+		t.Error("isUpToDate: want true when useSniHostname is off and only the server-owned sniHostname differs, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsUseSniHostnameTransition proves a
+// useSniHostname true -> false transition is still detected as drift
+// even though the value comparison is gated off. The flag comparison
+// must be unconditional.
+func TestIsUpToDateDetectsUseSniHostnameTransition(t *testing.T) {
+	rec := &ibclient.DtcServer{
+		Name:           stringPtr("my-dtc-server"),
+		Host:           stringPtr("2.3.4.5"),
+		SniHostname:    stringPtr("sni.example.com"),
+		UseSniHostname: boolPtr(true),
+	}
+
+	got := isUpToDate(rec.Name, rec.Host, nil, nil, nil, boolPtr(false), stringPtr("sni.example.com"), nil, nil, rec)
+	if got {
+		t.Error("isUpToDate: want false on a useSniHostname true -> false transition, got true (drift not detected)")
 	}
 }
 

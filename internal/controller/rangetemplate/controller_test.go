@@ -1147,6 +1147,32 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff proves that
+// when useOptions is false the observed DHCP options (WAPI's own default
+// set, not values the user's config implies) are never written back into
+// spec.forProvider.options.
+func TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff(t *testing.T) {
+	var comment *string
+	var extAttrs map[string]string
+	var options []templateOption
+	useOptions := boolPtr(false)
+	var serverAssociationType string
+	var failoverAssociation *string
+	var member *templateMember
+	var cloudApiCompatible *bool
+
+	rec := &ibclient.Rangetemplate{
+		Options:    []*ibclient.Dhcpoption{{Name: "server-option"}},
+		UseOptions: boolPtr(false),
+	}
+
+	lateInitialize(&comment, &extAttrs, &options, &useOptions, &serverAssociationType, &failoverAssociation, &member, &cloudApiCompatible, rec)
+
+	if len(options) != 0 {
+		t.Errorf("lateInitialize: options = %+v, want empty (useOptions is off, observed options are the server's own default set, not user values)", options)
+	}
+}
+
 // TestObserveDoesNotLateInitializeRequiredFields proves that name,
 // numberOfAddresses, and offset — the CRD's required
 // RangeTemplateParameters fields — are never overwritten by Observe()'s
@@ -1314,12 +1340,54 @@ func TestIsUpToDateDetectsOptionsDrift(t *testing.T) {
 		NumberOfAddresses: uint32Ptr(10),
 		Offset:            uint32Ptr(5),
 		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
+		UseOptions:        boolPtr(true),
 	}
 	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
 
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, nil, "", nil, nil, nil, rec)
+	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(true), "", nil, nil, nil, rec)
 	if got {
 		t.Error("isUpToDate: changed option value not detected as drift")
+	}
+}
+
+// TestIsUpToDateIgnoresOptionsWhenUseOptionsOff proves the options
+// comparison is gated on useOptions. When useOptions is off, WAPI ignores
+// the submitted options and returns its own default set on every GET —
+// the spec options and the observed options are unrelated, and comparing
+// them unconditionally can never converge.
+func TestIsUpToDateIgnoresOptionsWhenUseOptionsOff(t *testing.T) {
+	rec := &ibclient.Rangetemplate{
+		Name:              stringPtr("template1"),
+		NumberOfAddresses: uint32Ptr(10),
+		Offset:            uint32Ptr(5),
+		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
+		UseOptions:        boolPtr(false),
+	}
+	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
+
+	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(false), "", nil, nil, nil, rec)
+	if !got {
+		t.Error("isUpToDate: want true when useOptions is off and only the server-owned options differ, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsUseOptionsTransition proves a useOptions
+// true -> false transition is still detected as drift even though the
+// value comparison is gated off. The flag comparison must be
+// unconditional.
+func TestIsUpToDateDetectsUseOptionsTransition(t *testing.T) {
+	rec := &ibclient.Rangetemplate{
+		Name:              stringPtr("template1"),
+		NumberOfAddresses: uint32Ptr(10),
+		Offset:            uint32Ptr(5),
+		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
+		UseOptions:        boolPtr(true),
+	}
+	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")}}
+
+	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(false), "", nil, nil, nil, rec)
+	if got {
+		t.Error("isUpToDate: want false on a useOptions true -> false transition, got true (drift not detected)")
 	}
 }
 

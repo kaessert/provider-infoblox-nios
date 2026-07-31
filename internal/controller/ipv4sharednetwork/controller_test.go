@@ -673,6 +673,39 @@ func TestClusterObserveDetectsCommentDrift(t *testing.T) {
 	}
 }
 
+// TestClusterObserveDoesNotBackfillOptionsWhenUseOptionsOff proves that
+// when useOptions is false the observed DHCP options (WAPI's own default
+// set, not values the user's config implies) are never late-initialized
+// into spec.forProvider.options.
+func TestClusterObserveDoesNotBackfillOptionsWhenUseOptionsOff(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	name := testSharedNetworkName
+	ref := m.seed(&storedSharedNetwork{
+		Name:        &name,
+		NetworkView: testNamespace,
+		Networks:    []string{testCIDR1},
+		UseOptions:  boolPtr(false),
+		Options:     optionsToSDK([]sharedNetworkDhcpOption{{Name: stringPtr("routers"), Num: func() *uint32 { v := uint32(3); return &v }()}}),
+	})
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterIPv4SharedNetwork("my-network", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if len(cr.Spec.ForProvider.Options) != 0 {
+		t.Errorf("Observe: spec.forProvider.options = %+v, want empty (useOptions is off, observed options are the server's own default set, not user values)", cr.Spec.ForProvider.Options)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true when useOptions is off and only the server-owned options differ, got false (non-convergent drift comparison)")
+	}
+}
+
 func TestClusterObserveDetectsNetworksDrift(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -1525,11 +1558,42 @@ func TestIsUpToDate(t *testing.T) {
 			want:       false,
 		},
 		{
-			testName: "options drift",
-			options:  matchingOpts,
+			testName:   "options drift",
+			useOptions: boolPtr(true),
+			options:    matchingOpts,
 			sn: &ibclient.SharedNetwork{
 				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
-				Options: optionsToSDK([]sharedNetworkDhcpOption{{Name: stringPtr("dns-servers"), Num: func() *uint32 { v := uint32(6); return &v }()}}),
+				UseOptions: boolPtr(true),
+				Options:    optionsToSDK([]sharedNetworkDhcpOption{{Name: stringPtr("dns-servers"), Num: func() *uint32 { v := uint32(6); return &v }()}}),
+			},
+			want: false,
+		},
+		{
+			// When useOptions is off, WAPI ignores the submitted options
+			// and returns its own default set on every GET — the spec
+			// options and observed options are unrelated quantities, so
+			// this comparison must NOT report drift.
+			testName:   "options ignored when useOptions is off",
+			useOptions: boolPtr(false),
+			options:    matchingOpts,
+			sn: &ibclient.SharedNetwork{
+				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
+				UseOptions: boolPtr(false),
+				Options:    optionsToSDK([]sharedNetworkDhcpOption{{Name: stringPtr("dns-servers"), Num: func() *uint32 { v := uint32(6); return &v }()}}),
+			},
+			want: true,
+		},
+		{
+			// A useOptions true -> false transition must still be
+			// detected as drift even though the options value comparison
+			// is gated off.
+			testName:   "useOptions transition true to false is detected",
+			useOptions: boolPtr(false),
+			options:    matchingOpts,
+			sn: &ibclient.SharedNetwork{
+				Name: &name, Comment: stringPtr("hello"), Networks: []*ibclient.Ipv4Network{{Ref: testCIDR1}},
+				UseOptions: boolPtr(true),
+				Options:    optionsToSDK(matchingOpts),
 			},
 			want: false,
 		},

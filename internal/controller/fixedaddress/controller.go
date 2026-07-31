@@ -543,10 +543,19 @@ func isUpToDateDHCP(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
 	if strOrEmpty(f.DHCPClientIdentifier) != strOrEmpty(fa.DhcpClientIdentifier) {
 		return false
 	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(f.UseOptions) != boolOrFalse(fa.UseOptions) {
 		return false
 	}
-	return dhcpOptionsEqual(f.Options, dhcpOptionsFromSDK(fa.Options))
+	// Only compare options when the flag is on. When it is off, WAPI
+	// ignores the submitted DHCP options and returns its own default set
+	// on every GET — comparing them against the spec value never
+	// converges.
+	if boolOrFalse(f.UseOptions) {
+		return dhcpOptionsEqual(f.Options, dhcpOptionsFromSDK(fa.Options))
+	}
+	return true
 }
 
 // lateInitialize back-fills server-defaulted optional fields from the
@@ -689,16 +698,19 @@ func lateInitializeDHCPOptions(f *fixedAddressFields, fa *ibclient.FixedAddress)
 		f.DHCPClientIdentifier = &v
 		changed = true
 	}
-	if len(f.Options) == 0 {
-		if fromFA := dhcpOptionsFromSDK(fa.Options); len(fromFA) > 0 {
-			f.Options = fromFA
-			changed = true
-		}
-	}
 	if f.UseOptions == nil && fa.UseOptions != nil {
 		v := *fa.UseOptions
 		f.UseOptions = &v
 		changed = true
+	}
+	// Only back-fill options when useOptions is on (post-backfill value
+	// above). When it is off, the observed options are WAPI's own
+	// default set, not values implied by the user's config.
+	if len(f.Options) == 0 && boolOrFalse(f.UseOptions) {
+		if fromFA := dhcpOptionsFromSDK(fa.Options); len(fromFA) > 0 {
+			f.Options = fromFA
+			changed = true
+		}
 	}
 
 	return changed

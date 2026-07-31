@@ -1349,6 +1349,29 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff proves that
+// when useOptions is false the observed DHCP options (WAPI's own default
+// set, not values the user's config implies) are never written back into
+// spec.forProvider.options.
+func TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff(t *testing.T) {
+	f := &fixedAddressFields{
+		IPv4Addr: stringPtr("10.0.0.5"),
+	}
+	fa := &ibclient.FixedAddress{
+		IPv4Address: "10.0.0.5",
+		UseOptions:  boolPtr(false),
+		Options: []*ibclient.Dhcpoption{
+			{Name: "routers", Value: "10.0.0.1"},
+		},
+	}
+
+	lateInitialize(f, fa)
+
+	if len(f.Options) != 0 {
+		t.Errorf("lateInitialize: Options = %+v, want empty (useOptions is off, observed options are the server's own default set, not user values)", f.Options)
+	}
+}
+
 func TestLateInitializeResolvesDynamicAllocationAddress(t *testing.T) {
 	f := &fixedAddressFields{IPv4Addr: stringPtr(""), Network: stringPtr("10.0.0.0/24")}
 	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.42", Cidr: "10.0.0.0/24"}
@@ -1485,6 +1508,55 @@ func TestIsUpToDate(t *testing.T) {
 				t.Errorf("%s: isUpToDate: want false, got true", tc.reason)
 			}
 		})
+	}
+}
+
+// TestIsUpToDateIgnoresOptionsWhenUseOptionsOff proves the options
+// comparison is gated on useOptions. When it is false, WAPI ignores the
+// submitted DHCP options and returns its own default set on every GET —
+// the spec options and the observed options are unrelated, and comparing
+// them unconditionally can never converge.
+func TestIsUpToDateIgnoresOptionsWhenUseOptionsOff(t *testing.T) {
+	f := fixedAddressFields{
+		IPv4Addr:    stringPtr("10.0.0.5"),
+		NetworkView: stringPtr("default"),
+		UseOptions:  boolPtr(false),
+		Options:     []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}},
+	}
+	fa := &ibclient.FixedAddress{
+		IPv4Address: "10.0.0.5",
+		NetviewName: "default",
+		UseOptions:  boolPtr(false),
+		Options: []*ibclient.Dhcpoption{
+			{Name: "routers", Value: "10.0.0.1"},
+		},
+	}
+	if !isUpToDate(f, fa) {
+		t.Error("isUpToDate: want true when useOptions is off and only the server-owned options differ, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsUseOptionsTransition proves a useOptions
+// true -> false transition is still detected as drift even though the
+// value comparison is gated off. The flag comparison must be
+// unconditional.
+func TestIsUpToDateDetectsUseOptionsTransition(t *testing.T) {
+	f := fixedAddressFields{
+		IPv4Addr:    stringPtr("10.0.0.5"),
+		NetworkView: stringPtr("default"),
+		UseOptions:  boolPtr(false),
+		Options:     []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")}},
+	}
+	fa := &ibclient.FixedAddress{
+		IPv4Address: "10.0.0.5",
+		NetviewName: "default",
+		UseOptions:  boolPtr(true),
+		Options: []*ibclient.Dhcpoption{
+			{Name: "routers", Value: "10.0.0.1"},
+		},
+	}
+	if isUpToDate(f, fa) {
+		t.Error("isUpToDate: want false on a useOptions true -> false transition, got true (drift not detected)")
 	}
 }
 

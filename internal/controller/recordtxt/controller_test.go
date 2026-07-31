@@ -1315,6 +1315,27 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff proves that when
+// useTtl is false the observed ttl (WAPI's zone default, not a value the
+// user's config implies) is never written back into spec.forProvider.ttl.
+func TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff(t *testing.T) {
+	var comment *string
+	var ttl *uint32
+	useTTL := boolPtr(false)
+	extAttrs := map[string]string(nil)
+
+	rec := &ibclient.RecordTXT{
+		Ttl:    uint32Ptr(28800),
+		UseTtl: boolPtr(false),
+	}
+
+	lateInitialize(&comment, &ttl, &useTTL, &extAttrs, rec)
+
+	if ttl != nil {
+		t.Errorf("lateInitialize: ttl = %v, want nil (useTtl is off, observed ttl is the zone default, not a user value)", *ttl)
+	}
+}
+
 // TestObserveDoesNotLateInitializeRequiredFields proves that name, text,
 // and view — the CRD's required TXTRecordParameters fields — are never
 // overwritten by Observe()'s late-init step. lateInitialize only accepts
@@ -1432,6 +1453,62 @@ func TestIsUpToDate(t *testing.T) {
 				t.Errorf("%s: isUpToDate() = %v, want %v", name, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsUpToDateIgnoresTTLWhenUseTTLOff proves the ttl comparison is
+// gated on useTtl. When useTtl is false, WAPI ignores the submitted ttl
+// and returns the zone default (a realistic non-zero value, not 0) on
+// every GET — the spec ttl and the observed ttl are unrelated
+// quantities, and comparing them unconditionally can never converge.
+func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
+	observed := &ibclient.RecordTXT{
+		Name:    stringPtr("host.example.com"),
+		Text:    stringPtr("v=spf1 -all"),
+		Comment: stringPtr("hello"),
+		Ttl:     uint32Ptr(28800),
+		UseTtl:  boolPtr(false),
+		Ea:      ibclient.EA{"env": "prod"},
+	}
+
+	got := isUpToDate(
+		stringPtr("host.example.com"),
+		stringPtr("v=spf1 -all"),
+		stringPtr("hello"),
+		uint32Ptr(0),
+		boolPtr(false),
+		map[string]string{"env": "prod"},
+		observed,
+	)
+	if !got {
+		t.Error("isUpToDate: want true when useTtl is off and only the server-owned ttl differs, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsUseTTLTransition proves a useTtl true -> false
+// transition is still detected as drift even though the value comparison
+// is gated off. The flag comparison must be unconditional.
+func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
+	observed := &ibclient.RecordTXT{
+		Name:    stringPtr("host.example.com"),
+		Text:    stringPtr("v=spf1 -all"),
+		Comment: stringPtr("hello"),
+		Ttl:     uint32Ptr(300),
+		UseTtl:  boolPtr(true),
+		Ea:      ibclient.EA{"env": "prod"},
+	}
+
+	got := isUpToDate(
+		stringPtr("host.example.com"),
+		stringPtr("v=spf1 -all"),
+		stringPtr("hello"),
+		uint32Ptr(300),
+		boolPtr(false),
+		map[string]string{"env": "prod"},
+		observed,
+	)
+	if got {
+		t.Error("isUpToDate: want false on a useTtl true -> false transition, got true (drift not detected)")
 	}
 }
 

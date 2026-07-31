@@ -323,11 +323,18 @@ func isUpToDate(name, mailExchanger *string, preference *int64, comment *string,
 	if strOrEmpty(comment) != strOrEmpty(rec.Comment) {
 		return false
 	}
-	if ttlOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
-		return false
-	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
 	if boolOrFalse(useTTL) != boolPtrOrFalse(rec.UseTtl) {
 		return false
+	}
+	// Only compare the value when the flag is on. When it is off, WAPI
+	// ignores the submitted ttl and returns the zone default on every
+	// GET — comparing it against the spec value never converges.
+	if boolOrFalse(useTTL) {
+		if ttlOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
+			return false
+		}
 	}
 	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
 }
@@ -347,14 +354,18 @@ func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[
 		*comment = &c
 		changed = true
 	}
-	if *ttl == nil && rec.Ttl != nil {
-		t := int64(*rec.Ttl)
-		*ttl = &t
-		changed = true
-	}
 	if *useTTL == nil && rec.UseTtl != nil {
 		u := *rec.UseTtl
 		*useTTL = &u
+		changed = true
+	}
+	// Only back-fill ttl when useTtl is on (post-backfill value above).
+	// When it is off, the observed ttl is WAPI's zone default, not a
+	// value implied by the user's config — writing it into spec would
+	// silently claim a TTL that is not in effect.
+	if *ttl == nil && rec.Ttl != nil && boolOrFalse(*useTTL) {
+		t := int64(*rec.Ttl)
+		*ttl = &t
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
