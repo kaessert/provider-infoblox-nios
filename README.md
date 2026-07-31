@@ -1728,6 +1728,26 @@ kubectl apply -f examples/dtc-lbdn/dtc-lbdn.yaml
 kubectl apply -f examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
 ```
 
+## Upgrade Notes
+
+### TTL field type unification (ARecord, AAAARecord, CNAMERecord, MXRecord, SRVRecord)
+
+The `ttl` field on `ARecord`, `AAAARecord`, `CNAMERecord`, `MXRecord`, and
+`SRVRecord` (both cluster-scoped and namespace-scoped, `spec.forProvider.ttl`
+and `status.atProvider.ttl`) changed its CRD schema format from `int64` to
+`int32`. This aligns `ttl` with every other DNS record type in the provider,
+all of which already used the 32-bit form.
+
+No existing value is out of range — `ttl` has always been constrained to
+`0`-`2147483647` (unsigned 32-bit) by the CRD's `minimum`/`maximum` markers,
+and that constraint is unchanged. This is a schema-shape change only, not a
+behavior change.
+
+**Action required:** reapply the CRDs for these five kinds after upgrading
+the provider (`kubectl apply -f package/crds/`, or let your package manager
+do it as part of the provider upgrade). Existing managed resources do not
+need to be re-created.
+
 ## Development
 
 ```bash

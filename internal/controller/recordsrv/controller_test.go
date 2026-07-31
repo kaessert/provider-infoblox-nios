@@ -384,7 +384,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.TTL = int64Ptr(300)
+	cr.Spec.ForProvider.TTL = uint32Ptr(300)
 	cr.Spec.ForProvider.UseTTL = boolPtr(true)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
@@ -1293,7 +1293,7 @@ func (e *genericStatusError) Error() string {
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	var useTTL *bool
 	extAttrs := map[string]string(nil)
 
@@ -1324,7 +1324,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
-	ttl := int64Ptr(120)
+	ttl := uint32Ptr(120)
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string{"env": "staging"}
 
@@ -1349,7 +1349,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 // user's config implies) is never written back into spec.forProvider.ttl.
 func TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string(nil)
 
@@ -1438,80 +1438,81 @@ func TestIsUpToDate(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		mutate                      func(rec *ibclient.RecordSRV)
-		name, target, comment       *string
-		priority, weight, port, ttl *int64
-		useTTL                      *bool
-		extAttrs                    map[string]string
-		want                        bool
+		mutate                 func(rec *ibclient.RecordSRV)
+		name, target, comment  *string
+		priority, weight, port *int64
+		ttl                    *uint32
+		useTTL                 *bool
+		extAttrs               map[string]string
+		want                   bool
 	}{
 		"AllFieldsMatch": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     true,
 		},
 		"NameDiffers": {
 			name: stringPtr("_other._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"TargetDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("other.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"PriorityDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(99), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"WeightDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(99), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"PortDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(9999),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"CommentDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("goodbye"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("goodbye"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"TTLDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(60), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(60), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"UseTTLDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(false),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(false),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"ExtAttrsDiffer": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
 			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
-			comment: stringPtr("hello"), ttl: int64Ptr(300), useTTL: boolPtr(true),
+			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "staging"},
 			want:     false,
 		},
@@ -1551,7 +1552,7 @@ func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
 
 	got := isUpToDate(
 		stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), stringPtr("hello"),
-		int64Ptr(10), int64Ptr(20), int64Ptr(5060), int64Ptr(0), boolPtr(false),
+		int64Ptr(10), int64Ptr(20), int64Ptr(5060), uint32Ptr(0), boolPtr(false),
 		map[string]string{"env": "prod"}, observed,
 	)
 	if !got {
@@ -1577,7 +1578,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 
 	got := isUpToDate(
 		stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), stringPtr("hello"),
-		int64Ptr(10), int64Ptr(20), int64Ptr(5060), int64Ptr(300), boolPtr(false),
+		int64Ptr(10), int64Ptr(20), int64Ptr(5060), uint32Ptr(300), boolPtr(false),
 		map[string]string{"env": "prod"}, observed,
 	)
 	if got {

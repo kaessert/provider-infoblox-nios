@@ -123,7 +123,7 @@ func hostRecord() ResourceDescriptor {
 			{
 				Name:        "TTL",
 				JSONName:    "ttl",
-				GoType:      "*uint32",
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Minimum:     int64Ptr(ttlMinimumSeconds),
 				Maximum:     int64Ptr(ttlMaximumSeconds),

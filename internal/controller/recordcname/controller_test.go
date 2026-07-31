@@ -35,7 +35,7 @@ import (
 // ── generic helpers ─────────────────────────────────────────────────────────
 
 func stringPtr(s string) *string { return &s }
-func int64Ptr(i int64) *int64    { return &i }
+func uint32Ptr(i uint32) *uint32 { return &i }
 func boolPtr(b bool) *bool       { return &b }
 
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
@@ -368,7 +368,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterCNAMERecord("my-cname", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.TTL = int64Ptr(300)
+	cr.Spec.ForProvider.TTL = uint32Ptr(300)
 	cr.Spec.ForProvider.UseTTL = boolPtr(true)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
@@ -1274,7 +1274,7 @@ func (e *genericStatusError) Error() string {
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	var useTTL *bool
 	extAttrs := map[string]string(nil)
 
@@ -1306,7 +1306,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
-	ttl := int64Ptr(120)
+	ttl := uint32Ptr(120)
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string{"env": "staging"}
 
@@ -1332,7 +1332,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 // user's config implies) is never written back into spec.forProvider.ttl.
 func TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string(nil)
 
@@ -1408,7 +1408,7 @@ func TestIsUpToDate(t *testing.T) {
 		name      *string
 		canonical *string
 		comment   *string
-		ttl       *int64
+		ttl       *uint32
 		useTTL    *bool
 		extAttrs  map[string]string
 		want      bool
@@ -1418,7 +1418,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      true,
@@ -1428,7 +1428,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("renamed.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      false,
@@ -1438,7 +1438,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("othertarget.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      false,
@@ -1448,7 +1448,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("goodbye"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      false,
@@ -1458,7 +1458,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(600),
+			ttl:       uint32Ptr(600),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      false,
@@ -1468,7 +1468,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(false),
 			extAttrs:  map[string]string{"env": "prod"},
 			want:      false,
@@ -1478,7 +1478,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"env": "staging"},
 			want:      false,
@@ -1488,7 +1488,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:      stringPtr("alias.example.com"),
 			canonical: stringPtr("target.example.com"),
 			comment:   stringPtr("hello"),
-			ttl:       int64Ptr(300),
+			ttl:       uint32Ptr(300),
 			useTTL:    boolPtr(true),
 			extAttrs:  map[string]string{"owner": "platform-team"},
 			want:      false,
@@ -1525,7 +1525,7 @@ func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
 		stringPtr("alias.example.com"),
 		stringPtr("target.example.com"),
 		stringPtr("hello"),
-		int64Ptr(0),
+		uint32Ptr(0),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1553,7 +1553,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 		stringPtr("alias.example.com"),
 		stringPtr("target.example.com"),
 		stringPtr("hello"),
-		int64Ptr(300),
+		uint32Ptr(300),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1566,7 +1566,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 func TestTTLOrZero(t *testing.T) {
 	cases := map[string]struct {
 		reason string
-		ttl    *int64
+		ttl    *uint32
 		want   uint32
 	}{
 		"Nil": {
@@ -1574,30 +1574,20 @@ func TestTTLOrZero(t *testing.T) {
 			ttl:    nil,
 			want:   0,
 		},
-		"Negative": {
-			reason: "a negative ttl is invalid and must be clamped to zero",
-			ttl:    int64Ptr(-1),
-			want:   0,
-		},
 		"Zero": {
 			reason: "an explicit zero ttl passes through unchanged",
-			ttl:    int64Ptr(0),
+			ttl:    uint32Ptr(0),
 			want:   0,
 		},
 		"Typical": {
 			reason: "a typical ttl value passes through unchanged",
-			ttl:    int64Ptr(300),
+			ttl:    uint32Ptr(300),
 			want:   300,
 		},
 		"MaxUint32": {
 			reason: "the maximum uint32 value passes through unchanged",
-			ttl:    int64Ptr(4294967295),
+			ttl:    uint32Ptr(4294967295),
 			want:   4294967295,
-		},
-		"OutOfRange": {
-			reason: "a ttl beyond uint32 range must be clamped to zero",
-			ttl:    int64Ptr(4294967296),
-			want:   0,
 		},
 	}
 

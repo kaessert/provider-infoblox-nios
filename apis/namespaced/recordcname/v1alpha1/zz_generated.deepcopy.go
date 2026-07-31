@@ -92,7 +92,7 @@ func (in *CNAMERecordObservation) DeepCopyInto(out *CNAMERecordObservation) {
 	}
 	if in.TTL != nil {
 		in, out := &in.TTL, &out.TTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseTTL != nil {
@@ -164,7 +164,7 @@ func (in *CNAMERecordParameters) DeepCopyInto(out *CNAMERecordParameters) {
 	}
 	if in.TTL != nil {
 		in, out := &in.TTL, &out.TTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseTTL != nil {

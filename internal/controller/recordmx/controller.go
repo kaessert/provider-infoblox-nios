@@ -13,7 +13,6 @@ package recordmx
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -216,21 +215,10 @@ func extAttrsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// ttlOrZero converts an optional *int64 TTL into the uint32 the SDK
-// expects. TTL is a DNS time-to-live in seconds; values outside the valid
-// uint32 range (or negative) are clamped to 0 rather than silently
-// wrapping — CEL/CRD validation on the ForProvider field is expected to
-// reject out-of-range values before they ever reach this helper.
-func ttlOrZero(ttl *int64) uint32 {
-	if ttl == nil || *ttl < 0 || *ttl > math.MaxUint32 {
-		return 0
-	}
-	return uint32(*ttl)
-}
-
 // uint32PtrOrZero converts an optional *uint32 field (TTL or Preference,
 // as returned by the SDK) into a plain uint32 for comparison against
-// ttlOrZero/preferenceOrZero.
+// preferenceOrZero, or used directly for TTL (also *uint32 in
+// ForProvider).
 func uint32PtrOrZero(v *uint32) uint32 {
 	if v == nil {
 		return 0
@@ -310,7 +298,7 @@ func isNotFound(err error) bool {
 // view+zone+name; the CRD's XValidation rule rejects any spec change to
 // it) and is intentionally excluded from this comparison — the API can
 // never see a drifted view coming from spec.
-func isUpToDate(name, mailExchanger *string, preference *int64, comment *string, ttl *int64, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordMX) bool {
+func isUpToDate(name, mailExchanger *string, preference *int64, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordMX) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
 	}
@@ -332,7 +320,7 @@ func isUpToDate(name, mailExchanger *string, preference *int64, comment *string,
 	// ignores the submitted ttl and returns the zone default on every
 	// GET — comparing it against the spec value never converges.
 	if boolOrFalse(useTTL) {
-		if ttlOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
+		if uint32PtrOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
 			return false
 		}
 	}
@@ -346,7 +334,7 @@ func isUpToDate(name, mailExchanger *string, preference *int64, comment *string,
 // are never late-initialized — view is always user-supplied (required on
 // the CRD) and name/mailExchanger/preference are always user-supplied
 // too. Returns true if any field was changed.
-func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordMX) bool {
+func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordMX) bool {
 	changed := false
 
 	if *comment == nil && rec.Comment != nil && *rec.Comment != "" {
@@ -364,7 +352,7 @@ func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[
 	// value implied by the user's config — writing it into spec would
 	// silently claim a TTL that is not in effect.
 	if *ttl == nil && rec.Ttl != nil && boolOrFalse(*useTTL) {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		*ttl = &t
 		changed = true
 	}
@@ -389,7 +377,7 @@ type observedMXRecord struct {
 	MailExchanger *string
 	Preference    *int64
 	Comment       *string
-	TTL           *int64
+	TTL           *uint32
 	UseTTL        *bool
 	ExtAttrs      map[string]string
 	View          *string
@@ -420,7 +408,7 @@ func observeFromRecordMX(externalID string, rec *ibclient.RecordMX) observedMXRe
 		o.Comment = &c
 	}
 	if rec.Ttl != nil {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		o.TTL = &t
 	}
 	if rec.UseTtl != nil {
@@ -445,13 +433,13 @@ func observeFromRecordMX(externalID string, rec *ibclient.RecordMX) observedMXRe
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
 // createMXRecord issues the WAPI create call.
-func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *string, preference *int64, ttl *int64, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
+func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
 	return objMgr.CreateMXRecord(
 		strOrEmpty(view),
 		strOrEmpty(name),
 		strOrEmpty(mailExchanger),
 		preferenceOrZero(preference),
-		ttlOrZero(ttl),
+		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
 		buildEA(extAttrs),
@@ -468,14 +456,14 @@ func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *
 // to it), so p.View is guaranteed to already equal the record's current
 // view; passing it here only satisfies the SDK's required parameter
 // without ever changing the value on the wire.
-func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64, ttl *int64, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
+func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
 	return objMgr.UpdateMXRecord(
 		ref,
 		strOrEmpty(view),
 		strOrEmpty(name),
 		strOrEmpty(mailExchanger),
 		preferenceOrZero(preference),
-		ttlOrZero(ttl),
+		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
 		buildEA(extAttrs),

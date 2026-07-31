@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -415,7 +414,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterMXRecord("my-mxrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.TTL = int64Ptr(300)
+	cr.Spec.ForProvider.TTL = uint32Ptr(300)
 	cr.Spec.ForProvider.UseTTL = boolPtr(true)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
@@ -1357,7 +1356,7 @@ func (e *genericStatusError) Error() string {
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	var useTTL *bool
 	extAttrs := map[string]string(nil)
 
@@ -1388,7 +1387,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
-	ttl := int64Ptr(120)
+	ttl := uint32Ptr(120)
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string{"env": "staging"}
 
@@ -1413,7 +1412,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 // user's config implies) is never written back into spec.forProvider.ttl.
 func TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string(nil)
 
@@ -1497,7 +1496,7 @@ func TestIsUpToDate(t *testing.T) {
 		mailExchanger *string
 		preference    *int64
 		comment       *string
-		ttl           *int64
+		ttl           *uint32
 		useTTL        *bool
 		extAttrs      map[string]string
 		want          bool
@@ -1508,7 +1507,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          true,
@@ -1519,7 +1518,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1530,7 +1529,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail2.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1541,7 +1540,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(20),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1552,7 +1551,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("goodbye"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1563,7 +1562,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(600),
+			ttl:           uint32Ptr(600),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1574,7 +1573,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(false),
 			extAttrs:      map[string]string{"env": "prod"},
 			want:          false,
@@ -1585,7 +1584,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"env": "staging"},
 			want:          false,
@@ -1596,7 +1595,7 @@ func TestIsUpToDate(t *testing.T) {
 			mailExchanger: stringPtr("mail.example.com"),
 			preference:    int64Ptr(10),
 			comment:       stringPtr("hello"),
-			ttl:           int64Ptr(300),
+			ttl:           uint32Ptr(300),
 			useTTL:        boolPtr(true),
 			extAttrs:      map[string]string{"owner": "platform-team"},
 			want:          false,
@@ -1636,7 +1635,7 @@ func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
 		stringPtr("mail.example.com"),
 		int64Ptr(10),
 		stringPtr("hello"),
-		int64Ptr(0),
+		uint32Ptr(0),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1667,7 +1666,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 		stringPtr("mail.example.com"),
 		int64Ptr(10),
 		stringPtr("hello"),
-		int64Ptr(300),
+		uint32Ptr(300),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1732,39 +1731,29 @@ func TestExtAttrsRoundTripTable(t *testing.T) {
 
 // ── ttlOrZero / preferenceOrZero: uint32 conversion edge cases ─────────
 
-func TestTtlOrZero(t *testing.T) {
+func TestUint32PtrOrZero(t *testing.T) {
 	cases := map[string]struct {
 		reason string
-		ttl    *int64
+		v      *uint32
 		want   uint32
 	}{
 		"NilReturnsZero": {
-			reason: "an unset TTL pointer must map to 0 — the WAPI create/update calls take a plain uint32 with no separate unset sentinel",
-			ttl:    nil,
-			want:   0,
-		},
-		"NegativeClampsToZero": {
-			reason: "a negative TTL is invalid for a uint32 wire value and must clamp to 0 rather than wrap around",
-			ttl:    int64Ptr(-1),
+			reason: "an unset pointer must map to 0 — the WAPI create/update calls take a plain uint32 with no separate unset sentinel",
+			v:      nil,
 			want:   0,
 		},
 		"ValidValuePassesThrough": {
-			reason: "an in-range TTL must convert to the identical uint32 value",
-			ttl:    int64Ptr(300),
+			reason: "a set value must pass through unchanged",
+			v:      uint32Ptr(300),
 			want:   300,
-		},
-		"OverflowClampsToZero": {
-			reason: "a TTL larger than uint32 max must clamp to 0 rather than silently truncate",
-			ttl:    int64Ptr(int64(math.MaxUint32) + 1),
-			want:   0,
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := ttlOrZero(tc.ttl)
+			got := uint32PtrOrZero(tc.v)
 			if got != tc.want {
-				t.Errorf("%s: ttlOrZero(%v) = %d, want %d", tc.reason, tc.ttl, got, tc.want)
+				t.Errorf("%s: uint32PtrOrZero(%v) = %d, want %d", tc.reason, tc.v, got, tc.want)
 			}
 		})
 	}

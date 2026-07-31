@@ -9,7 +9,6 @@ package recordaaaa
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +36,7 @@ import (
 // ── generic helpers ─────────────────────────────────────────────────────────
 
 func stringPtr(s string) *string { return &s }
-func int64Ptr(i int64) *int64    { return &i }
+func uint32Ptr(i uint32) *uint32 { return &i }
 func boolPtr(b bool) *bool       { return &b }
 
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
@@ -426,7 +425,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterAAAARecord("my-aaaarecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.TTL = int64Ptr(300)
+	cr.Spec.ForProvider.TTL = uint32Ptr(300)
 	cr.Spec.ForProvider.UseTTL = boolPtr(true)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
@@ -1505,7 +1504,7 @@ func (e *genericStatusError) Error() string {
 
 func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	var useTTL *bool
 	extAttrs := map[string]string(nil)
 
@@ -1536,7 +1535,7 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
-	ttl := int64Ptr(120)
+	ttl := uint32Ptr(120)
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string{"env": "staging"}
 
@@ -1561,7 +1560,7 @@ func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 // user's config implies) is never written back into spec.forProvider.ttl.
 func TestLateInitializeDoesNotBackfillTTLWhenUseTTLOff(t *testing.T) {
 	var comment *string
-	var ttl *int64
+	var ttl *uint32
 	useTTL := boolPtr(false)
 	extAttrs := map[string]string(nil)
 
@@ -1637,7 +1636,7 @@ func TestIsUpToDate(t *testing.T) {
 		name     *string
 		ipv6Addr *string
 		comment  *string
-		ttl      *int64
+		ttl      *uint32
 		useTTL   *bool
 		extAttrs map[string]string
 		want     bool
@@ -1647,7 +1646,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     true,
@@ -1657,7 +1656,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("renamed.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
@@ -1667,7 +1666,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::2"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
@@ -1677,7 +1676,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("goodbye"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
@@ -1687,7 +1686,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(600),
+			ttl:      uint32Ptr(600),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
@@ -1697,7 +1696,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(false),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
@@ -1707,7 +1706,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"env": "staging"},
 			want:     false,
@@ -1717,7 +1716,7 @@ func TestIsUpToDate(t *testing.T) {
 			name:     stringPtr("host.example.com"),
 			ipv6Addr: stringPtr("2001:db8::1"),
 			comment:  stringPtr("hello"),
-			ttl:      int64Ptr(300),
+			ttl:      uint32Ptr(300),
 			useTTL:   boolPtr(true),
 			extAttrs: map[string]string{"owner": "platform-team"},
 			want:     false,
@@ -1754,7 +1753,7 @@ func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
 		stringPtr("host.example.com"),
 		stringPtr("2001:db8::1"),
 		stringPtr("hello"),
-		int64Ptr(0),
+		uint32Ptr(0),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1782,7 +1781,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 		stringPtr("host.example.com"),
 		stringPtr("2001:db8::1"),
 		stringPtr("hello"),
-		int64Ptr(300),
+		uint32Ptr(300),
 		boolPtr(false),
 		map[string]string{"env": "prod"},
 		observed,
@@ -1848,7 +1847,7 @@ func TestExtAttrsRoundTripTable(t *testing.T) {
 func TestTtlOrZero(t *testing.T) {
 	cases := map[string]struct {
 		reason string
-		ttl    *int64
+		ttl    *uint32
 		want   uint32
 	}{
 		"NilReturnsZero": {
@@ -1856,20 +1855,10 @@ func TestTtlOrZero(t *testing.T) {
 			ttl:    nil,
 			want:   0,
 		},
-		"NegativeClampsToZero": {
-			reason: "a negative TTL is invalid for a uint32 wire value and must clamp to 0 rather than wrap around",
-			ttl:    int64Ptr(-1),
-			want:   0,
-		},
 		"ValidValuePassesThrough": {
-			reason: "an in-range TTL must convert to the identical uint32 value",
-			ttl:    int64Ptr(300),
+			reason: "a set TTL must pass through unchanged",
+			ttl:    uint32Ptr(300),
 			want:   300,
-		},
-		"OverflowClampsToZero": {
-			reason: "a TTL larger than uint32 max must clamp to 0 rather than silently truncate",
-			ttl:    int64Ptr(int64(math.MaxUint32) + 1),
-			want:   0,
 		},
 	}
 

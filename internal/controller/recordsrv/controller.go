@@ -216,17 +216,8 @@ func extAttrsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// ttlOrZero converts an optional *int64 TTL into the uint32 the SDK
-// expects. TTL is a DNS time-to-live in seconds; values outside the valid
-// uint32 range (or negative) are clamped to 0 rather than silently
-// wrapping — CEL/CRD validation on the ForProvider field is expected to
-// reject out-of-range values before they ever reach this helper.
-func ttlOrZero(ttl *int64) uint32 {
-	return uint32OrZero(ttl)
-}
-
-// uint32OrZero converts an optional *int64 field (priority, weight, port,
-// ttl — all validated 0-65535 or 0-MaxUint32 by CRD/CEL rules) into the
+// uint32OrZero converts an optional *int64 field (priority, weight, port
+// — all validated 0-65535 or 0-MaxUint32 by CRD/CEL rules) into the
 // uint32 the SDK's CreateSRVRecord/UpdateSRVRecord methods expect. Values
 // outside the valid uint32 range (or negative) are clamped to 0 rather
 // than silently wrapping.
@@ -317,7 +308,7 @@ func isNotFound(err error) bool {
 // RecordSRV. View is immutable (WAPI ties the object's _ref to
 // view+name+zone; the UpdateSRVRecord SDK method has no view parameter)
 // and is intentionally excluded from this comparison.
-func isUpToDate(name, target, comment *string, priority, weight, port, ttl *int64, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordSRV) bool {
+func isUpToDate(name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordSRV) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
 	}
@@ -345,7 +336,7 @@ func isUpToDate(name, target, comment *string, priority, weight, port, ttl *int6
 	// ignores the submitted ttl and returns the zone default on every
 	// GET — comparing it against the spec value never converges.
 	if boolOrFalse(useTTL) {
-		if ttlOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
+		if uint32PtrOrZero(ttl) != uint32PtrOrZero(rec.Ttl) {
 			return false
 		}
 	}
@@ -359,7 +350,7 @@ func isUpToDate(name, target, comment *string, priority, weight, port, ttl *int6
 // field are never late-initialized — view is always user-supplied
 // (required on the CRD) and name/target/priority/weight/port are always
 // user-supplied too. Returns true if any field was changed.
-func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordSRV) bool {
+func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordSRV) bool {
 	changed := false
 
 	if *comment == nil && rec.Comment != nil && *rec.Comment != "" {
@@ -377,7 +368,7 @@ func lateInitialize(comment **string, ttl **int64, useTTL **bool, extAttrs *map[
 	// value implied by the user's config — writing it into spec would
 	// silently claim a TTL that is not in effect.
 	if *ttl == nil && rec.Ttl != nil && boolOrFalse(*useTTL) {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		*ttl = &t
 		changed = true
 	}
@@ -405,7 +396,7 @@ type observedSRVRecord struct {
 	Weight   *int64
 	Port     *int64
 	Comment  *string
-	TTL      *int64
+	TTL      *uint32
 	UseTTL   *bool
 	ExtAttrs map[string]string
 	View     *string
@@ -437,7 +428,7 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 		o.Comment = &c
 	}
 	if rec.Ttl != nil {
-		t := int64(*rec.Ttl)
+		t := *rec.Ttl
 		o.TTL = &t
 	}
 	if rec.UseTtl != nil {
@@ -462,7 +453,7 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
 // createSRVRecord issues the WAPI create call.
-func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
 	return objMgr.CreateSRVRecord(
 		view,
 		strOrEmpty(name),
@@ -470,7 +461,7 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 		uint32OrZero(weight),
 		uint32OrZero(port),
 		strOrEmpty(target),
-		ttlOrZero(ttl),
+		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
 		buildEA(extAttrs),
@@ -483,7 +474,7 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 // every PUT, and any of them changing causes NIOS to mint a new _ref, the
 // caller MUST re-read Ref from the response and refresh the external-name
 // annotation if it changed.
-func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port, ttl *int64, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
 	return objMgr.UpdateSRVRecord(
 		ref,
 		strOrEmpty(name),
@@ -491,7 +482,7 @@ func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, 
 		uint32OrZero(weight),
 		uint32OrZero(port),
 		strOrEmpty(target),
-		ttlOrZero(ttl),
+		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
 		buildEA(extAttrs),
