@@ -378,17 +378,128 @@ func stringSliceEqual(a, b []string) bool {
 	return true
 }
 
-// nestedSliceEqual compares two slices of any nested value-bag type.
-// Length is checked first so a nil slice and an empty slice both compare
-// equal without falling into reflect.DeepEqual's nil-vs-empty distinction.
+// nestedSliceEqual compares two slices of any nested value-bag type. The
+// nil-and-empty check comes first (rather than being folded into the
+// length check below) so a nil slice and an empty slice always compare
+// equal without ever falling into reflect.DeepEqual's nil-vs-empty
+// distinction — reflect.DeepEqual(([]T)(nil), []T{}) is false, which would
+// otherwise report permanent drift whenever the API omits an empty list
+// from its response.
 func nestedSliceEqual[T any](a, b []T) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
 	if len(a) != len(b) {
 		return false
 	}
-	if len(a) == 0 {
+	return reflect.DeepEqual(a, b)
+}
+
+// gatedBoolEqual compares a bool field that only applies while its use
+// flag is on. When the flag is off, the WAPI SDK documents the field as
+// grid/parent-inherited (the response echoes the server's own default,
+// not what was submitted), so the two sides are unrelated quantities and
+// the comparison always reports true — the flag's own (unconditional)
+// comparator is what actually detects drift on the flag itself.
+func gatedBoolEqual(useFlag, desired, observed *bool) bool {
+	if !boolOrFalse(useFlag) {
 		return true
 	}
-	return reflect.DeepEqual(a, b)
+	return boolOrFalse(desired) == boolOrFalse(observed)
+}
+
+// gatedStringEqual is the string-field variant of gatedBoolEqual.
+func gatedStringEqual(useFlag *bool, desired, observed *string) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return strOrEmpty(desired) == strOrEmpty(observed)
+}
+
+// gatedInt64Equal is the *int64-field variant of gatedBoolEqual.
+func gatedInt64Equal(useFlag *bool, desired, observed *int64) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return int64OrZero(desired) == int64OrZero(observed)
+}
+
+// gatedStringSliceEqual is the []string-field variant of gatedBoolEqual.
+func gatedStringSliceEqual(useFlag *bool, desired, observed []string) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return stringSliceEqual(desired, observed)
+}
+
+// gatedNestedSliceEqual is the nested-value-bag-slice variant of
+// gatedBoolEqual. eq performs the actual per-item comparison (usually
+// nestedSliceEqual[T], or a type-specific comparator for value bags that
+// carry their own nested use-flag pair, e.g. nameServerValuesEqual).
+func gatedNestedSliceEqual[T any](useFlag *bool, desired, observed []T, eq func(a, b []T) bool) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return eq(desired, observed)
+}
+
+// gatedPtrDeepEqual is the nested-struct-pointer variant of gatedBoolEqual
+// (e.g. *responseRateLimitingValue, *scavengingSettingsValue).
+func gatedPtrDeepEqual[T any](useFlag *bool, desired, observed *T) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return reflect.DeepEqual(desired, observed)
+}
+
+// effectiveUseFlag resolves what a use flag's value will be once
+// lateInitializeFields has finished: the user's own spec value if they set
+// one, otherwise the value that will be back-filled from observed. Both the
+// flag's own late-init op and every value op it gates read through this
+// helper so the gate does not depend on which op happens to run first in
+// the ops table (the table is unordered with respect to this dependency).
+func effectiveUseFlag(desiredFlag, observedFlag *bool) bool {
+	if desiredFlag != nil {
+		return *desiredFlag
+	}
+	return boolOrFalse(observedFlag)
+}
+
+// gatedLateInitPtr back-fills *desired from observed only when the gating
+// use flag is (or will become) true. When the flag is off, the observed
+// value is the grid/parent-inherited default rather than something the
+// user's spec implies — writing it into spec would silently claim a
+// setting that is not actually in effect.
+func gatedLateInitPtr[T any](useFlagDesired, useFlagObserved *bool, desired **T, observed *T) bool {
+	if !effectiveUseFlag(useFlagDesired, useFlagObserved) {
+		return false
+	}
+	return lateInitPtr(desired, observed)
+}
+
+// gatedLateInitStringPtr is the string-field variant of gatedLateInitPtr.
+func gatedLateInitStringPtr(useFlagDesired, useFlagObserved *bool, desired **string, observed *string) bool {
+	if !effectiveUseFlag(useFlagDesired, useFlagObserved) {
+		return false
+	}
+	return lateInitStringPtr(desired, observed)
+}
+
+// gatedLateInitStringSlice is the []string-field variant of gatedLateInitPtr.
+func gatedLateInitStringSlice(useFlagDesired, useFlagObserved *bool, desired *[]string, observed []string) bool {
+	if !effectiveUseFlag(useFlagDesired, useFlagObserved) {
+		return false
+	}
+	return lateInitStringSlice(desired, observed)
+}
+
+// gatedLateInitNestedSlice is the nested-value-bag-slice variant of
+// gatedLateInitPtr.
+func gatedLateInitNestedSlice[T any](useFlagDesired, useFlagObserved *bool, desired *[]T, observed []T) bool {
+	if !effectiveUseFlag(useFlagDesired, useFlagObserved) {
+		return false
+	}
+	return lateInitNestedSlice(desired, observed)
 }
 
 // lateInitPtr back-fills *desired from observed when desired is unset.
@@ -527,6 +638,52 @@ func nameServerValuesToSDK(in []nameServerValue) []ibclient.NameServer {
 	return out
 }
 
+// nameServerValueEqual compares two nameServerValue items. The SDK
+// documents use_tsig_key_name as the use flag for tsig_key_name: when it is
+// off, tsig_key_name is not something the user's spec can drive (the
+// appliance does not apply it), so the two sides are unrelated quantities
+// and comparing them unconditionally can never converge.
+func nameServerValueEqual(a, b nameServerValue) bool {
+	if strOrEmpty(a.Address) != strOrEmpty(b.Address) ||
+		strOrEmpty(a.Name) != strOrEmpty(b.Name) ||
+		boolOrFalse(a.SharedWithMsParentDelegation) != boolOrFalse(b.SharedWithMsParentDelegation) ||
+		boolOrFalse(a.Stealth) != boolOrFalse(b.Stealth) ||
+		strOrEmpty(a.TsigKey) != strOrEmpty(b.TsigKey) ||
+		strOrEmpty(a.TsigKeyAlg) != strOrEmpty(b.TsigKeyAlg) {
+		return false
+	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
+	if boolOrFalse(a.UseTsigKeyName) != boolOrFalse(b.UseTsigKeyName) {
+		return false
+	}
+	// Only compare tsig_key_name when the flag is on.
+	if boolOrFalse(a.UseTsigKeyName) {
+		if strOrEmpty(a.TsigKeyName) != strOrEmpty(b.TsigKeyName) {
+			return false
+		}
+	}
+	return true
+}
+
+// nameServerValuesEqual compares two slices of nameServerValue item by
+// item via nameServerValueEqual, so each item's own use_tsig_key_name gate
+// applies. Nil and empty both compare equal, matching nestedSliceEqual.
+func nameServerValuesEqual(a, b []nameServerValue) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !nameServerValueEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // dnssecTrustedKeyValue is the scope-neutral value bag for the SDK's Dnssectrustedkey / CRD's DNSViewDnssecTrustedKey nested type.
 type dnssecTrustedKeyValue struct {
 	Fqdn               *string
@@ -640,6 +797,50 @@ func addressAcValuesToSDKPtr(in []addressAcValue) []*ibclient.Addressac {
 		out = append(out, &sdkItem)
 	}
 	return out
+}
+
+// addressAcValueEqual compares two addressAcValue items. The SDK
+// documents use_tsig_key_name as the use flag for tsig_key_name: when it is
+// off, tsig_key_name is not something the user's spec can drive (the
+// appliance does not apply it), so the two sides are unrelated quantities
+// and comparing them unconditionally can never converge.
+func addressAcValueEqual(a, b addressAcValue) bool {
+	if strOrEmpty(a.Address) != strOrEmpty(b.Address) ||
+		strOrEmpty(a.Permission) != strOrEmpty(b.Permission) ||
+		strOrEmpty(a.TsigKey) != strOrEmpty(b.TsigKey) ||
+		strOrEmpty(a.TsigKeyAlg) != strOrEmpty(b.TsigKeyAlg) {
+		return false
+	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
+	if boolOrFalse(a.UseTsigKeyName) != boolOrFalse(b.UseTsigKeyName) {
+		return false
+	}
+	// Only compare tsig_key_name when the flag is on.
+	if boolOrFalse(a.UseTsigKeyName) {
+		if strOrEmpty(a.TsigKeyName) != strOrEmpty(b.TsigKeyName) {
+			return false
+		}
+	}
+	return true
+}
+
+// addressAcValuesEqual compares two slices of addressAcValue item by item
+// via addressAcValueEqual, so each item's own use_tsig_key_name gate
+// applies. Nil and empty both compare equal, matching nestedSliceEqual.
+func addressAcValuesEqual(a, b []addressAcValue) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !addressAcValueEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // fixedRrsetOrderFqdnValue is the scope-neutral value bag for the SDK's GridDnsFixedrrsetorderfqdn / CRD's DNSViewFixedRrsetOrderFqdn nested type.
@@ -1294,6 +1495,8 @@ func fieldsFromView(v *ibclient.View) dnsViewFields {
 // function comparing all ~80 fields inline exceeds this repo's
 // cyclomatic-complexity budget; a table plus a single loop keeps
 // isUpToDate itself trivial to read while still comparing every field.
+//
+//nolint:gocyclo // false positive: this table is data, not control flow — see the doc comment above.
 var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	func(desired, observed dnsViewFields) bool {
 		return strOrEmpty(desired.Name) == strOrEmpty(observed.Name)
@@ -1307,164 +1510,200 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.Disable) == boolOrFalse(observed.Disable)
 	},
+	// use_blacklist is the SDK-documented use flag for blacklist_action,
+	// blacklist_log_query, blacklist_redirect_addresses,
+	// blacklist_redirect_ttl, blacklist_rulesets, and enable_blacklist —
+	// off means the Grid's blacklist configuration applies and every one
+	// of those fields echoes back the Grid's value, not the submitted one.
 	func(desired, observed dnsViewFields) bool {
-		return strOrEmpty(desired.BlacklistAction) == strOrEmpty(observed.BlacklistAction)
+		return gatedStringEqual(desired.UseBlacklist, desired.BlacklistAction, observed.BlacklistAction)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.BlacklistLogQuery) == boolOrFalse(observed.BlacklistLogQuery)
+		return gatedBoolEqual(desired.UseBlacklist, desired.BlacklistLogQuery, observed.BlacklistLogQuery)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.BlacklistRedirectAddresses, observed.BlacklistRedirectAddresses)
+		return gatedStringSliceEqual(desired.UseBlacklist, desired.BlacklistRedirectAddresses, observed.BlacklistRedirectAddresses)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.BlacklistRedirectTTL) == int64OrZero(observed.BlacklistRedirectTTL)
+		return gatedInt64Equal(desired.UseBlacklist, desired.BlacklistRedirectTTL, observed.BlacklistRedirectTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.BlacklistRulesets, observed.BlacklistRulesets)
+		return gatedStringSliceEqual(desired.UseBlacklist, desired.BlacklistRulesets, observed.BlacklistRulesets)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseBlacklist) == boolOrFalse(observed.UseBlacklist)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.EnableBlacklist) == boolOrFalse(observed.EnableBlacklist)
+		return gatedBoolEqual(desired.UseBlacklist, desired.EnableBlacklist, observed.EnableBlacklist)
 	},
+	// use_root_name_server is the use flag for custom_root_name_servers and
+	// root_name_server_type.
 	func(desired, observed dnsViewFields) bool {
-		return strOrEmpty(desired.RootNameServerType) == strOrEmpty(observed.RootNameServerType)
+		return gatedStringEqual(desired.UseRootNameServer, desired.RootNameServerType, observed.RootNameServerType)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseRootNameServer) == boolOrFalse(observed.UseRootNameServer)
 	},
+	// use_ddns_force_creation_timestamp_update is the use flag for
+	// ddns_force_creation_timestamp_update.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsForceCreationTimestampUpdate) == boolOrFalse(observed.DdnsForceCreationTimestampUpdate)
+		return gatedBoolEqual(desired.UseDdnsForceCreationTimestampUpdate, desired.DdnsForceCreationTimestampUpdate, observed.DdnsForceCreationTimestampUpdate)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDdnsForceCreationTimestampUpdate) == boolOrFalse(observed.UseDdnsForceCreationTimestampUpdate)
 	},
+	// use_ddns_principal_security is the use flag for ddns_restrict_secure,
+	// ddns_principal_tracking, and ddns_principal_group.
 	func(desired, observed dnsViewFields) bool {
-		return strOrEmpty(desired.DdnsPrincipalGroup) == strOrEmpty(observed.DdnsPrincipalGroup)
+		return gatedStringEqual(desired.UseDdnsPrincipalSecurity, desired.DdnsPrincipalGroup, observed.DdnsPrincipalGroup)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsPrincipalTracking) == boolOrFalse(observed.DdnsPrincipalTracking)
+		return gatedBoolEqual(desired.UseDdnsPrincipalSecurity, desired.DdnsPrincipalTracking, observed.DdnsPrincipalTracking)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDdnsPrincipalSecurity) == boolOrFalse(observed.UseDdnsPrincipalSecurity)
 	},
+	// use_ddns_patterns_restriction is the use flag for
+	// ddns_restrict_patterns_list and ddns_restrict_patterns.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsRestrictPatterns) == boolOrFalse(observed.DdnsRestrictPatterns)
+		return gatedBoolEqual(desired.UseDdnsPatternsRestriction, desired.DdnsRestrictPatterns, observed.DdnsRestrictPatterns)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.DdnsRestrictPatternsList, observed.DdnsRestrictPatternsList)
+		return gatedStringSliceEqual(desired.UseDdnsPatternsRestriction, desired.DdnsRestrictPatternsList, observed.DdnsRestrictPatternsList)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDdnsPatternsRestriction) == boolOrFalse(observed.UseDdnsPatternsRestriction)
 	},
+	// use_ddns_restrict_protected is the use flag for ddns_restrict_protected.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsRestrictProtected) == boolOrFalse(observed.DdnsRestrictProtected)
+		return gatedBoolEqual(desired.UseDdnsRestrictProtected, desired.DdnsRestrictProtected, observed.DdnsRestrictProtected)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDdnsRestrictProtected) == boolOrFalse(observed.UseDdnsRestrictProtected)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsRestrictSecure) == boolOrFalse(observed.DdnsRestrictSecure)
+		return gatedBoolEqual(desired.UseDdnsPrincipalSecurity, desired.DdnsRestrictSecure, observed.DdnsRestrictSecure)
 	},
+	// use_ddns_restrict_static is the use flag for ddns_restrict_static.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DdnsRestrictStatic) == boolOrFalse(observed.DdnsRestrictStatic)
+		return gatedBoolEqual(desired.UseDdnsRestrictStatic, desired.DdnsRestrictStatic, observed.DdnsRestrictStatic)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDdnsRestrictStatic) == boolOrFalse(observed.UseDdnsRestrictStatic)
 	},
+	// use_dns64 is the use flag for dns64_enabled and dns64_groups.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.Dns64Enabled) == boolOrFalse(observed.Dns64Enabled)
+		return gatedBoolEqual(desired.UseDns64, desired.Dns64Enabled, observed.Dns64Enabled)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.Dns64Groups, observed.Dns64Groups)
+		return gatedStringSliceEqual(desired.UseDns64, desired.Dns64Groups, observed.Dns64Groups)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDns64) == boolOrFalse(observed.UseDns64)
 	},
+	// use_dnssec is the use flag for dnssec_enabled,
+	// dnssec_expired_signatures_enabled, dnssec_validation_enabled, and
+	// dnssec_trusted_keys. dnssec_negative_trust_anchors is NOT in that
+	// list — the SDK documents no use flag for it, so it is always
+	// user-supplied and compared unconditionally below.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DnssecEnabled) == boolOrFalse(observed.DnssecEnabled)
+		return gatedBoolEqual(desired.UseDnssec, desired.DnssecEnabled, observed.DnssecEnabled)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DnssecExpiredSignaturesEnabled) == boolOrFalse(observed.DnssecExpiredSignaturesEnabled)
+		return gatedBoolEqual(desired.UseDnssec, desired.DnssecExpiredSignaturesEnabled, observed.DnssecExpiredSignaturesEnabled)
 	},
+	// dnssec_negative_trust_anchors has no use flag — always compared.
 	func(desired, observed dnsViewFields) bool {
 		return stringSliceEqual(desired.DnssecNegativeTrustAnchors, observed.DnssecNegativeTrustAnchors)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.DnssecValidationEnabled) == boolOrFalse(observed.DnssecValidationEnabled)
+		return gatedBoolEqual(desired.UseDnssec, desired.DnssecValidationEnabled, observed.DnssecValidationEnabled)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseDnssec) == boolOrFalse(observed.UseDnssec)
 	},
+	// use_fixed_rrset_order_fqdns is the use flag for fixed_rrset_order_fqdns
+	// and enable_fixed_rrset_order_fqdns.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.EnableFixedRrsetOrderFqdns) == boolOrFalse(observed.EnableFixedRrsetOrderFqdns)
+		return gatedBoolEqual(desired.UseFixedRrsetOrderFqdns, desired.EnableFixedRrsetOrderFqdns, observed.EnableFixedRrsetOrderFqdns)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseFixedRrsetOrderFqdns) == boolOrFalse(observed.UseFixedRrsetOrderFqdns)
 	},
+	// enable_match_recursive_only has no use flag — always compared.
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.EnableMatchRecursiveOnly) == boolOrFalse(observed.EnableMatchRecursiveOnly)
 	},
+	// use_filter_aaaa is the use flag for filter_aaaa and filter_aaaa_list.
 	func(desired, observed dnsViewFields) bool {
-		return strOrEmpty(desired.FilterAaaa) == strOrEmpty(observed.FilterAaaa)
+		return gatedStringEqual(desired.UseFilterAaaa, desired.FilterAaaa, observed.FilterAaaa)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseFilterAaaa) == boolOrFalse(observed.UseFilterAaaa)
 	},
+	// use_forwarders is the use flag for forwarders and forward_only.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.ForwardOnly) == boolOrFalse(observed.ForwardOnly)
+		return gatedBoolEqual(desired.UseForwarders, desired.ForwardOnly, observed.ForwardOnly)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.Forwarders, observed.Forwarders)
+		return gatedStringSliceEqual(desired.UseForwarders, desired.Forwarders, observed.Forwarders)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseForwarders) == boolOrFalse(observed.UseForwarders)
 	},
+	// use_lame_ttl is the use flag for lame_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.LameTTL) == int64OrZero(observed.LameTTL)
+		return gatedInt64Equal(desired.UseLameTTL, desired.LameTTL, observed.LameTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseLameTTL) == boolOrFalse(observed.UseLameTTL)
 	},
+	// use_max_cache_ttl is the use flag for max_cache_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.MaxCacheTTL) == int64OrZero(observed.MaxCacheTTL)
+		return gatedInt64Equal(desired.UseMaxCacheTTL, desired.MaxCacheTTL, observed.MaxCacheTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseMaxCacheTTL) == boolOrFalse(observed.UseMaxCacheTTL)
 	},
+	// use_max_ncache_ttl is the use flag for max_ncache_ttl.
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.MaxNcacheTTL) == int64OrZero(observed.MaxNcacheTTL)
+		return gatedInt64Equal(desired.UseMaxNcacheTTL, desired.MaxNcacheTTL, observed.MaxNcacheTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseMaxNcacheTTL) == boolOrFalse(observed.UseMaxNcacheTTL)
 	},
+	// notify_delay has no use flag at all in the view object — always
+	// compared.
 	func(desired, observed dnsViewFields) bool {
 		return int64OrZero(desired.NotifyDelay) == int64OrZero(observed.NotifyDelay)
 	},
+	// use_nxdomain_redirect is the use flag for nxdomain_redirect,
+	// nxdomain_redirect_addresses, nxdomain_redirect_addresses_v6,
+	// nxdomain_redirect_ttl, nxdomain_log_query, and nxdomain_rulesets.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.NxdomainLogQuery) == boolOrFalse(observed.NxdomainLogQuery)
+		return gatedBoolEqual(desired.UseNxdomainRedirect, desired.NxdomainLogQuery, observed.NxdomainLogQuery)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.NxdomainRedirect) == boolOrFalse(observed.NxdomainRedirect)
+		return gatedBoolEqual(desired.UseNxdomainRedirect, desired.NxdomainRedirect, observed.NxdomainRedirect)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.NxdomainRedirectAddresses, observed.NxdomainRedirectAddresses)
+		return gatedStringSliceEqual(desired.UseNxdomainRedirect, desired.NxdomainRedirectAddresses, observed.NxdomainRedirectAddresses)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.NxdomainRedirectAddressesV6, observed.NxdomainRedirectAddressesV6)
+		return gatedStringSliceEqual(desired.UseNxdomainRedirect, desired.NxdomainRedirectAddressesV6, observed.NxdomainRedirectAddressesV6)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.NxdomainRedirectTTL) == int64OrZero(observed.NxdomainRedirectTTL)
+		return gatedInt64Equal(desired.UseNxdomainRedirect, desired.NxdomainRedirectTTL, observed.NxdomainRedirectTTL)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return stringSliceEqual(desired.NxdomainRulesets, observed.NxdomainRulesets)
+		return gatedStringSliceEqual(desired.UseNxdomainRedirect, desired.NxdomainRulesets, observed.NxdomainRulesets)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseNxdomainRedirect) == boolOrFalse(observed.UseNxdomainRedirect)
 	},
+	// use_recursion is the use flag for recursion.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.Recursion) == boolOrFalse(observed.Recursion)
+		return gatedBoolEqual(desired.UseRecursion, desired.Recursion, observed.Recursion)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseRecursion) == boolOrFalse(observed.UseRecursion)
@@ -1472,20 +1711,24 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseResponseRateLimiting) == boolOrFalse(observed.UseResponseRateLimiting)
 	},
+	// use_rpz_drop_ip_rule is the use flag for rpz_drop_ip_rule_enabled,
+	// rpz_drop_ip_rule_min_prefix_length_ipv4, and
+	// rpz_drop_ip_rule_min_prefix_length_ipv6.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.RpzDropIPRuleEnabled) == boolOrFalse(observed.RpzDropIPRuleEnabled)
+		return gatedBoolEqual(desired.UseRpzDropIPRule, desired.RpzDropIPRuleEnabled, observed.RpzDropIPRuleEnabled)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.RpzDropIPRuleMinPrefixLengthIPv4) == int64OrZero(observed.RpzDropIPRuleMinPrefixLengthIPv4)
+		return gatedInt64Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv4, observed.RpzDropIPRuleMinPrefixLengthIPv4)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return int64OrZero(desired.RpzDropIPRuleMinPrefixLengthIPv6) == int64OrZero(observed.RpzDropIPRuleMinPrefixLengthIPv6)
+		return gatedInt64Equal(desired.UseRpzDropIPRule, desired.RpzDropIPRuleMinPrefixLengthIPv6, observed.RpzDropIPRuleMinPrefixLengthIPv6)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseRpzDropIPRule) == boolOrFalse(observed.UseRpzDropIPRule)
 	},
+	// use_rpz_qname_wait_recurse is the use flag for rpz_qname_wait_recurse.
 	func(desired, observed dnsViewFields) bool {
-		return boolOrFalse(desired.RpzQnameWaitRecurse) == boolOrFalse(observed.RpzQnameWaitRecurse)
+		return gatedBoolEqual(desired.UseRpzQnameWaitRecurse, desired.RpzQnameWaitRecurse, observed.RpzQnameWaitRecurse)
 	},
 	func(desired, observed dnsViewFields) bool {
 		return boolOrFalse(desired.UseRpzQnameWaitRecurse) == boolOrFalse(observed.UseRpzQnameWaitRecurse)
@@ -1497,32 +1740,46 @@ var dnsViewFieldComparators = []func(desired, observed dnsViewFields) bool{
 		return boolOrFalse(desired.UseSortlist) == boolOrFalse(observed.UseSortlist)
 	},
 	func(desired, observed dnsViewFields) bool { return extAttrsEqual(desired.ExtAttrs, observed.ExtAttrs) },
+	// custom_root_name_servers is gated by use_root_name_server; each item
+	// also carries its own use_tsig_key_name/tsig_key_name pair, handled by
+	// nameServerValuesEqual.
 	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.CustomRootNameServers, observed.CustomRootNameServers)
+		return gatedNestedSliceEqual(desired.UseRootNameServer, desired.CustomRootNameServers, observed.CustomRootNameServers, nameServerValuesEqual)
+	},
+	// dnssec_trusted_keys is gated by use_dnssec.
+	func(desired, observed dnsViewFields) bool {
+		return gatedNestedSliceEqual(desired.UseDnssec, desired.DnssecTrustedKeys, observed.DnssecTrustedKeys, nestedSliceEqual[dnssecTrustedKeyValue])
+	},
+	// fixed_rrset_order_fqdns is gated by use_fixed_rrset_order_fqdns.
+	func(desired, observed dnsViewFields) bool {
+		return gatedNestedSliceEqual(desired.UseFixedRrsetOrderFqdns, desired.FixedRrsetOrderFqdns, observed.FixedRrsetOrderFqdns, nestedSliceEqual[fixedRrsetOrderFqdnValue])
+	},
+	// filter_aaaa_list is gated by use_filter_aaaa; each item also carries
+	// its own use_tsig_key_name/tsig_key_name pair, handled by
+	// addressAcValuesEqual.
+	func(desired, observed dnsViewFields) bool {
+		return gatedNestedSliceEqual(desired.UseFilterAaaa, desired.FilterAaaaList, observed.FilterAaaaList, addressAcValuesEqual)
+	},
+	// match_clients/match_destinations have no outer use flag of their own
+	// — only each item's use_tsig_key_name/tsig_key_name pair needs
+	// gating, handled by addressAcValuesEqual.
+	func(desired, observed dnsViewFields) bool {
+		return addressAcValuesEqual(desired.MatchClients, observed.MatchClients)
 	},
 	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.DnssecTrustedKeys, observed.DnssecTrustedKeys)
+		return addressAcValuesEqual(desired.MatchDestinations, observed.MatchDestinations)
 	},
+	// sortlist is gated by use_sortlist.
 	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.FixedRrsetOrderFqdns, observed.FixedRrsetOrderFqdns)
+		return gatedNestedSliceEqual(desired.UseSortlist, desired.Sortlist, observed.Sortlist, nestedSliceEqual[sortlistEntryValue])
 	},
+	// response_rate_limiting is gated by use_response_rate_limiting.
 	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.FilterAaaaList, observed.FilterAaaaList)
+		return gatedPtrDeepEqual(desired.UseResponseRateLimiting, desired.ResponseRateLimiting, observed.ResponseRateLimiting)
 	},
+	// scavenging_settings is gated by use_scavenging_settings.
 	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.MatchClients, observed.MatchClients)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.MatchDestinations, observed.MatchDestinations)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return nestedSliceEqual(desired.Sortlist, observed.Sortlist)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return reflect.DeepEqual(desired.ResponseRateLimiting, observed.ResponseRateLimiting)
-	},
-	func(desired, observed dnsViewFields) bool {
-		return reflect.DeepEqual(desired.ScavengingSettings, observed.ScavengingSettings)
+		return gatedPtrDeepEqual(desired.UseScavengingSettings, desired.ScavengingSettings, observed.ScavengingSettings)
 	},
 }
 
@@ -1546,6 +1803,14 @@ func isUpToDate(desired, observed dnsViewFields) bool {
 // is_default has no ForProvider field at all). Expressed as a
 // data-driven table for the same cyclomatic-complexity reason as
 // dnsViewFieldComparators above.
+//
+// Ops for fields gated by a use flag (see dnsViewFieldComparators for the
+// full flag -> fields map) use the gatedLateInit* helpers instead of the
+// bare lateInit* ones: back-filling a grid/parent-inherited default into
+// spec when the flag is off would silently claim a setting that is not
+// actually in effect.
+//
+//nolint:gocyclo // false positive: this table is data, not control flow.
 var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) bool{
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitStringPtr(&desired.Comment, observed.Comment)
@@ -1557,163 +1822,166 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitPtr(&desired.Disable, observed.Disable)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringPtr(&desired.BlacklistAction, observed.BlacklistAction)
+		return gatedLateInitStringPtr(desired.UseBlacklist, observed.UseBlacklist, &desired.BlacklistAction, observed.BlacklistAction)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.BlacklistLogQuery, observed.BlacklistLogQuery)
+		return gatedLateInitPtr(desired.UseBlacklist, observed.UseBlacklist, &desired.BlacklistLogQuery, observed.BlacklistLogQuery)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.BlacklistRedirectAddresses, observed.BlacklistRedirectAddresses)
+		return gatedLateInitStringSlice(desired.UseBlacklist, observed.UseBlacklist, &desired.BlacklistRedirectAddresses, observed.BlacklistRedirectAddresses)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.BlacklistRedirectTTL, observed.BlacklistRedirectTTL)
+		return gatedLateInitPtr(desired.UseBlacklist, observed.UseBlacklist, &desired.BlacklistRedirectTTL, observed.BlacklistRedirectTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.BlacklistRulesets, observed.BlacklistRulesets)
+		return gatedLateInitStringSlice(desired.UseBlacklist, observed.UseBlacklist, &desired.BlacklistRulesets, observed.BlacklistRulesets)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseBlacklist, observed.UseBlacklist)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.EnableBlacklist, observed.EnableBlacklist)
+		return gatedLateInitPtr(desired.UseBlacklist, observed.UseBlacklist, &desired.EnableBlacklist, observed.EnableBlacklist)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringPtr(&desired.RootNameServerType, observed.RootNameServerType)
+		return gatedLateInitStringPtr(desired.UseRootNameServer, observed.UseRootNameServer, &desired.RootNameServerType, observed.RootNameServerType)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseRootNameServer, observed.UseRootNameServer)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsForceCreationTimestampUpdate, observed.DdnsForceCreationTimestampUpdate)
+		return gatedLateInitPtr(desired.UseDdnsForceCreationTimestampUpdate, observed.UseDdnsForceCreationTimestampUpdate, &desired.DdnsForceCreationTimestampUpdate, observed.DdnsForceCreationTimestampUpdate)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDdnsForceCreationTimestampUpdate, observed.UseDdnsForceCreationTimestampUpdate)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringPtr(&desired.DdnsPrincipalGroup, observed.DdnsPrincipalGroup)
+		return gatedLateInitStringPtr(desired.UseDdnsPrincipalSecurity, observed.UseDdnsPrincipalSecurity, &desired.DdnsPrincipalGroup, observed.DdnsPrincipalGroup)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsPrincipalTracking, observed.DdnsPrincipalTracking)
+		return gatedLateInitPtr(desired.UseDdnsPrincipalSecurity, observed.UseDdnsPrincipalSecurity, &desired.DdnsPrincipalTracking, observed.DdnsPrincipalTracking)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDdnsPrincipalSecurity, observed.UseDdnsPrincipalSecurity)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsRestrictPatterns, observed.DdnsRestrictPatterns)
+		return gatedLateInitPtr(desired.UseDdnsPatternsRestriction, observed.UseDdnsPatternsRestriction, &desired.DdnsRestrictPatterns, observed.DdnsRestrictPatterns)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.DdnsRestrictPatternsList, observed.DdnsRestrictPatternsList)
+		return gatedLateInitStringSlice(desired.UseDdnsPatternsRestriction, observed.UseDdnsPatternsRestriction, &desired.DdnsRestrictPatternsList, observed.DdnsRestrictPatternsList)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDdnsPatternsRestriction, observed.UseDdnsPatternsRestriction)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsRestrictProtected, observed.DdnsRestrictProtected)
+		return gatedLateInitPtr(desired.UseDdnsRestrictProtected, observed.UseDdnsRestrictProtected, &desired.DdnsRestrictProtected, observed.DdnsRestrictProtected)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDdnsRestrictProtected, observed.UseDdnsRestrictProtected)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsRestrictSecure, observed.DdnsRestrictSecure)
+		return gatedLateInitPtr(desired.UseDdnsPrincipalSecurity, observed.UseDdnsPrincipalSecurity, &desired.DdnsRestrictSecure, observed.DdnsRestrictSecure)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DdnsRestrictStatic, observed.DdnsRestrictStatic)
+		return gatedLateInitPtr(desired.UseDdnsRestrictStatic, observed.UseDdnsRestrictStatic, &desired.DdnsRestrictStatic, observed.DdnsRestrictStatic)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDdnsRestrictStatic, observed.UseDdnsRestrictStatic)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.Dns64Enabled, observed.Dns64Enabled)
+		return gatedLateInitPtr(desired.UseDns64, observed.UseDns64, &desired.Dns64Enabled, observed.Dns64Enabled)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.Dns64Groups, observed.Dns64Groups)
+		return gatedLateInitStringSlice(desired.UseDns64, observed.UseDns64, &desired.Dns64Groups, observed.Dns64Groups)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDns64, observed.UseDns64)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DnssecEnabled, observed.DnssecEnabled)
+		return gatedLateInitPtr(desired.UseDnssec, observed.UseDnssec, &desired.DnssecEnabled, observed.DnssecEnabled)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DnssecExpiredSignaturesEnabled, observed.DnssecExpiredSignaturesEnabled)
+		return gatedLateInitPtr(desired.UseDnssec, observed.UseDnssec, &desired.DnssecExpiredSignaturesEnabled, observed.DnssecExpiredSignaturesEnabled)
 	},
+	// dnssec_negative_trust_anchors has no use flag — always back-filled.
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitStringSlice(&desired.DnssecNegativeTrustAnchors, observed.DnssecNegativeTrustAnchors)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.DnssecValidationEnabled, observed.DnssecValidationEnabled)
+		return gatedLateInitPtr(desired.UseDnssec, observed.UseDnssec, &desired.DnssecValidationEnabled, observed.DnssecValidationEnabled)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseDnssec, observed.UseDnssec)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.EnableFixedRrsetOrderFqdns, observed.EnableFixedRrsetOrderFqdns)
+		return gatedLateInitPtr(desired.UseFixedRrsetOrderFqdns, observed.UseFixedRrsetOrderFqdns, &desired.EnableFixedRrsetOrderFqdns, observed.EnableFixedRrsetOrderFqdns)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseFixedRrsetOrderFqdns, observed.UseFixedRrsetOrderFqdns)
 	},
+	// enable_match_recursive_only has no use flag — always back-filled.
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.EnableMatchRecursiveOnly, observed.EnableMatchRecursiveOnly)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringPtr(&desired.FilterAaaa, observed.FilterAaaa)
+		return gatedLateInitStringPtr(desired.UseFilterAaaa, observed.UseFilterAaaa, &desired.FilterAaaa, observed.FilterAaaa)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseFilterAaaa, observed.UseFilterAaaa)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.ForwardOnly, observed.ForwardOnly)
+		return gatedLateInitPtr(desired.UseForwarders, observed.UseForwarders, &desired.ForwardOnly, observed.ForwardOnly)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.Forwarders, observed.Forwarders)
+		return gatedLateInitStringSlice(desired.UseForwarders, observed.UseForwarders, &desired.Forwarders, observed.Forwarders)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseForwarders, observed.UseForwarders)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.LameTTL, observed.LameTTL)
+		return gatedLateInitPtr(desired.UseLameTTL, observed.UseLameTTL, &desired.LameTTL, observed.LameTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseLameTTL, observed.UseLameTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.MaxCacheTTL, observed.MaxCacheTTL)
+		return gatedLateInitPtr(desired.UseMaxCacheTTL, observed.UseMaxCacheTTL, &desired.MaxCacheTTL, observed.MaxCacheTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseMaxCacheTTL, observed.UseMaxCacheTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.MaxNcacheTTL, observed.MaxNcacheTTL)
+		return gatedLateInitPtr(desired.UseMaxNcacheTTL, observed.UseMaxNcacheTTL, &desired.MaxNcacheTTL, observed.MaxNcacheTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseMaxNcacheTTL, observed.UseMaxNcacheTTL)
 	},
+	// notify_delay has no use flag — always back-filled.
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.NotifyDelay, observed.NotifyDelay)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.NxdomainLogQuery, observed.NxdomainLogQuery)
+		return gatedLateInitPtr(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainLogQuery, observed.NxdomainLogQuery)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.NxdomainRedirect, observed.NxdomainRedirect)
+		return gatedLateInitPtr(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainRedirect, observed.NxdomainRedirect)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.NxdomainRedirectAddresses, observed.NxdomainRedirectAddresses)
+		return gatedLateInitStringSlice(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainRedirectAddresses, observed.NxdomainRedirectAddresses)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.NxdomainRedirectAddressesV6, observed.NxdomainRedirectAddressesV6)
+		return gatedLateInitStringSlice(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainRedirectAddressesV6, observed.NxdomainRedirectAddressesV6)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.NxdomainRedirectTTL, observed.NxdomainRedirectTTL)
+		return gatedLateInitPtr(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainRedirectTTL, observed.NxdomainRedirectTTL)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitStringSlice(&desired.NxdomainRulesets, observed.NxdomainRulesets)
+		return gatedLateInitStringSlice(desired.UseNxdomainRedirect, observed.UseNxdomainRedirect, &desired.NxdomainRulesets, observed.NxdomainRulesets)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseNxdomainRedirect, observed.UseNxdomainRedirect)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.Recursion, observed.Recursion)
+		return gatedLateInitPtr(desired.UseRecursion, observed.UseRecursion, &desired.Recursion, observed.Recursion)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseRecursion, observed.UseRecursion)
@@ -1722,19 +1990,19 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitPtr(&desired.UseResponseRateLimiting, observed.UseResponseRateLimiting)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.RpzDropIPRuleEnabled, observed.RpzDropIPRuleEnabled)
+		return gatedLateInitPtr(desired.UseRpzDropIPRule, observed.UseRpzDropIPRule, &desired.RpzDropIPRuleEnabled, observed.RpzDropIPRuleEnabled)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.RpzDropIPRuleMinPrefixLengthIPv4, observed.RpzDropIPRuleMinPrefixLengthIPv4)
+		return gatedLateInitPtr(desired.UseRpzDropIPRule, observed.UseRpzDropIPRule, &desired.RpzDropIPRuleMinPrefixLengthIPv4, observed.RpzDropIPRuleMinPrefixLengthIPv4)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.RpzDropIPRuleMinPrefixLengthIPv6, observed.RpzDropIPRuleMinPrefixLengthIPv6)
+		return gatedLateInitPtr(desired.UseRpzDropIPRule, observed.UseRpzDropIPRule, &desired.RpzDropIPRuleMinPrefixLengthIPv6, observed.RpzDropIPRuleMinPrefixLengthIPv6)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseRpzDropIPRule, observed.UseRpzDropIPRule)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.RpzQnameWaitRecurse, observed.RpzQnameWaitRecurse)
+		return gatedLateInitPtr(desired.UseRpzQnameWaitRecurse, observed.UseRpzQnameWaitRecurse, &desired.RpzQnameWaitRecurse, observed.RpzQnameWaitRecurse)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitPtr(&desired.UseRpzQnameWaitRecurse, observed.UseRpzQnameWaitRecurse)
@@ -1749,17 +2017,21 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitMap(&desired.ExtAttrs, observed.ExtAttrs)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.CustomRootNameServers, observed.CustomRootNameServers)
+		return gatedLateInitNestedSlice(desired.UseRootNameServer, observed.UseRootNameServer, &desired.CustomRootNameServers, observed.CustomRootNameServers)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.DnssecTrustedKeys, observed.DnssecTrustedKeys)
+		return gatedLateInitNestedSlice(desired.UseDnssec, observed.UseDnssec, &desired.DnssecTrustedKeys, observed.DnssecTrustedKeys)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.FixedRrsetOrderFqdns, observed.FixedRrsetOrderFqdns)
+		return gatedLateInitNestedSlice(desired.UseFixedRrsetOrderFqdns, observed.UseFixedRrsetOrderFqdns, &desired.FixedRrsetOrderFqdns, observed.FixedRrsetOrderFqdns)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.FilterAaaaList, observed.FilterAaaaList)
+		return gatedLateInitNestedSlice(desired.UseFilterAaaa, observed.UseFilterAaaa, &desired.FilterAaaaList, observed.FilterAaaaList)
 	},
+	// match_clients/match_destinations have no outer use flag — always
+	// back-filled as a whole list (each item's own use_tsig_key_name gate
+	// is honored only by the isUpToDate comparator, since a whole-list
+	// import from observed is by definition already in agreement).
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
 		return lateInitNestedSlice(&desired.MatchClients, observed.MatchClients)
 	},
@@ -1767,13 +2039,13 @@ var dnsViewLateInitOps = []func(desired *dnsViewFields, observed dnsViewFields) 
 		return lateInitNestedSlice(&desired.MatchDestinations, observed.MatchDestinations)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitNestedSlice(&desired.Sortlist, observed.Sortlist)
+		return gatedLateInitNestedSlice(desired.UseSortlist, observed.UseSortlist, &desired.Sortlist, observed.Sortlist)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.ResponseRateLimiting, observed.ResponseRateLimiting)
+		return gatedLateInitPtr(desired.UseResponseRateLimiting, observed.UseResponseRateLimiting, &desired.ResponseRateLimiting, observed.ResponseRateLimiting)
 	},
 	func(desired *dnsViewFields, observed dnsViewFields) bool {
-		return lateInitPtr(&desired.ScavengingSettings, observed.ScavengingSettings)
+		return gatedLateInitPtr(desired.UseScavengingSettings, observed.UseScavengingSettings, &desired.ScavengingSettings, observed.ScavengingSettings)
 	},
 }
 

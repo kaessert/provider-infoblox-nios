@@ -211,6 +211,60 @@ func TestExternalServerValuesEqualDetectsFieldMismatch(t *testing.T) {
 	}
 }
 
+// TestExternalServerValuesEqualIgnoresTsigKeyNameWhenFlagOff proves an
+// ExternalPrimaries/ExternalSecondaries entry ignores a tsig_key_name
+// mismatch while its own use_tsig_key_name is off. The SDK's NameServer
+// type documents use_tsig_key_name as the use flag for tsig_key_name — off
+// means the appliance does not apply tsig_key_name to this external
+// server, so it is not something the user's spec can drive, and comparing
+// it unconditionally can never converge.
+func TestExternalServerValuesEqualIgnoresTsigKeyNameWhenFlagOff(t *testing.T) {
+	a := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: false, TsigKeyName: "key-a"}}
+	b := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: false, TsigKeyName: "key-b"}}
+	if !externalServerValuesEqual(a, b) {
+		t.Error("externalServerValuesEqual: want true (use_tsig_key_name off, tsig_key_name is server-owned), got false")
+	}
+}
+
+// TestExternalServerValuesEqualDetectsTsigKeyNameWhenFlagOn is the
+// flag-on counterpart: the same mismatch is real drift once the flag is
+// on.
+func TestExternalServerValuesEqualDetectsTsigKeyNameWhenFlagOn(t *testing.T) {
+	a := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: true, TsigKeyName: "key-a"}}
+	b := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: true, TsigKeyName: "key-b"}}
+	if externalServerValuesEqual(a, b) {
+		t.Error("externalServerValuesEqual: want false (use_tsig_key_name on, tsig_key_name differs), got true")
+	}
+}
+
+// TestExternalServerValuesEqualDetectsUseTsigKeyNameTransition proves the
+// per-item flag comparison stays unconditional even though the value
+// comparison is gated, so a false -> true transition is still detected.
+func TestExternalServerValuesEqualDetectsUseTsigKeyNameTransition(t *testing.T) {
+	a := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: false}}
+	b := []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com", UseTsigKeyName: true, TsigKeyName: "key-b"}}
+	if externalServerValuesEqual(a, b) {
+		t.Error("externalServerValuesEqual: want false (use_tsig_key_name transitioned false -> true), got true")
+	}
+}
+
+// TestMemberServerValuesEqualIgnoresNestedTsigKeyNameWhenFlagOff proves
+// the gate also applies through the nested PreferredPrimaries
+// ([]externalServerValue) inside GridPrimary/GridSecondaries entries.
+func TestMemberServerValuesEqualIgnoresNestedTsigKeyNameWhenFlagOff(t *testing.T) {
+	a := []memberServerValue{{
+		Name:               "member1.example.com",
+		PreferredPrimaries: []externalServerValue{{Address: "10.0.0.1", UseTsigKeyName: false, TsigKeyName: "key-a"}},
+	}}
+	b := []memberServerValue{{
+		Name:               "member1.example.com",
+		PreferredPrimaries: []externalServerValue{{Address: "10.0.0.1", UseTsigKeyName: false, TsigKeyName: "key-b"}},
+	}}
+	if !memberServerValuesEqual(a, b) {
+		t.Error("memberServerValuesEqual: want true (use_tsig_key_name off on nested PreferredPrimaries entry), got false")
+	}
+}
+
 // ── isUpToDate: exhaustive field-mismatch coverage ──────────────────────
 //
 // isUpToDate short-circuits on the first mismatched field, so a single

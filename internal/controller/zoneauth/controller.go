@@ -332,7 +332,36 @@ func externalServerValuesEqual(a, b []externalServerValue) bool {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !externalServerValueEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// externalServerValueEqual compares two externalServerValue items. The
+// SDK's NameServer type documents use_tsig_key_name as the use flag for
+// tsig_key_name: when it is off, tsig_key_name is not something the user's
+// spec can drive (the appliance does not apply it to this external
+// server), so the two sides are unrelated quantities and comparing them
+// unconditionally can never converge.
+func externalServerValueEqual(a, b externalServerValue) bool {
+	if a.Address != b.Address ||
+		a.Name != b.Name ||
+		a.Stealth != b.Stealth ||
+		a.SharedWithMsParentDelegation != b.SharedWithMsParentDelegation ||
+		a.TsigKey != b.TsigKey ||
+		a.TsigKeyAlg != b.TsigKeyAlg {
+		return false
+	}
+	// Compare the flag first and unconditionally, so a true -> false
+	// transition is still detected as drift.
+	if a.UseTsigKeyName != b.UseTsigKeyName {
+		return false
+	}
+	// Only compare tsig_key_name when the flag is on.
+	if a.UseTsigKeyName {
+		if a.TsigKeyName != b.TsigKeyName {
 			return false
 		}
 	}
