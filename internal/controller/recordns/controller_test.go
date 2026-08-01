@@ -733,7 +733,8 @@ func TestClusterObserveIsUpToDateWhenMsDelegationNameNotPersisted(t *testing.T) 
 		// persisted it, simulating a Grid-managed zone.
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	cr.Spec.ForProvider.MsDelegationName = stringPtr("ms-delegation.example.com")
 
@@ -763,7 +764,8 @@ func TestClusterObserveIsUpToDateDetectsMsDelegationNameDriftWhenPersisted(t *te
 		MsDelegationName: stringPtr("dc1.example.com"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	cr.Spec.ForProvider.MsDelegationName = stringPtr("dc2.example.com")
 
@@ -1466,7 +1468,8 @@ func TestNamespacedObserveIsUpToDateWhenMsDelegationNameNotPersisted(t *testing.
 		// persisted it, simulating a Grid-managed zone.
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.MsDelegationName = stringPtr("ms-delegation.example.com")
 
