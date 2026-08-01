@@ -140,6 +140,15 @@ type mockWapiServer struct {
 	eaDefExists       bool
 	eaDefCreateStatus int
 	eaDefCreateBody   string
+	// eaDefSearchCalls counts requests to the extensibleattributedef
+	// existence-check endpoint — used to prove the identity-prerequisite
+	// probe fires only reactively.
+	eaDefSearchCalls int
+	// undefinedEASearch simulates a Grid where the identity extensible
+	// attribute definition does not exist: any object search carrying an
+	// EA filter fails with WAPI's real "Unknown extensible attribute"
+	// 400, instead of an ordinary filtered result.
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -309,6 +318,7 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
+		m.eaDefSearchCalls++
 		exists := m.eaDefExists
 		m.mu.Unlock()
 		if !exists {
@@ -349,6 +359,15 @@ func (m *mockWapiServer) handler() http.Handler {
 			if strings.HasPrefix(k, "*") && len(vals) > 0 {
 				eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 			}
+		}
+
+		m.mu.Lock()
+		undefinedEA := m.undefinedEASearch
+		m.mu.Unlock()
+		if len(eaFilters) > 0 && undefinedEA {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+			return
 		}
 
 		m.mu.Lock()
@@ -410,6 +429,9 @@ func (m *mockWapiServer) handler() http.Handler {
 			return
 		}
 		m.mu.Lock()
+		// UNSTABLE _ref: renaming a shared network mints a new _ref —
+		// mirrors live NIOS Grid Manager behavior (the _ref encodes name).
+		renamed := strOrEmpty(existing.Name) != strOrEmpty(incoming.Name)
 		existing.Name = incoming.Name
 		existing.Comment = incoming.Comment
 		existing.Ea = incoming.Ea
@@ -417,8 +439,16 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.Disable = incoming.Disable
 		existing.UseOptions = incoming.UseOptions
 		existing.Options = incoming.Options
+		respRef := ref
+		if renamed {
+			delete(m.nets, ref)
+			m.nextRef++
+			respRef = "sharednetwork/test" + itoa(m.nextRef) + ":" + strOrEmpty(existing.Name)
+			existing.Ref = respRef
+			m.nets[respRef] = existing
+		}
 		m.mu.Unlock()
-		writeJSON(w, http.StatusOK, ref)
+		writeJSON(w, http.StatusOK, respRef)
 	})
 
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {

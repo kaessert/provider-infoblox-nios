@@ -117,7 +117,11 @@ type mockWapiServer struct {
 	nextRef     int
 	searchCalls int
 
-	eaDefExists bool
+	eaDefExists       bool
+	eaDefCreateStatus int
+	eaDefCreateBody   string
+	eaDefSearchCalls  int
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -180,6 +184,7 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
+		m.eaDefSearchCalls++
 		exists := m.eaDefExists
 		m.mu.Unlock()
 		if !exists {
@@ -191,6 +196,15 @@ func (m *mockWapiServer) handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
 		m.mu.Lock()
 		m.eaDefExists = true
 		m.mu.Unlock()
@@ -209,6 +223,15 @@ func (m *mockWapiServer) handler() http.Handler {
 			if strings.HasPrefix(k, "*") && len(vals) > 0 {
 				eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 			}
+		}
+
+		m.mu.Lock()
+		undefinedEA := m.undefinedEASearch
+		m.mu.Unlock()
+		if len(eaFilters) > 0 && undefinedEA {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+			return
 		}
 
 		m.mu.Lock()
@@ -265,6 +288,9 @@ func (m *mockWapiServer) handler() http.Handler {
 			return
 		}
 		m.mu.Lock()
+		// UNSTABLE _ref: renaming a range template mints a new _ref —
+		// mirrors live NIOS Grid Manager behavior (the _ref encodes name).
+		renamed := strOrEmpty(existing.Name) != strOrEmpty(incoming.Name)
 		existing.Name = incoming.Name
 		existing.NumberOfAddresses = incoming.NumberOfAddresses
 		existing.Offset = incoming.Offset
@@ -272,8 +298,16 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.Ea = incoming.Ea
 		existing.Options = incoming.Options
 		existing.UseOptions = incoming.UseOptions
+		respRef := ref
+		if renamed {
+			delete(m.templates, ref)
+			m.nextRef++
+			respRef = "rangetemplate/test" + itoa(m.nextRef) + ":" + strOrEmpty(existing.Name)
+			existing.Ref = respRef
+			m.templates[respRef] = existing
+		}
 		m.mu.Unlock()
-		writeJSON(w, http.StatusOK, ref)
+		writeJSON(w, http.StatusOK, respRef)
 	})
 
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {

@@ -162,7 +162,11 @@ type mockWapiServer struct {
 	nextRef     int
 	searchCalls int
 
-	eaDefExists bool
+	eaDefExists       bool
+	eaDefCreateStatus int
+	eaDefCreateBody   string
+	eaDefSearchCalls  int
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -229,6 +233,7 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
+		m.eaDefSearchCalls++
 		exists := m.eaDefExists
 		m.mu.Unlock()
 		if !exists {
@@ -240,6 +245,15 @@ func (m *mockWapiServer) handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
 		m.mu.Lock()
 		m.eaDefExists = true
 		m.mu.Unlock()
@@ -258,6 +272,15 @@ func (m *mockWapiServer) handler() http.Handler {
 				if strings.HasPrefix(k, "*") && len(vals) > 0 {
 					eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 				}
+			}
+
+			m.mu.Lock()
+			undefinedEA := m.undefinedEASearch
+			m.mu.Unlock()
+			if len(eaFilters) > 0 && undefinedEA {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+				return
 			}
 
 			m.mu.Lock()
@@ -503,9 +526,13 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 
 	nc := &ibclient.NetworkContainer{NetviewName: "default", Cidr: "2001:db8::/32"}
 	nc.Ea = identity.Stamp(nil, testUIDCluster)
-	ref := m.seed(nc, true)
+	m.seed(nc, true)
 
-	cr := newClusterNetworkContainerIPv6("my-container", ref)
+	// No external-name set (pre-create state): forces the identity-EA
+	// search step, the only step whose WAPI endpoint depends on the
+	// candidate object's assumed type. A resolving _ref would fetch by
+	// literal path and mask a wrong-type newEmpty entirely.
+	cr := newClusterNetworkContainerIPv6("my-container", "")
 	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	obs, err := e.Observe(context.Background(), cr)
@@ -522,6 +549,9 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 // allocation, no CIDR anywhere in spec), the identity ladder searches
 // BOTH object types rather than silently assuming IPv4 — an IPv6-family
 // object stamped with this managed resource's uid must still be found.
+// No external-name is set (pre-create state) so the ladder cannot skip
+// straight to a ref-based fetch, which would mask the search-routing
+// hazard entirely.
 func TestObserveUnknownFamilySearchesBothTypesNotDefaultV4(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -530,9 +560,9 @@ func TestObserveUnknownFamilySearchesBothTypesNotDefaultV4(t *testing.T) {
 
 	nc := &ibclient.NetworkContainer{NetviewName: "default", Cidr: "2001:db8::/32"}
 	nc.Ea = identity.Stamp(nil, testUIDCluster)
-	ref := m.seed(nc, true)
+	m.seed(nc, true)
 
-	cr := newClusterNetworkContainerUnknownFamily("my-container", ref)
+	cr := newClusterNetworkContainerUnknownFamily("my-container", "")
 	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	obs, err := e.Observe(context.Background(), cr)

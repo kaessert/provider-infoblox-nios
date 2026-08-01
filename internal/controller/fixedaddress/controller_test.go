@@ -137,7 +137,11 @@ type mockWapiServer struct {
 	nextRef     int
 	searchCalls int
 
-	eaDefExists bool
+	eaDefExists       bool
+	eaDefCreateStatus int
+	eaDefCreateBody   string
+	eaDefSearchCalls  int
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -204,6 +208,7 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
+		m.eaDefSearchCalls++
 		exists := m.eaDefExists
 		m.mu.Unlock()
 		if !exists {
@@ -215,6 +220,15 @@ func (m *mockWapiServer) handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
 		m.mu.Lock()
 		m.eaDefExists = true
 		m.mu.Unlock()
@@ -233,6 +247,15 @@ func (m *mockWapiServer) handler() http.Handler {
 				if strings.HasPrefix(k, "*") && len(vals) > 0 {
 					eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 				}
+			}
+
+			m.mu.Lock()
+			undefinedEA := m.undefinedEASearch
+			m.mu.Unlock()
+			if len(eaFilters) > 0 && undefinedEA {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+				return
 			}
 
 			m.mu.Lock()
@@ -292,12 +315,31 @@ func (m *mockWapiServer) handler() http.Handler {
 			return
 		}
 		m.mu.Lock()
+		// UNSTABLE _ref: changing a fixed address's IP mints a new _ref —
+		// mirrors live NIOS Grid Manager behavior (the _ref encodes the
+		// address). ADR-IN-0004 documents ipv4addr specifically as
+		// _ref-mutating for this resource.
+		renamed := existing.IPv4Address != incoming.IPv4Address || existing.IPv6Address != incoming.IPv6Address
 		existing.Comment = incoming.Comment
 		existing.Ea = incoming.Ea
 		existing.MatchClient = incoming.MatchClient
 		existing.Mac = incoming.Mac
+		existing.IPv4Address = incoming.IPv4Address
+		existing.IPv6Address = incoming.IPv6Address
+		respRef := ref
+		if renamed {
+			delete(m.addrs, ref)
+			m.nextRef++
+			objType := "fixedaddress"
+			if existing.IPv6Address != "" {
+				objType = "ipv6fixedaddress"
+			}
+			respRef = objType + "/test" + itoa(m.nextRef) + ":x"
+			existing.Ref = respRef
+			m.addrs[respRef] = existing
+		}
 		m.mu.Unlock()
-		writeJSON(w, http.StatusOK, ref)
+		writeJSON(w, http.StatusOK, respRef)
 	})
 
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -471,7 +513,11 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 // TestObserveFindsIPv6Object proves the identity ladder searches under
 // the correct WAPI object type ("ipv6fixedaddress") when the managed
 // resource's family is IPv6 — the dual-object-type hazard this ladder
-// must not fall into (see the package doc comment).
+// must not fall into (see the package doc comment). No external-name is
+// set (pre-create state), forcing the identity-EA search step — the
+// only step whose WAPI endpoint depends on the candidate object's
+// assumed type (a resolving _ref fetches by literal path and would mask
+// a wrong-type newEmpty entirely).
 func TestObserveFindsIPv6Object(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -480,9 +526,9 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 
 	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::10"}
 	fa.Ea = identity.Stamp(nil, testUIDCluster)
-	ref := m.seed(fa, true)
+	m.seed(fa, true)
 
-	cr := newClusterFixedAddressIPv6("my-addr", ref)
+	cr := newClusterFixedAddressIPv6("my-addr", "")
 	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	obs, err := e.Observe(context.Background(), cr)

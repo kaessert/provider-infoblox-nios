@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -161,7 +162,11 @@ type mockWapiServer struct {
 	nextRef     int
 	searchCalls int
 
-	eaDefExists bool
+	eaDefExists       bool
+	eaDefCreateStatus int
+	eaDefCreateBody   string
+	eaDefSearchCalls  int
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -198,6 +203,30 @@ func itoa(i int) string {
 	return string(b)
 }
 
+// nextAvailableNetworkFuncRe matches the WAPI call-string AllocateNetwork
+// submits as the cidr field: "func:nextavailablenetwork:<parentCidr>,
+// <netview>,<prefixLen>".
+var nextAvailableNetworkFuncRe = regexp.MustCompile(`^func:nextavailablenetwork:([^,]+),[^,]*,(\d+)$`)
+
+// resolveNextAvailableNetworkFunc reports the concrete subnet this mock
+// resolves a "func:nextavailablenetwork:..." call-string to: the
+// parent CIDR's own network address, re-prefixed to the requested
+// length. Good enough to exercise the identity ladder end-to-end
+// (create -> mint a parseable _ref -> resolve); this mock performs no
+// real IPAM allocation bookkeeping (never checks for exhaustion or
+// overlapping allocations).
+func resolveNextAvailableNetworkFunc(cidr string) (string, bool) {
+	m := nextAvailableNetworkFuncRe.FindStringSubmatch(cidr)
+	if m == nil {
+		return "", false
+	}
+	parts := strings.SplitN(m[1], "/", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	return parts[0] + "/" + m[2], true
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -219,6 +248,20 @@ func (m *mockWapiServer) handler() http.Handler {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			// AllocateNetwork (the parentCidr allocation path) submits a
+			// WAPI "func:nextavailablenetwork:<parentCidr>,<netview>,
+			// <prefixLen>" call-string as the cidr field instead of a
+			// literal CIDR. The real Grid resolves this to a concrete
+			// subnet before minting the object's _ref; this mock does the
+			// same (picking the parent's network address with the
+			// requested prefix length — good enough to exercise the
+			// identity ladder, not real IPAM) so the SDK's own
+			// BuildNetworkFromRef/BuildIPv6NetworkFromRef ref-parsing
+			// (which requires a literal dotted-decimal or IPv6 CIDR in
+			// the ref) succeeds exactly as it would against a live Grid.
+			if resolved, ok := resolveNextAvailableNetworkFunc(nw.Cidr); ok {
+				nw.Cidr = resolved
+			}
 			ref := m.seed(&nw, isIPv6)
 			writeJSON(w, http.StatusOK, ref)
 		}
@@ -228,6 +271,7 @@ func (m *mockWapiServer) handler() http.Handler {
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
+		m.eaDefSearchCalls++
 		exists := m.eaDefExists
 		m.mu.Unlock()
 		if !exists {
@@ -239,6 +283,15 @@ func (m *mockWapiServer) handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
 		m.mu.Lock()
 		m.eaDefExists = true
 		m.mu.Unlock()
@@ -257,6 +310,15 @@ func (m *mockWapiServer) handler() http.Handler {
 				if strings.HasPrefix(k, "*") && len(vals) > 0 {
 					eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 				}
+			}
+
+			m.mu.Lock()
+			undefinedEA := m.undefinedEASearch
+			m.mu.Unlock()
+			if len(eaFilters) > 0 && undefinedEA {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+				return
 			}
 
 			m.mu.Lock()
@@ -492,7 +554,12 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 // TestObserveFindsIPv6Object proves the identity ladder searches under
 // the correct WAPI object type ("ipv6network") when the CR's network
 // CIDR is IPv6 — the dual-object-type hazard this ladder must not fall
-// into (see the package doc comment).
+// into (see the package doc comment). No external-name is set yet (the
+// pre-create state), so observeRefFor reports "" and the ladder is
+// forced onto the identity-EA search step — the one step where the
+// candidate object's assumed WAPI type actually determines which
+// endpoint is queried (a resolving _ref, by contrast, addresses the
+// object directly and would mask a wrong-type newEmpty entirely).
 func TestObserveFindsIPv6Object(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -501,9 +568,9 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 
 	nw := &ibclient.Network{NetviewName: "default", Cidr: "2001:db8::/32"}
 	nw.Ea = identity.Stamp(nil, testUIDCluster)
-	ref := m.seed(nw, true)
+	m.seed(nw, true)
 
-	cr := newClusterNetworkIPv6("my-network", ref)
+	cr := newClusterNetworkIPv6("my-network", "")
 	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	obs, err := e.Observe(context.Background(), cr)
@@ -520,6 +587,9 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 // allocation, no CIDR anywhere in spec), the identity ladder searches
 // BOTH object types rather than silently assuming IPv4 — an IPv6-family
 // object stamped with this managed resource's uid must still be found.
+// No external-name is set (pre-create state) so the ladder cannot skip
+// straight to a ref-based fetch, which would mask the search-routing
+// hazard entirely.
 func TestObserveUnknownFamilySearchesBothTypesNotDefaultV4(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -528,9 +598,9 @@ func TestObserveUnknownFamilySearchesBothTypesNotDefaultV4(t *testing.T) {
 
 	nw := &ibclient.Network{NetviewName: "default", Cidr: "2001:db8::/32"}
 	nw.Ea = identity.Stamp(nil, testUIDCluster)
-	ref := m.seed(nw, true)
+	m.seed(nw, true)
 
-	cr := newClusterNetworkUnknownFamily("my-network", ref)
+	cr := newClusterNetworkUnknownFamily("my-network", "")
 	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	obs, err := e.Observe(context.Background(), cr)
