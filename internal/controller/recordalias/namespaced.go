@@ -130,7 +130,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.A
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := aliasRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.TargetName, cr.Spec.ForProvider.TargetType)
+			found, searchErr := aliasRecordExistsByNaturalKey(e.conn, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.TargetName, cr.Spec.ForProvider.TargetType)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveAliasRec)
 			}
@@ -219,7 +219,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.AliasRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteAliasRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.TargetName, p.TargetType); err != nil {
+	if err := deleteAliasRecordResolving404(e.objMgr, e.conn, externalID, p.View, p.Name, p.TargetName, p.TargetType); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

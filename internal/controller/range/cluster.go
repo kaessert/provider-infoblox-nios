@@ -74,18 +74,23 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Rang
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: mc.Manager, conn: mc.Connector}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.Range].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the same connector underlying objMgr, kept separately so
+	// rangeExistsByNaturalKey can issue its search directly through it
+	// rather than through objMgr.GetNetworkRange — see rangeExistsByNaturalKey
+	// for why that distinction matters for error classification.
+	conn ibclient.IBConnector
 }
 
 // Observe fetches the Range from the WAPI by its _ref external name and
@@ -110,7 +115,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.Range) 
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := rangeExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.StartAddr, cr.Spec.ForProvider.EndAddr, cr.Spec.ForProvider.NetworkView)
+			found, searchErr := rangeExistsByNaturalKey(e.conn, cr.Spec.ForProvider.StartAddr, cr.Spec.ForProvider.EndAddr, cr.Spec.ForProvider.NetworkView)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveRange)
 			}
@@ -198,7 +203,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Range)
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.Range) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteRangeResolving404(e.objMgr, externalID, p.StartAddr, p.EndAddr, p.NetworkView); err != nil {
+	if err := deleteRangeResolving404(e.objMgr, e.conn, externalID, p.StartAddr, p.EndAddr, p.NetworkView); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

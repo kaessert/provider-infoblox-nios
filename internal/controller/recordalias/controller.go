@@ -503,12 +503,24 @@ func deleteAliasRecord(objMgr ibclient.IBObjectManager, ref string) error {
 // objects can share the same name and view while pointing at different
 // targets. Used by Delete() when the stored _ref 404s: a hit here means
 // the _ref is merely stale, not that the object is gone. AliasRecord has
-// no single-object natural-key getter, so this searches via
-// GetAllAliasRecord (a list call) with a server-side query filter
-// instead. All four fields are required non-empty; when any is missing
-// there is no way to re-discover the object, so the search is skipped
+// no single-object natural-key getter, so this issues the search
+// directly through the raw connector with a server-side query filter and
+// answers from the match count.
+//
+// This deliberately bypasses ibclient.IBObjectManager.GetAllAliasRecord:
+// that method re-wraps a genuinely empty result with
+// fmt.Errorf("failed getting Alias Record: %s", err), which flattens the
+// SDK's typed *ibclient.NotFoundError into a plain string no classifier
+// can unwrap — isNotFound would then see neither a typed error nor an
+// HTTP status code in the message and misreport a clean "nothing
+// matched" result as a hard error. Calling conn.GetObject directly lets
+// the SDK's connector return the *ibclient.NotFoundError unwrapped, so
+// isNotFound classifies it correctly.
+//
+// All four fields are required non-empty; when any is missing there is
+// no way to re-discover the object, so the search is skipped
 // (found=false) rather than treated as an error.
-func aliasRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, targetName, targetType *string) (bool, error) {
+func aliasRecordExistsByNaturalKey(conn ibclient.IBConnector, view, name, targetName, targetType *string) (bool, error) {
 	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(targetName) == "" || strOrEmpty(targetType) == "" {
 		return false, nil
 	}
@@ -518,7 +530,8 @@ func aliasRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, 
 		"target_name": strOrEmpty(targetName),
 		"target_type": strOrEmpty(targetType),
 	}
-	res, err := objMgr.GetAllAliasRecord(ibclient.NewQueryParams(false, sf))
+	var res []ibclient.RecordAlias
+	err := conn.GetObject(ibclient.NewEmptyAliasRecord(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
@@ -535,7 +548,7 @@ func aliasRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, 
 // natural-key search still finds a live alias record, deleting is
 // refused because ownership of that record cannot be verified from the
 // search alone (see the staleref package doc for the full rationale).
-func deleteAliasRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, targetName, targetType *string) error {
+func deleteAliasRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, view, name, targetName, targetType *string) error {
 	delErr := deleteAliasRecord(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -543,7 +556,7 @@ func deleteAliasRecordResolving404(objMgr ibclient.IBObjectManager, ref string, 
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteAliasRecord)
 	}
-	found, searchErr := aliasRecordExistsByNaturalKey(objMgr, view, name, targetName, targetType)
+	found, searchErr := aliasRecordExistsByNaturalKey(conn, view, name, targetName, targetType)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteAliasRecord)
 	}

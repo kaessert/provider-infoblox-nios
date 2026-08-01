@@ -274,7 +274,12 @@ func (m *mockWapiServer) handler() http.Handler {
 		targetType := q.Get("target_type")
 
 		m.mu.Lock()
-		var matches []ibclient.RecordAlias
+		// Initialized (not nil) so an empty result set marshals to a
+		// JSON "[]" body, matching real WAPI search semantics — the SDK
+		// connector treats literal "[]" as its NotFoundError trigger, and
+		// a nil slice marshaling to "null" would mask that behavior in
+		// tests (see the package-level defect this mock now reproduces).
+		matches := []ibclient.RecordAlias{}
 		for _, rec := range m.records {
 			if view != "" && (rec.View == nil || *rec.View != view) {
 				continue
@@ -955,6 +960,32 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	}
 }
 
+// TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch verifies the
+// genuine-absence direction of the same defect: a 404 against the stored
+// _ref, and a natural-key search over the CR's own identity that
+// genuinely finds nothing, must report ResourceExists:false with no
+// error — not the "failed getting Alias Record: not found" error the
+// SDK's ObjectManager.GetAllAliasRecord produced before this fix. Without
+// this, Observe fails, the delete finalizer is never cleared, and the MR
+// is stuck forever even though the backend object is already gone.
+func TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newClusterAliasRecord("my-alias", "record:alias/stale-ref:alias.example.com/default")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+	if got.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the natural-key search finds nothing, got true")
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1356,6 +1387,27 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestNamespacedObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/stale-ref:alias.example.com/default", "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+	if got.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the natural-key search finds nothing, got true")
 	}
 }
 
