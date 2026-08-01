@@ -6,6 +6,14 @@
 // instead of a generic HTTP request/response envelope, so there is no
 // internal REST client to compose.
 //
+// AAAARecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordaaaa
@@ -29,29 +37,41 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveAAAARecord   = "cannot observe AAAARecord"
-	errCreateAAAARecord    = "cannot create AAAARecord"
-	errUpdateAAAARecord    = "cannot update AAAARecord"
-	errDeleteAAAARecord    = "cannot delete AAAARecord"
-	errCidrIPv6Mutex       = "cidr and ipv6Addr are mutually exclusive"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveAAAARecord         = "cannot observe AAAARecord"
+	errCreateAAAARecord          = "cannot create AAAARecord"
+	errUpdateAAAARecord          = "cannot update AAAARecord"
+	errDeleteAAAARecord          = "cannot delete AAAARecord"
+	errCidrIPv6Mutex             = "cidr and ipv6Addr are mutually exclusive"
+	errEmptyUID                  = "cannot stamp AAAARecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// Production code always goes through Connect(), which resolves the
+// endpoint from the ProviderConfig's credentials Secret before
+// constructing the client — this fallback is only ever reached by this
+// package's own white-box unit tests.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -104,18 +124,22 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector the identity ladder needs directly (it operates
+// below ObjectManager's typed methods so it can see search match
+// counts). The Connector performs HTTP Basic Auth on every request and
+// only validates configuration locally — no network round-trip happens
+// until the first Observe/Create/Update/Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -145,10 +169,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -283,7 +307,10 @@ func isNotFound(err error) bool {
 // view+zone+name; the UpdateAAAARecord SDK method has no view parameter)
 // and RemoveAssociatedPtr is write-only (delete-time option, never
 // present in a GET response) — both are intentionally excluded from this
-// comparison.
+// comparison. The Grid's extattrs map is compared with the provider's
+// own identity stamp stripped out (identity.Strip): the CRD schema never
+// includes that reserved key, so leaving it in would produce a permanent
+// phantom diff.
 func isUpToDate(name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordAAAA) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
@@ -307,7 +334,7 @@ func isUpToDate(name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extA
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -315,8 +342,11 @@ func isUpToDate(name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extA
 // isUpToDate does not see phantom drift on the next reconcile. Required
 // fields (name, ipv6Addr) and the immutable view field are never
 // late-initialized — view is always user-supplied (required on the CRD)
-// and name/ipv6Addr are always user-supplied too. Returns true if any
-// field was changed.
+// and name/ipv6Addr are always user-supplied too. extAttrs is
+// back-filled with the provider's own identity stamp stripped out
+// (identity.Strip) — the CRD schema never includes that reserved key, so
+// late-initializing it into spec.forProvider would fail CEL validation
+// and produce a permanent diff. Returns true if any field was changed.
 func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordAAAA) bool {
 	changed := false
 
@@ -340,7 +370,7 @@ func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -412,24 +442,43 @@ func observeFromRecordAAAA(externalID string, rec *ibclient.RecordAAAA) observed
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createAAAARecord issues the WAPI create call. When cidr is set, the
-// WAPI dynamically allocates the next available IPv6 address from the
-// given network view (func:nextavailableip) instead of using a
-// caller-supplied static address — cidr and ipv6Addr are mutually
-// exclusive, enforced below before the SDK call is issued. CreateAAAARecord
-// already defaults an empty network view to "default" internally; this
-// wrapper applies the same default explicitly for consistency with
-// createARecord (whose SDK counterpart does not self-default).
-func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string) (*ibclient.RecordAAAA, error) {
-	cidrVal := strOrEmpty(cidr)
-	if cidrVal != "" && strOrEmpty(ipv6Addr) != "" {
-		return nil, errors.New(errCidrIPv6Mutex)
+// validateAAAARecordCreateInputs performs the local, network-free sanity
+// checks a create call requires: uid must be set (identity.Stamp cannot
+// stamp an empty value), and cidr/ipv6Addr are mutually exclusive.
+func validateAAAARecordCreateInputs(ipv6Addr, cidr *string, uid string) error {
+	if uid == "" {
+		return errors.New(errEmptyUID)
+	}
+	if strOrEmpty(cidr) != "" && strOrEmpty(ipv6Addr) != "" {
+		return errors.New(errCidrIPv6Mutex)
+	}
+	return nil
+}
+
+// createAAAARecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp) — there is no follow-up
+// call, so there is no window in which the object exists without its
+// identity stamp. When cidr is set, the WAPI dynamically allocates the
+// next available IPv6 address from the given network view
+// (func:nextavailableip) instead of using a caller-supplied static
+// address — cidr and ipv6Addr are mutually exclusive, enforced above
+// before the SDK call is issued. CreateAAAARecord already defaults an
+// empty network view to "default" internally; this wrapper applies the
+// same default explicitly for consistency with createARecord (whose SDK
+// counterpart does not self-default).
+func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string, uid string) (*ibclient.RecordAAAA, error) {
+	if err := validateAAAARecordCreateInputs(ipv6Addr, cidr, uid); err != nil {
+		return nil, err
 	}
 
+	cidrVal := strOrEmpty(cidr)
 	netView := strOrEmpty(networkView)
 	if cidrVal != "" && netView == "" {
 		netView = "default"
 	}
+
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 
 	return objMgr.CreateAAAARecord(
 		netView,
@@ -440,14 +489,26 @@ func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, com
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
 // updateAAAARecord issues the WAPI update call. view is intentionally
 // never passed — UpdateAAAARecord has no view parameter (immutable
 // field). cidr and netView are always empty, mirroring createAAAARecord.
-func updateAAAARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordAAAA, error) {
+//
+// Every call re-asserts the identity stamp (identity.Stamp) in the
+// extattrs it sends — a WAPI PUT carrying extattrs replaces the whole
+// map, not a per-key merge (live-verified on the ARecord pilot), so
+// omitting the stamp here would wipe it off the object on the first
+// field update after create.
+func updateAAAARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordAAAA, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+
 	return objMgr.UpdateAAAARecord(
 		ref,
 		"", // netView — not exposed by this provider
@@ -457,7 +518,7 @@ func updateAAAARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv6Add
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -473,51 +534,136 @@ func deleteAAAARecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// aaaaRecordExistsByNaturalKey reports whether a live AAAARecord still
-// exists under the CR's own (view, name, ipv6Addr) identity — the same
-// tuple WAPI uses to compute the _ref. Used by Delete() when the stored
-// _ref 404s: a hit here means the _ref is merely stale, not that the
-// object is gone. GetAAAARecord requires all three fields non-empty (it
-// returns a hard error, not a NotFoundError, when any is missing); when
-// any is missing there is no way to re-discover the object, so the
-// search is skipped (found=false) rather than treated as an error.
-func aaaaRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, ipv6Addr *string) (bool, error) {
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(ipv6Addr) == "" {
-		return false, nil
-	}
-	_, err := objMgr.GetAAAARecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(ipv6Addr))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteAAAARecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteAAAARecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, ipv6Addr *string) error {
-	delErr := deleteAAAARecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation — so the
+// caller's Synced=False condition carries it directly. Any other error is
+// wrapped like any other WAPI error and is retriable. See recorda's
+// ensureIdentityPrerequisite for the full rationale (identical pattern,
+// reused per package since each controller package is self-contained).
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteAAAARecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := aaaaRecordExistsByNaturalKey(objMgr, view, name, ipv6Addr)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteAAAARecord)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. When the
+// annotation still holds the framework's NameAsExternalName default (the
+// CR's own Kubernetes name) no real WAPI _ref has ever been assigned, so
+// this reports "" rather than handing the ladder a value that can never
+// resolve.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveAAAARecordIdentity resolves the AAAARecord identified by
+// ref/uid through the shared UID-in-EA ladder — see recorda's
+// resolveARecordIdentity for the full rationale.
+func resolveAAAARecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordAAAA, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordAAAA](ctx, conn, ibclient.NewEmptyRecordAAAA, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting an
+// AAAARecord through the identity ladder during Observe — common to both
+// scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordAAAA
+	obs          observedAAAARecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeAAAARecord runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object. See recorda's observeARecord for the full rationale
+// (identical pattern).
+func observeAAAARecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveAAAARecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordAAAA(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteAAAARecordIdentity issues the WAPI delete for the AAAARecord this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity for the full rationale (identical pattern).
+func deleteAAAARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveAAAARecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteAAAARecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteAAAARecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteAAAARecord)
+	default:
+		return errors.New("identity: unresolved AAAARecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
