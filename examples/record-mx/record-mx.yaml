@@ -64,11 +64,11 @@ metadata:
       - field: useTtl
         value: false
       - field: name
-        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: mailExchanger
-        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: preference
-        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, covered by controller unit tests instead"
+        skip: "part of the record's identity tuple; changing it mutates the WAPI _ref, not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:

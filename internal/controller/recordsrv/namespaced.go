@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-recordsrv.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.SRVRecord].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -119,12 +121,19 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.S
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.objMgr.GetSRVRecordByRef(externalID)
+	rec, refChanged, err := fetchSRVRecord(e.objMgr, externalID, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.Target, cr.Spec.ForProvider.Port)
 	if err != nil {
-		if isNotFound(err) {
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveSRVRecord)
+	}
+	if rec == nil {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	// The stored _ref 404d and fetchSRVRecord re-located the record by
+	// its natural key (view/name/target/port) instead — see
+	// clusterExternal.Observe for the full rationale.
+	if refChanged && rec.Ref != "" {
+		meta.SetExternalName(cr, rec.Ref)
+		externalID = rec.Ref
 	}
 
 	o := observeFromRecordSRV(externalID, rec)
@@ -180,7 +189,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.SR
 // are all _ref-mutating, the external-name annotation is refreshed
 // whenever the WAPI response returns a different _ref than the one used
 // to issue the request (UNSTABLE _ref).
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -193,7 +202,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.SR
 	// object's current _ref, and any _ref-mutating field changing mints a
 	// new one.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

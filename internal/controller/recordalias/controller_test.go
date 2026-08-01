@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
@@ -47,6 +48,33 @@ const testEAKey = "env"
 // the "up to date" fixtures (as opposed to the "staging"/other values
 // used to exercise drift detection).
 const testEAValue = "prod"
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
+
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -395,7 +423,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -430,7 +458,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "record:alias/does-not-exist:alias.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -452,7 +480,7 @@ func TestObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())      // simulate NameAsExternalName initializer
 
@@ -470,7 +498,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "record:alias/test1:alias.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -483,7 +511,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "record:alias/test1:alias.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -506,7 +534,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.RecordAlias{})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -561,7 +589,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -580,7 +608,7 @@ func TestClusterCreateError(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -609,7 +637,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 	// Mutate the immutable (soft-immutable) view field in spec — this
 	// must NOT affect ResourceUpToDate.
@@ -641,7 +669,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -671,7 +699,7 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -720,7 +748,7 @@ func TestClusterUpdateRefChangeUpdatesExternalName(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", oldRef)
 	cr.Spec.ForProvider.Name = stringPtr("new.example.com")
 
@@ -744,7 +772,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.RecordAlias{Name: stringPtr("alias.example.com"), View: &view})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -765,7 +793,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "record:alias/does-not-exist:alias.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -781,7 +809,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", "record:alias/test1:alias.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -796,7 +824,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -877,7 +905,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -898,7 +926,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/does-not-exist:alias.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -915,7 +943,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -933,7 +961,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/test1:alias.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -946,7 +974,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/test1:alias.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -965,7 +993,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.RecordAlias{})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1014,7 +1042,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1041,7 +1069,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
 	cr.Spec.ForProvider.TargetName = stringPtr("other-target.example.com")
 
@@ -1066,7 +1094,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.RecordAlias{Name: stringPtr("alias.example.com"), View: &view})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1080,7 +1108,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/does-not-exist:alias.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1096,7 +1124,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &namespacedExternal{objMgr: objMgr, conn: conn}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/test1:alias.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1208,7 +1236,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1387,7 +1415,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 	})
 
 	objMgr, conn := newTestObjectManager(t, srv)
-	e := &clusterExternal{objMgr: objMgr, conn: conn}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
 	cr := newClusterAliasRecord("my-alias", ref)
 	cr.Spec.ForProvider.Name = stringPtr("alias.example.com")
 	cr.Spec.ForProvider.TargetName = stringPtr("target.example.com")

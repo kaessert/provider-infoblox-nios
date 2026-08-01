@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-recordcname.infobloxnios.crossplane.io"
@@ -77,11 +78,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.CNAM
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.CNAMERecord].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -155,7 +157,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.CNAMERec
 
 // Update patches the mutable CNAMERecord fields. View (immutable) is
 // never sent — see updateCNAMERecord.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.CNAMERecord) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.CNAMERecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -171,7 +173,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.CNAMERec
 	// refreshed here whenever the returned _ref differs from the one we
 	// called with.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

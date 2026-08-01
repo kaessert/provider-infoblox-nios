@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-recordtxt.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.TXTR
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.TXTRecord].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -157,7 +159,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.TXTRecor
 // View (immutable) is never sent — see updateTXTRecord. name/text
 // changes cause the WAPI to assign a new _ref, so it must be
 // re-captured from the response.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.TXTRecord) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.TXTRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -171,7 +173,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.TXTRecor
 	// refreshed here or the next reconcile's GetTXTRecordByRef call will
 	// 404 against the now-stale old ref.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

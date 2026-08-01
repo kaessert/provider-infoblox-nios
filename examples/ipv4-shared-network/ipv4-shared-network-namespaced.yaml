@@ -32,7 +32,7 @@ metadata:
       - field: useOptions
         value: true
       - field: name
-        skip: "the WAPI _ref for a shared network embeds its name; renaming rotates the _ref, covered by controller unit tests instead"
+        skip: "the WAPI _ref for a shared network embeds its name; renaming rotates the _ref, not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: networks
         skip: "cidr-match cross-resource reference list, not a scalar update-test target"
       - field: networksRefs

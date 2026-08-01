@@ -47,20 +47,21 @@ import (
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage     = "cannot track ProviderConfig usage"
-	errGetPC            = "cannot get ProviderConfig"
-	errGetClusterPC     = "cannot get ClusterProviderConfig"
-	errUnsupportedKind  = "unsupported provider config kind"
-	errGetSecret        = "cannot get credentials secret"
-	errNoSecretRef      = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey   = "credentials secret is missing one of the required host/username/password keys"
-	errNewConnector     = "cannot create Infoblox NIOS WAPI connector"
-	errObserveDNSView   = "cannot observe DNSView"
-	errCreateDNSView    = "cannot create DNSView"
-	errUpdateDNSView    = "cannot update DNSView"
-	errDeleteDNSView    = "cannot delete DNSView"
-	errEmptyRef         = "empty reference to an object is not allowed"
+	errTrackPCUsage        = "cannot track ProviderConfig usage"
+	errPersistExternalName = "cannot persist refreshed external name"
+	errGetPC               = "cannot get ProviderConfig"
+	errGetClusterPC        = "cannot get ClusterProviderConfig"
+	errUnsupportedKind     = "unsupported provider config kind"
+	errGetSecret           = "cannot get credentials secret"
+	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
+	errNewConnector        = "cannot create Infoblox NIOS WAPI connector"
+	errObserveDNSView      = "cannot observe DNSView"
+	errCreateDNSView       = "cannot create DNSView"
+	errUpdateDNSView       = "cannot update DNSView"
+	errDeleteDNSView       = "cannot delete DNSView"
+	errEmptyRef            = "empty reference to an object is not allowed"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets

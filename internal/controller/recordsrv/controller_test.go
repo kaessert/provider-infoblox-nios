@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordsrv/v1alpha1"
@@ -31,6 +32,33 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
+
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -218,6 +246,42 @@ func (m *mockWapiServer) handler() http.Handler {
 		writeJSON(w, http.StatusOK, ref)
 	})
 
+	// Search endpoint used by GetSRVRecord's natural-key fallback, filtered
+	// by view/name/target/port query params. Registered as an exact
+	// literal path so Go's ServeMux prefers it over the {ref...} wildcard
+	// below for requests to precisely "record:srv" (real _refs always
+	// carry additional path segments).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:srv", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		view := q.Get("view")
+		name := q.Get("name")
+		target := q.Get("target")
+		port := q.Get("port")
+
+		m.mu.Lock()
+		var matches []ibclient.RecordSRV
+		for _, rec := range m.records {
+			if view != "" && rec.View != view {
+				continue
+			}
+			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			if target != "" && (rec.Target == nil || *rec.Target != target) {
+				continue
+			}
+			if port != "" && (rec.Port == nil || itoa(int(*rec.Port)) != port) {
+				continue
+			}
+			matches = append(matches, *rec)
+		}
+		m.mu.Unlock()
+
+		// Always respond 200 — WAPI search semantics report "not found"
+		// via an empty array, never an HTTP error status.
+		writeJSON(w, http.StatusOK, matches)
+	})
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -380,7 +444,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:       ibclient.EA{"env": "prod"},
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.TTL = uint32Ptr(300)
@@ -416,7 +480,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "record:srv/does-not-exist:_sip._tcp.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -425,6 +489,49 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false for 404, got true")
+	}
+}
+
+// TestClusterObserveRefInstabilityFallsBackToSearch verifies that Observe
+// recovers from a stale external-name annotation (the stored _ref no
+// longer resolves because a prior Update rotated it and the refreshed
+// annotation was never persisted — e.g. a crash between the WAPI write
+// succeeding and the annotation Patch landing) by re-searching via the
+// CR's own identity fields (view, name, target, port), and refreshes the
+// external name to the record's current _ref. This is the defense in
+// depth called for by the external-name-refresh-conflict-safety fix:
+// even a conflict-proof persist has a crash window, and this fallback is
+// what turns that window from "wedged forever" into "self-heals on the
+// next reconcile".
+func TestClusterObserveRefInstabilityFallsBackToSearch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	realRef := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	// External-name annotation points at a stale _ref (as if the record
+	// was renamed by a prior reconcile that changed identity fields, but
+	// the annotation refresh was lost — e.g. controller restart).
+	cr := newClusterSRVRecord("my-srvrecord", "record:srv/stale:old.example.com/default")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true via fallback search, got false")
+	}
+	if got := meta.GetExternalName(cr); got != realRef {
+		t.Errorf("Observe: external-name = %q, want refreshed to %q", got, realRef)
 	}
 }
 
@@ -437,7 +544,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())        // simulate NameAsExternalName initializer
 
@@ -454,7 +561,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -466,7 +573,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -491,7 +598,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	// (nil/empty string), so zoneFromName leaves Zone at "" too.
 	ref := m.seed(&ibclient.RecordSRV{})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -548,7 +655,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -570,7 +677,7 @@ func TestClusterCreateCapturesServerAssignedRef(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -593,7 +700,7 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -619,7 +726,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 		View:     "original-view",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	// Mutate the immutable view field in spec — this must NOT affect
 	// ResourceUpToDate, since view is excluded from isUpToDate (WAPI has
@@ -652,7 +759,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment:  stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -690,7 +797,8 @@ func TestClusterUpdateRefreshesUnstableRef(t *testing.T) {
 		View:     "default",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	kube := &recordingKubeClient{}
+	e := &clusterExternal{kube: kube, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", oldRef)
 	cr.Spec.ForProvider.Name = stringPtr("_sip._tcp.renamed.example.com")
 
@@ -701,6 +809,19 @@ func TestClusterUpdateRefreshesUnstableRef(t *testing.T) {
 	newRef := meta.GetExternalName(cr)
 	if newRef == oldRef {
 		t.Fatal("Update: external-name unchanged after a _ref-mutating field update, want a refreshed _ref")
+	}
+
+	// Regression guard: the refreshed external-name must be persisted via
+	// a real kube client call, not merely mutated in memory on cr. The
+	// managed reconciler only flushes the status subresource after a
+	// successful external Update() — any annotation change that isn't
+	// pushed through kube.Update() here is silently discarded, and the
+	// very next Observe() would use the stale, now-404ing ref.
+	if kube.updated == nil {
+		t.Fatal("Update: external-name refresh was not persisted via kube.Update — the annotation change would be silently discarded by the managed reconciler")
+	}
+	if got := meta.GetExternalName(kube.updated); got != newRef {
+		t.Errorf("Update: persisted external-name = %q, want %q", got, newRef)
 	}
 
 	m.mu.Lock()
@@ -732,7 +853,7 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 		View:     "default",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -761,7 +882,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordSRV{Name: stringPtr("_sip._tcp.example.com"), View: "default"})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -781,7 +902,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "record:srv/does-not-exist:_sip._tcp.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -796,7 +917,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -811,7 +932,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -892,7 +1013,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		View:     "default",
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -912,7 +1033,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/does-not-exist:_sip._tcp.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -924,11 +1045,43 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveRefInstabilityFallsBackToSearch is the namespaced
+// counterpart of TestClusterObserveRefInstabilityFallsBackToSearch — see
+// that test's doc comment for the full rationale.
+func TestNamespacedObserveRefInstabilityFallsBackToSearch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	realRef := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/stale:old.example.com/default", "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true via fallback search, got false")
+	}
+	if got := meta.GetExternalName(cr); got != realRef {
+		t.Errorf("Observe: external-name = %q, want refreshed to %q", got, realRef)
+	}
+}
+
 func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -945,7 +1098,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -957,7 +1110,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -975,7 +1128,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordSRV{})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1032,7 +1185,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1051,7 +1204,7 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -1077,7 +1230,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		View:     "default",
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("updated comment")
 
@@ -1100,7 +1253,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordSRV{Name: stringPtr("_sip._tcp.example.com"), View: "default"})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1113,7 +1266,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/does-not-exist:_sip._tcp.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1128,7 +1281,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/test1:_sip._tcp.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1240,7 +1393,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1386,7 +1539,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 		View:     "observed-view",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	cr.Spec.ForProvider.Name = stringPtr("_sip._tcp.example.com")
 	cr.Spec.ForProvider.Target = stringPtr("sipserver.example.com")

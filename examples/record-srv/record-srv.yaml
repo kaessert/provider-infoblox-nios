@@ -23,7 +23,10 @@
 #             creation (CEL rule enforced) — the UpdateSRVRecord SDK call
 #             has no view parameter.
 #
-# Optional mutable fields: comment, ttl, useTtl, extAttrs.
+# Optional mutable fields: comment, ttl, useTtl, extAttrs. priority (a
+# required field) is also mutable and rotates the record's `_ref` on
+# change; the update-test annotation below exercises that rotation
+# end-to-end to prove the refreshed external-name annotation persists.
 apiVersion: recordsrv.infobloxnios.crossplane.io/v1alpha1
 kind: SRVRecord
 metadata:
@@ -36,11 +39,21 @@ metadata:
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-srv.sh
     # comment is the mutable scalar exercised here alongside useTtl and
-    # ttl. It is intentionally NOT one of the five _ref-mutating fields
-    # (name, target, priority, weight, port) — changing any of those
-    # would rotate the WAPI `_ref` mid-test and destabilize the
-    # update-tester's convergence check; that rotation is already
-    # exercised by controller unit tests. useTtl transitions to true
+    # ttl. priority is also exercised below — it is one of the five
+    # _ref-mutating fields (name, target, priority, weight, port), and
+    # changing it rotates the WAPI `_ref` mid-test. That rotation is the
+    # exact scenario that used to wedge the resource: the controller's
+    # Update() call refreshed crossplane.io/external-name in memory, but
+    # crossplane-runtime only persists the status subresource after a
+    # successful external Update(), so the refreshed annotation was
+    # silently discarded and the next Observe() 404'd against the stale
+    # ref. Exercising priority here proves the annotation refresh is
+    # actually persisted end-to-end (patch → WaitReady → poll
+    # status.atProvider.priority), rather than merely asserted in memory
+    # by a controller unit test. name, target, weight, and port are also
+    # _ref-mutating but stay skipped below — asserting their post-rotation
+    # value here would just repeat the same rotation flow priority already
+    # proves; see their skip reasons. useTtl transitions to true
     # (absent useTtl is treated as false by the controller), then ttl is
     # changed to a nonzero value while useTtl stays on — see
     # record-cname.yaml for the field-reported reconcile-loop rationale
@@ -64,15 +77,15 @@ metadata:
       - field: useTtl
         value: false
       - field: name
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; renaming would require predicting the rotated external-name ref ahead of time to assert it — the priority field below already exercises _ref rotation end-to-end for this resource"
       - field: target
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; changing it would require predicting the rotated external-name ref ahead of time to assert it — the priority field below already exercises _ref rotation end-to-end for this resource"
       - field: priority
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        value: 30
       - field: weight
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; changing it would require predicting the rotated external-name ref ahead of time to assert it — the priority field above already exercises _ref rotation end-to-end for this resource"
       - field: port
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; changing it would require predicting the rotated external-name ref ahead of time to assert it — the priority field above already exercises _ref rotation end-to-end for this resource"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:

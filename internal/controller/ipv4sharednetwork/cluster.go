@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-ipv4sharednetwork.infobloxnios.crossplane.io"
@@ -78,12 +79,13 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.IPv4
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements
 // managed.TypedExternalClient[*clusterv1alpha1.IPv4SharedNetwork].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -172,7 +174,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.IPv4Shar
 // comment, extattrs, disable, useOptions, options). networkView is
 // immutable and is never sent as the top-level network_view key — see
 // updateIPv4SharedNetwork.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -188,7 +190,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.IPv4Shar
 	// server returns a different _ref (renaming plays the same role it
 	// does for ARecord).
 	if sn.Ref != "" && sn.Ref != externalID {
-		meta.SetExternalName(cr, sn.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, sn.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

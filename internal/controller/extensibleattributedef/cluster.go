@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/extensibleattributedef/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-extensibleattributedef.infobloxnios.crossplane.io"
@@ -77,12 +78,13 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Exte
 		return nil, err
 	}
 
-	return &clusterExternal{conn: conn}, nil
+	return &clusterExternal{kube: c.kube, conn: conn}, nil
 }
 
 // clusterExternal implements
 // managed.TypedExternalClient[*clusterv1alpha1.ExtensibleAttributeDef].
 type clusterExternal struct {
+	kube k8sclient.Client
 	conn *ibclient.Connector
 }
 
@@ -187,7 +189,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.Extensib
 
 // Update patches the mutable ExtensibleAttributeDef fields. type/min/max
 // (immutable) are never sent — see updateEADefinition.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -201,7 +203,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.Extensib
 	// ExtensibleAttributeDef changes its _ref, so the external-name
 	// annotation must be refreshed here.
 	if newRef != "" && newRef != externalID {
-		meta.SetExternalName(cr, newRef)
+		if err := externalname.Refresh(ctx, e.kube, cr, newRef); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

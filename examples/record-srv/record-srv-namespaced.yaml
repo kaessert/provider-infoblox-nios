@@ -21,8 +21,13 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # record-srv.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-srv-namespaced.sh
-    # See record-srv.yaml for the useTtl/ttl transition rationale and
-    # the skip rationale for name/target/priority/weight/port/extAttrs.
+    # See record-srv.yaml for the useTtl/ttl transition rationale. That
+    # file exercises priority (a _ref-mutating field) end-to-end to
+    # prove the refreshed external-name annotation persists after a
+    # _ref rotation; priority stays skipped here to avoid repeating the
+    # same rotation flow in both scope variants of the same resource.
+    # See record-srv.yaml for the skip rationale for
+    # name/target/weight/port/extAttrs too.
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (namespaced)"
@@ -33,15 +38,15 @@ metadata:
       - field: useTtl
         value: false
       - field: name
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: target
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: priority
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: weight
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: port
-        skip: "_ref-mutating identity field for SRVRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for SRVRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:

@@ -62,7 +62,7 @@ metadata:
       - field: useTtl
         value: false
       - field: name
-        skip: "renaming changes the record's _ref (external identity); covered by controller unit tests instead"
+        skip: "renaming changes the record's _ref (external identity); not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: cidr

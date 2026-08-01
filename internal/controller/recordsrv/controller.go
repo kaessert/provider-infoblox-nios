@@ -35,19 +35,20 @@ import (
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage     = "cannot track ProviderConfig usage"
-	errGetPC            = "cannot get ProviderConfig"
-	errGetClusterPC     = "cannot get ClusterProviderConfig"
-	errUnsupportedKind  = "unsupported provider config kind"
-	errGetSecret        = "cannot get credentials secret"
-	errNoSecretRef      = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey   = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveSRVRecord = "cannot observe SRVRecord"
-	errCreateSRVRecord  = "cannot create SRVRecord"
-	errUpdateSRVRecord  = "cannot update SRVRecord"
-	errDeleteSRVRecord  = "cannot delete SRVRecord"
+	errTrackPCUsage        = "cannot track ProviderConfig usage"
+	errPersistExternalName = "cannot persist refreshed external name"
+	errGetPC               = "cannot get ProviderConfig"
+	errGetClusterPC        = "cannot get ClusterProviderConfig"
+	errUnsupportedKind     = "unsupported provider config kind"
+	errGetSecret           = "cannot get credentials secret"
+	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveSRVRecord    = "cannot observe SRVRecord"
+	errCreateSRVRecord     = "cannot create SRVRecord"
+	errUpdateSRVRecord     = "cannot update SRVRecord"
+	errDeleteSRVRecord     = "cannot delete SRVRecord"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets
@@ -269,6 +270,46 @@ func isNotFound(err error) bool {
 	}
 	code, convErr := strconv.Atoi(m[1])
 	return convErr == nil && code == http.StatusNotFound
+}
+
+// fetchSRVRecord looks the record up by its stored _ref first. If that
+// _ref 404s — because a prior Update rotated it (name/target/priority/
+// weight/port are all _ref-mutating) and the refreshed annotation was
+// never persisted, e.g. a crash between the WAPI write succeeding and
+// the annotation Patch landing — it falls back to a natural-key search
+// using the CURRENT desired spec (view/name/target/port). That is safe
+// specifically because a rotated _ref only ever happens after the WAPI
+// write that rotated it already succeeded, so by the time this fallback
+// runs the backend's target/priority/weight/port already match spec.
+//
+// The returned bool reports whether the record was found via the
+// fallback (i.e. the _ref changed) so the caller can refresh the
+// external-name annotation and avoid repeating the fallback search on
+// every subsequent reconcile.
+func fetchSRVRecord(objMgr ibclient.IBObjectManager, externalID string, view, name, target *string, port *uint32) (*ibclient.RecordSRV, bool, error) {
+	rec, err := objMgr.GetSRVRecordByRef(externalID)
+	if err == nil {
+		return rec, false, nil
+	}
+	if !isNotFound(err) {
+		return nil, false, err
+	}
+
+	// The stored _ref is gone. A fallback search requires the identity
+	// fields GetSRVRecord needs (view, name, target, port); without them
+	// there is no way to re-discover the object.
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(target) == "" || port == nil {
+		return nil, false, nil
+	}
+
+	rec, searchErr := objMgr.GetSRVRecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(target), *port)
+	if searchErr != nil {
+		if isNotFound(searchErr) {
+			return nil, false, nil
+		}
+		return nil, false, searchErr
+	}
+	return rec, true, nil
 }
 
 // ── Field comparison / late-init ────────────────────────────────────────

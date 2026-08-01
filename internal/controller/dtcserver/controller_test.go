@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1"
@@ -31,6 +32,33 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
+
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -331,7 +359,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:                   ibclient.EA{eaKeyEnv: eaValProd},
 	})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -364,7 +392,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/does-not-exist:my-dtc-server")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -385,7 +413,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())        // simulate NameAsExternalName initializer
 
@@ -402,7 +430,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/test1:my-dtc-server")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -414,7 +442,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/test1:my-dtc-server")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -434,7 +462,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcServer{})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -499,7 +527,7 @@ func TestClusterObserveMonitorsAndHealth(t *testing.T) {
 		},
 	})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 	cr.Spec.ForProvider.Monitors = []clusterv1alpha1.DTCServerMonitor{
 		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
@@ -529,7 +557,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "") // no external-name yet
 	cr.Spec.ForProvider.Monitors = []clusterv1alpha1.DTCServerMonitor{
 		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
@@ -562,7 +590,7 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -579,7 +607,7 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/test1:my-dtc-server")
 
 	if _, err := e.Update(context.Background(), cr); err == nil {
@@ -598,7 +626,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment: stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -627,7 +655,7 @@ func TestUpdateSendsAllFields(t *testing.T) {
 		Host: stringPtr("2.3.4.5"),
 	})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 	cr.Spec.ForProvider.Host = stringPtr("2.3.4.6")
 
@@ -660,7 +688,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcServer{Name: stringPtr("my-dtc-server")})
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -680,7 +708,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/does-not-exist:my-dtc-server")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -695,7 +723,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCServer("my-dtcserver", "dtc:server/test1:my-dtc-server")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -710,7 +738,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -787,7 +815,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		Host: stringPtr("2.3.4.5"),
 	})
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -823,7 +851,7 @@ func TestNamespacedObserveMonitorsAndHealth(t *testing.T) {
 		},
 	})
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Monitors = []namespacedv1alpha1.DTCServerMonitor{
 		{Monitor: stringPtr(monitorRefSNMP), Host: stringPtr("2.3.4.5")},
@@ -851,7 +879,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -867,7 +895,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -884,7 +912,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -896,7 +924,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -911,7 +939,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -928,7 +956,7 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -943,7 +971,7 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Update(context.Background(), cr); err == nil {
@@ -961,7 +989,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Host: stringPtr("2.3.4.5"),
 	})
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Host = stringPtr("2.3.4.6")
 
@@ -984,7 +1012,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcServer{Name: stringPtr("my-dtc-server")})
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -997,7 +1025,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/does-not-exist:my-dtc-server", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1012,7 +1040,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/test1:my-dtc-server", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1124,7 +1152,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}

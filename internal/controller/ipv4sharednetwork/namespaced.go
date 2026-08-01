@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-ipv4sharednetwork.infobloxnios.m.crossplane.io"
@@ -102,12 +103,13 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // namespacedExternal implements
 // managed.TypedExternalClient[*namespacedv1alpha1.IPv4SharedNetwork].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -192,7 +194,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.IP
 // comment, extattrs, disable, useOptions, options). networkView is
 // immutable and is never sent as the top-level network_view key — see
 // updateIPv4SharedNetwork.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -204,7 +206,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.IP
 	// See clusterExternal.Update — name is mutable and the returned _ref
 	// must be re-annotated whenever it changes.
 	if sn.Ref != "" && sn.Ref != externalID {
-		meta.SetExternalName(cr, sn.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, sn.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

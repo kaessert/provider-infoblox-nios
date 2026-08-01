@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-networkview.infobloxnios.crossplane.io"
@@ -75,11 +76,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Netw
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr, conn: conn}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr, conn: conn}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.NetworkView].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 	conn   *ibclient.Connector
 }
@@ -150,7 +152,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.NetworkV
 
 // Update patches the mutable NetworkView fields. is_default (immutable) is
 // never sent — see updateNetworkView.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -165,7 +167,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.NetworkV
 	// refreshed here even though name is not in the immutable-fields
 	// table.
 	if nv.Ref != "" && nv.Ref != externalID {
-		meta.SetExternalName(cr, nv.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, nv.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

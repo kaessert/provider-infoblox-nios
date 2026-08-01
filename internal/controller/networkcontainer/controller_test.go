@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkcontainer/v1alpha1"
@@ -31,6 +32,33 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
+
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -433,7 +461,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:          ibclient.EA{testExtAttrKey: testExtAttrValue},
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{testExtAttrKey: testExtAttrValue}
@@ -475,7 +503,7 @@ func TestClusterObserveLateInitializesNetworkAfterAllocation(t *testing.T) {
 		Cidr:        "10.0.5.0/16",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 	cr.Spec.ForProvider.Network = nil
 	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
@@ -498,7 +526,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/does-not-exist:10.0.0.0/16/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -519,7 +547,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())               // simulate NameAsExternalName initializer
 
@@ -536,7 +564,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/test1:10.0.0.0/16/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -548,7 +576,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/test1:10.0.0.0/16/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -568,7 +596,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.NetworkContainer{})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -607,7 +635,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableFields(t *testing.T) {
 		Cidr:        testCIDR,
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 	// Mutate the immutable networkView/network fields in spec — this must
 	// NOT affect ResourceUpToDate, since they are excluded from
@@ -640,7 +668,7 @@ func TestClusterObserveIsUpToDateIgnoresAllocationFields(t *testing.T) {
 		Cidr:        testCIDR,
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 	// Simulate drift on the allocation-only fields after creation — none
 	// of these are ever part of the WAPI response, so none should affect
@@ -665,7 +693,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -690,7 +718,7 @@ func TestClusterCreateSelectsIPv6ObjectType(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "")
 	cr.Spec.ForProvider.Network = stringPtr("2001:db8::/32")
 
@@ -713,7 +741,7 @@ func TestClusterCreateError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "")
 
 	_, err := e.Create(context.Background(), cr)
@@ -735,7 +763,7 @@ func TestClusterCreateAllocateFromParentCidr(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "")
 	cr.Spec.ForProvider.Network = nil
 	cr.Spec.ForProvider.ParentCidr = stringPtr("10.0.0.0/8")
@@ -763,7 +791,7 @@ func TestClusterCreateAllocateByFilterParams(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "")
 	cr.Spec.ForProvider.Network = nil
 	cr.Spec.ForProvider.FilterParams = map[string]string{"region": "us-east"}
@@ -817,7 +845,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment:     "old comment",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -843,7 +871,7 @@ func TestUpdateDoesNotSendImmutableField(t *testing.T) {
 		Cidr:        testCIDR,
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -872,7 +900,7 @@ func TestClusterUpdateError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/test1:10.0.0.0/16/default")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -894,7 +922,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.NetworkContainer{NetviewName: testDefaultName, Cidr: testCIDR})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -914,7 +942,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/does-not-exist:10.0.0.0/16/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -929,7 +957,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/test1:10.0.0.0/16/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -945,7 +973,7 @@ func TestClusterDeleteForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNetworkContainer("my-container", "networkcontainer/test1:10.0.0.0/16/default")
 
 	if _, err := e.Delete(context.Background(), cr); err == nil {
@@ -956,7 +984,7 @@ func TestClusterDeleteForbidden(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1033,7 +1061,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		Cidr:        testCIDR,
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1053,7 +1081,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/does-not-exist:10.0.0.0/16/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1069,7 +1097,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1086,7 +1114,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/test1:10.0.0.0/16/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1101,7 +1129,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1121,7 +1149,7 @@ func TestNamespacedCreateError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1147,7 +1175,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Comment:     "old comment",
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1169,7 +1197,7 @@ func TestNamespacedUpdateError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/test1:10.0.0.0/16/default", "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1195,7 +1223,7 @@ func TestNamespacedUpdateDoesNotSendImmutableFields(t *testing.T) {
 		Cidr:        testCIDR,
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", ref, "ProviderConfig")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -1224,7 +1252,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.NetworkContainer{NetviewName: testDefaultName, Cidr: testCIDR})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1244,7 +1272,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/does-not-exist:10.0.0.0/16/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1259,7 +1287,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/test1:10.0.0.0/16/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1274,7 +1302,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 // ── namespaced: Disconnect ──────────────────────────────────────────────
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}

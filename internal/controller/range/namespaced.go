@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/range/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-range.infobloxnios.m.crossplane.io"
@@ -101,11 +102,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.Range].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -173,7 +175,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ra
 
 // Update patches the mutable Range fields. template (immutable, create-only)
 // is never sent — see updateRange.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Range) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.Range) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -186,7 +188,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Ra
 	// object's current _ref, and changing identity-bearing fields can
 	// change it.
 	if rng.Ref != "" && rng.Ref != externalID {
-		meta.SetExternalName(cr, rng.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rng.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordsrv/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-recordsrv.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.SRVR
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.SRVRecord].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -99,12 +101,26 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.SRVReco
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.objMgr.GetSRVRecordByRef(externalID)
+	p := &cr.Spec.ForProvider
+	rec, refChanged, err := fetchSRVRecord(e.objMgr, externalID, p.View, p.Name, p.Target, p.Port)
 	if err != nil {
-		if isNotFound(err) {
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveSRVRecord)
+	}
+	if rec == nil {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	// The stored _ref 404d and fetchSRVRecord re-located the record by
+	// its natural key (view/name/target/port) instead. This is the
+	// self-healing path for a refreshed external name that was never
+	// persisted — e.g. a crash between the WAPI Update succeeding and
+	// externalname.Refresh landing. Update the in-memory external name
+	// so Create/Update/Delete for the rest of this reconcile — and,
+	// once the reconciler's own late-init/Update flush runs, the
+	// persisted annotation too — use the current _ref instead of
+	// repeating this fallback search every reconcile.
+	if refChanged && rec.Ref != "" {
+		meta.SetExternalName(cr, rec.Ref)
+		externalID = rec.Ref
 	}
 
 	o := observeFromRecordSRV(externalID, rec)
@@ -128,7 +144,6 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.SRVReco
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
 	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
 
 	// Set Available condition — required in crossplane-runtime v2, not
@@ -160,7 +175,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.SRVRecor
 // are all _ref-mutating, the external-name annotation is refreshed
 // whenever the WAPI response returns a different _ref than the one used
 // to issue the request (UNSTABLE _ref).
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.SRVRecord) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.SRVRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -175,7 +190,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.SRVRecor
 	// refreshed here whenever the returned _ref differs from the one used
 	// to issue the request.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

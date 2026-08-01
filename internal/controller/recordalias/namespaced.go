@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordalias/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-recordalias.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr, conn: conn}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr, conn: conn}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.AliasRecord].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 	conn   ibclient.IBConnector
 }
@@ -177,7 +179,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Al
 
 // Update patches the mutable AliasRecord fields. View (soft-immutable) is
 // never sent — see updateAliasRecord.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.AliasRecord) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.AliasRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -190,7 +192,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Al
 	// object's current _ref, and renaming (name is _ref-mutating) changes
 	// it.
 	if newRef != "" && newRef != externalID {
-		meta.SetExternalName(cr, newRef)
+		if err := externalname.Refresh(ctx, e.kube, cr, newRef); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

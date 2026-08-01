@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-networkview.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr, conn: conn}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr, conn: conn}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.NetworkView].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 	conn   *ibclient.Connector
 }
@@ -171,7 +173,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ne
 
 // Update patches the mutable NetworkView fields. is_default (immutable) is
 // never sent — see updateNetworkView.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.NetworkView) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.NetworkView) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -183,7 +185,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Ne
 	// See clusterExternal.Update — UpdateNetworkView always returns the
 	// object's current _ref, and renaming changes the _ref.
 	if nv.Ref != "" && nv.Ref != externalID {
-		meta.SetExternalName(cr, nv.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, nv.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

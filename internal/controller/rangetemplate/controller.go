@@ -36,6 +36,7 @@ import (
 // package).
 const (
 	errTrackPCUsage         = "cannot track ProviderConfig usage"
+	errPersistExternalName  = "cannot persist refreshed external name"
 	errGetPC                = "cannot get ProviderConfig"
 	errGetClusterPC         = "cannot get ClusterProviderConfig"
 	errUnsupportedKind      = "unsupported provider config kind"

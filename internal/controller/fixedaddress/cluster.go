@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-fixedaddress.infobloxnios.crossplane.io"
@@ -81,11 +82,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Fixe
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.FixedAddress].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -266,7 +268,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.FixedAdd
 // _ref-mutating (UNSTABLE external name, ADR-IN-0004), the external-name
 // annotation is refreshed whenever the WAPI response returns a different
 // _ref than the one used to issue the request.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
 	f := clusterToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
@@ -276,7 +278,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.FixedAdd
 	}
 
 	if fa.Ref != "" && fa.Ref != externalID {
-		meta.SetExternalName(cr, fa.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, fa.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
