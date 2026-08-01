@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // ── extractCredentials ───────────────────────────────────────────────────
@@ -671,6 +672,7 @@ func TestClusterObserveWithGridAndExternalServers(t *testing.T) {
 		GridPrimary:         gridPrimary,
 		GridSecondaries:     gridSecondaries,
 		ExternalPrimaries:   externalPrimaries,
+		Ea:                  ibclient.EA{identity.EAKey: "test-uid-cluster"},
 		ExternalSecondaries: externalSecondaries,
 	})
 
@@ -738,6 +740,7 @@ func TestNamespacedObserveWithGridAndExternalServers(t *testing.T) {
 		GridSecondaries:     gridSecondaries,
 		ExternalPrimaries:   externalPrimaries,
 		ExternalSecondaries: externalSecondaries,
+		Ea:                  ibclient.EA{identity.EAKey: "test-uid-namespaced"},
 	})
 
 	e := &namespacedExternal{conn: newTestConnector(t, srv)}

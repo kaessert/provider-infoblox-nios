@@ -20,7 +20,7 @@ import (
 
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 const clusterControllerName = "cluster-zoneauth.infobloxnios.crossplane.io"
@@ -77,12 +77,18 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Zone
 		return nil, err
 	}
 
-	return &clusterExternal{conn: conn}, nil
+	return &clusterExternal{conn: conn, endpoint: creds.Host}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.ZoneAuth].
 type clusterExternal struct {
 	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
 // clusterFieldsFromSpec converts a cluster-scoped ZoneAuthParameters into
@@ -185,42 +191,26 @@ func clusterExternalServersFromValues(in []externalServerValue) []clusterv1alpha
 	return out
 }
 
-// Observe fetches the ZoneAuth from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the ZoneAuth through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalObservation, error) {
+	ref := observeRefFor(cr.GetName(), meta.GetExternalName(cr))
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetObject with the
-	// CR's Kubernetes name (not a real WAPI _ref) would error against
-	// the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := getZoneAuthByRef(e.conn, externalID)
+	rec, outcome, err := resolveZoneAuthIdentity(ctx, e.conn, ref, string(cr.GetUID()))
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := zoneAuthExistsByNaturalKey(e.conn, cr.Spec.ForProvider.FQDN, cr.Spec.ForProvider.View)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneAuth)
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); prereqErr != nil {
+				return managed.ExternalObservation{}, prereqErr
 			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneAuth)
 	}
+	if outcome == identity.OutcomeNotFound {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
 	observed := fieldsFromZoneAuth(rec)
-	cr.Status.AtProvider.ID = externalID
+	cr.Status.AtProvider.ID = rec.Ref
 	cr.Status.AtProvider.FQDN = strPtrOrNil(observed.FQDN)
 	cr.Status.AtProvider.View = observed.View
 	cr.Status.AtProvider.ZoneFormat = strPtrOrNil(observed.ZoneFormat)
@@ -242,7 +232,12 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 
 	p := &cr.Spec.ForProvider
 	desired := clusterFieldsFromSpec(p)
-	updated, lateInit := lateInitializeFields(desired, observed)
+	// Strip the reserved identity extattr before comparing/late-initializing
+	// — the CRD schema never includes it, and the full-mirror AtProvider
+	// copy above intentionally keeps the unstripped map (convention 0032).
+	observedForCompare := observed
+	observedForCompare.ExtAttrs = extAttrsFromEA(identity.Strip(rec.Ea))
+	updated, lateInit := lateInitializeFields(desired, observedForCompare)
 	if lateInit {
 		p.Comment = updated.Comment
 		p.Disable = updated.Disable
@@ -261,22 +256,38 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 		desired = updated
 	}
 
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		meta.SetExternalName(cr, rec.Ref)
+		lateInit = true
+	}
+
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(desired, observedForCompare) && outcome != identity.OutcomeAdopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(desired, observed),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
-// Create provisions a new ZoneAuth and records the server-assigned _ref
-// as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalCreation, error) {
+// Create provisions a new ZoneAuth, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	f := clusterFieldsFromSpec(&cr.Spec.ForProvider)
-	ref, err := createZoneAuth(e.conn, f)
+	ref, err := createZoneAuth(e.conn, f, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneAuth)
 	}
@@ -286,12 +297,14 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneAuth
 }
 
 // Update patches the mutable ZoneAuth fields. fqdn/view/zoneFormat
-// (immutable) are never sent — see buildZoneAuthForUpdate.
+// (immutable) are never sent — see buildZoneAuthForUpdate. Every call
+// re-asserts the identity stamp since a WAPI PUT carrying extattrs
+// replaces the whole map rather than merging it.
 func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalUpdate, error) {
 	f := clusterFieldsFromSpec(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateZoneAuth(e.conn, externalID, f); err != nil {
+	if _, err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)
 	}
 
@@ -301,15 +314,13 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneAuth
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ZoneAuth. A 404 against the stored _ref is not
-// treated as already-deleted by itself — see deleteZoneAuthResolving404
-// — because the _ref is a derived handle that could be stale even though
-// fqdn/view/zone_format are individually immutable (e.g. after an
-// external-name annotation edit or a prior partial failure).
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalDelete, error) {
+// Delete removes the ZoneAuth, resolving through the shared identity
+// ladder first — see deleteZoneAuthIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteZoneAuthResolving404(e.conn, externalID, p.FQDN, p.View); err != nil {
+	if err := deleteZoneAuthIdentity(ctx, e.conn, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
