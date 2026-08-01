@@ -189,6 +189,10 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.Extensi
 // server-assigned _ref as the external name.
 func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ExtensibleAttributeDef) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
+	if isReservedIdentityDefinitionName(p.Name) {
+		return managed.ExternalCreation{}, errors.New(errReservedName)
+	}
+
 	def, err := createEADefinition(e.conn, p.Name, p.Type, p.Comment, p.DefaultValue, p.Min, p.Max, p.Flags,
 		toSDKListValues(listValuesToStrings(p.ListValues)), p.AllowedObjectTypes, descendantsActionToSDK(p.DescendantsAction))
 	if err != nil {
@@ -203,6 +207,10 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.Extensib
 // (immutable) are never sent — see updateEADefinition.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
+	if isReservedIdentityDefinitionName(p.Name) {
+		return managed.ExternalUpdate{}, errors.New(errReservedName)
+	}
+
 	externalID := meta.GetExternalName(cr)
 
 	newRef, err := updateEADefinition(e.conn, externalID, p.Name, p.Comment, p.DefaultValue, p.Flags,
@@ -227,6 +235,10 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Extens
 // deleteEADefinitionResolving404 — because the _ref is a derived handle
 // (name-based) that rotates when name changes.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ExtensibleAttributeDef) (managed.ExternalDelete, error) {
+	if isReservedIdentityDefinitionName(cr.Spec.ForProvider.Name) {
+		return managed.ExternalDelete{}, errors.New(errReservedName)
+	}
+
 	externalID := meta.GetExternalName(cr)
 	if err := deleteEADefinitionResolving404(e.conn, externalID, cr.Spec.ForProvider.Name); err != nil {
 		return managed.ExternalDelete{}, err
