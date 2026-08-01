@@ -200,7 +200,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Networ
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
+	if err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateNetwork)
 	}
 

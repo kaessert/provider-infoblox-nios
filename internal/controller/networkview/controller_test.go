@@ -296,13 +296,6 @@ func (m *mockWapiServer) handler() http.Handler {
 	return mux
 }
 
-func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"Error":"boom"}`))
-	})
-}
-
 func newTestClient(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)

@@ -542,13 +542,17 @@ func createOrAllocateNetwork(objMgr ibclient.IBObjectManager, networkView, netwo
 // Manager confirmed that a PUT carrying an extattrs object *replaces* the
 // whole map — it is not a per-key merge — so omitting the stamp here
 // would wipe it off the object on the very first field update after
-// create.
-func updateNetwork(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string, uid string) (*ibclient.Network, error) {
+// create. The updated object is not returned: networkView/cidr are
+// immutable, so unlike other resources the response's _ref can never
+// differ from the ref this call was issued with — there is nothing for a
+// caller to inspect.
+func updateNetwork(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string, uid string) error {
 	if uid == "" {
-		return nil, errors.New(errEmptyUID)
+		return errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
-	return objMgr.UpdateNetwork(ref, ea, strOrEmpty(comment))
+	_, err := objMgr.UpdateNetwork(ref, ea, strOrEmpty(comment))
+	return err
 }
 
 // deleteNetwork issues the WAPI delete call (hard delete — a subsequent

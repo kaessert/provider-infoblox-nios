@@ -216,7 +216,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
+	if err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateNetwork)
 	}
 
