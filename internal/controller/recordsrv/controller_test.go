@@ -35,7 +35,6 @@ import (
 // ── generic helpers ─────────────────────────────────────────────────────────
 
 func stringPtr(s string) *string { return &s }
-func int64Ptr(i int64) *int64    { return &i }
 func boolPtr(b bool) *bool       { return &b }
 func uint32Ptr(i uint32) *uint32 { return &i }
 
@@ -86,9 +85,9 @@ func newClusterSRVRecord(crName, externalName string) *clusterv1alpha1.SRVRecord
 			ForProvider: clusterv1alpha1.SRVRecordParameters{
 				Name:     stringPtr("_sip._tcp.example.com"),
 				Target:   stringPtr("sipserver.example.com"),
-				Priority: int64Ptr(10),
-				Weight:   int64Ptr(20),
-				Port:     int64Ptr(5060),
+				Priority: uint32Ptr(10),
+				Weight:   uint32Ptr(20),
+				Port:     uint32Ptr(5060),
 				View:     stringPtr("default"),
 			},
 		},
@@ -110,9 +109,9 @@ func newNamespacedSRVRecord(ns, crName, externalName, pcKind string) *namespaced
 			ForProvider: namespacedv1alpha1.SRVRecordParameters{
 				Name:     stringPtr("_sip._tcp.example.com"),
 				Target:   stringPtr("sipserver.example.com"),
-				Priority: int64Ptr(10),
-				Weight:   int64Ptr(20),
-				Port:     int64Ptr(5060),
+				Priority: uint32Ptr(10),
+				Weight:   uint32Ptr(20),
+				Port:     uint32Ptr(5060),
 				View:     stringPtr("default"),
 			},
 		},
@@ -1391,9 +1390,9 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 	cr := newClusterSRVRecord("my-srvrecord", ref)
 	cr.Spec.ForProvider.Name = stringPtr("_sip._tcp.example.com")
 	cr.Spec.ForProvider.Target = stringPtr("sipserver.example.com")
-	cr.Spec.ForProvider.Priority = int64Ptr(10)
-	cr.Spec.ForProvider.Weight = int64Ptr(20)
-	cr.Spec.ForProvider.Port = int64Ptr(5060)
+	cr.Spec.ForProvider.Priority = uint32Ptr(10)
+	cr.Spec.ForProvider.Weight = uint32Ptr(20)
+	cr.Spec.ForProvider.Port = uint32Ptr(5060)
 	cr.Spec.ForProvider.View = stringPtr("default")
 
 	if _, err := e.Observe(context.Background(), cr); err != nil {
@@ -1440,7 +1439,7 @@ func TestIsUpToDate(t *testing.T) {
 	cases := map[string]struct {
 		mutate                 func(rec *ibclient.RecordSRV)
 		name, target, comment  *string
-		priority, weight, port *int64
+		priority, weight, port *uint32
 		ttl                    *uint32
 		useTTL                 *bool
 		extAttrs               map[string]string
@@ -1448,70 +1447,70 @@ func TestIsUpToDate(t *testing.T) {
 	}{
 		"AllFieldsMatch": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     true,
 		},
 		"NameDiffers": {
 			name: stringPtr("_other._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"TargetDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("other.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"PriorityDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(99), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(99), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"WeightDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(99), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(99), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"PortDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(9999),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(9999),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"CommentDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("goodbye"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"TTLDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(60), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"UseTTLDiffers": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(false),
 			extAttrs: map[string]string{"env": "prod"},
 			want:     false,
 		},
 		"ExtAttrsDiffer": {
 			name: stringPtr("_sip._tcp.example.com"), target: stringPtr("sipserver.example.com"),
-			priority: int64Ptr(10), weight: int64Ptr(20), port: int64Ptr(5060),
+			priority: uint32Ptr(10), weight: uint32Ptr(20), port: uint32Ptr(5060),
 			comment: stringPtr("hello"), ttl: uint32Ptr(300), useTTL: boolPtr(true),
 			extAttrs: map[string]string{"env": "staging"},
 			want:     false,
@@ -1552,7 +1551,7 @@ func TestIsUpToDateIgnoresTTLWhenUseTTLOff(t *testing.T) {
 
 	got := isUpToDate(
 		stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), stringPtr("hello"),
-		int64Ptr(10), int64Ptr(20), int64Ptr(5060), uint32Ptr(0), boolPtr(false),
+		uint32Ptr(10), uint32Ptr(20), uint32Ptr(5060), uint32Ptr(0), boolPtr(false),
 		map[string]string{"env": "prod"}, observed,
 	)
 	if !got {
@@ -1578,7 +1577,7 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 
 	got := isUpToDate(
 		stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), stringPtr("hello"),
-		int64Ptr(10), int64Ptr(20), int64Ptr(5060), uint32Ptr(300), boolPtr(false),
+		uint32Ptr(10), uint32Ptr(20), uint32Ptr(5060), uint32Ptr(300), boolPtr(false),
 		map[string]string{"env": "prod"}, observed,
 	)
 	if got {
@@ -1596,29 +1595,28 @@ func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
 		Ea:       nil,
 	}
 	got := isUpToDate(stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), nil,
-		int64Ptr(10), int64Ptr(20), int64Ptr(5060), nil, nil, map[string]string{}, rec)
+		uint32Ptr(10), uint32Ptr(20), uint32Ptr(5060), nil, nil, map[string]string{}, rec)
 	if !got {
 		t.Error("isUpToDate: want true when spec ExtAttrs is empty map and observed Ea is nil")
 	}
 }
 
-func TestUint32OrZero(t *testing.T) {
+func TestUint32PtrOrZero(t *testing.T) {
 	cases := map[string]struct {
-		v      *int64
+		v      *uint32
 		want   uint32
 		reason string
 	}{
-		"Nil":      {v: nil, want: 0, reason: "nil pointer clamps to 0"},
-		"Zero":     {v: int64Ptr(0), want: 0, reason: "zero passes through"},
-		"Positive": {v: int64Ptr(5060), want: 5060, reason: "in-range value passes through"},
-		"Negative": {v: int64Ptr(-1), want: 0, reason: "negative value clamps to 0"},
+		"Nil":      {v: nil, want: 0, reason: "nil pointer becomes 0"},
+		"Zero":     {v: uint32Ptr(0), want: 0, reason: "zero passes through"},
+		"Positive": {v: uint32Ptr(5060), want: 5060, reason: "in-range value passes through"},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := uint32OrZero(tc.v)
+			got := uint32PtrOrZero(tc.v)
 			if got != tc.want {
-				t.Errorf("%s: uint32OrZero(%v) = %d, want %d", tc.reason, tc.v, got, tc.want)
+				t.Errorf("%s: uint32PtrOrZero(%v) = %d, want %d", tc.reason, tc.v, got, tc.want)
 			}
 		})
 	}
