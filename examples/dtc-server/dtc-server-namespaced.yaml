@@ -31,7 +31,7 @@ metadata:
       - field: disable
         value: true
       - field: autoCreateHostRecord
-        value: false
+        value: true
       - field: useSniHostname
         value: true
       - field: sniHostname
