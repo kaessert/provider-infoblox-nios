@@ -247,7 +247,12 @@ func (m *mockWapiServer) handler() http.Handler {
 		view := r.URL.Query().Get("view")
 
 		m.mu.Lock()
-		var matches []ibclient.ZoneDelegated
+		// Initialized (not nil-declared): a real WAPI search that
+		// matches nothing answers with a literal JSON "[]", never
+		// "null" — a nil Go slice would marshal to "null" instead,
+		// which never exercises the not-found path the SDK's connector
+		// applies to a literal "[]" body.
+		matches := []ibclient.ZoneDelegated{}
 		for _, rec := range m.records {
 			if fqdn != "" && rec.Fqdn != fqdn {
 				continue

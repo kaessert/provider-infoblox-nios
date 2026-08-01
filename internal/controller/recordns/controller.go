@@ -27,6 +27,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordns/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
@@ -101,20 +102,26 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-// sslVerify comes from the ProviderConfig's own spec field (not the
-// credentials Secret) — see the Connect methods in cluster.go/namespaced.go.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector that nsRecordExistsByNaturalKey needs directly
+// so it can issue a server-side filtered search and see the match count
+// (ObjectManager's typed getters hide that, and its GetAllRecordNS
+// helper additionally flattens a not-found result into a plain string
+// error that the type-based classifier in isNotFound cannot recognize —
+// see nsRecordExistsByNaturalKey's doc for the full rationale). The
+// Connector performs HTTP Basic Auth on every request and only validates
+// configuration locally — no network round-trip happens until the first
+// Observe/Create/Update/Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -143,10 +150,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -504,14 +511,25 @@ func deleteNSRecord(objMgr ibclient.IBObjectManager, ref string) error {
 // two record:ns objects sharing (name, view) with different nameserver
 // values are both accepted by WAPI, so (name, view) alone is not unique).
 // Used by Delete() when the stored _ref 404s: a hit here means the _ref
-// is merely stale, not that the object is gone. NSRecord has no
-// single-object natural-key getter, so this searches via GetAllRecordNS
-// (a list call) with a server-side query filter instead — all three
-// fields are passed as filters, so WAPI itself narrows the result set to
-// exact matches. All three fields are required non-empty; when any is
-// missing there is no way to re-discover the object, so the search is
-// skipped (found=false) rather than treated as an error.
-func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view, nameserver *string) (bool, error) {
+// is merely stale, not that the object is gone.
+//
+// This issues the search itself through the raw connector with all three
+// fields as server-side filters and answers from the match count,
+// mirroring the sibling helpers in recordtxt and zonedelegated — it does
+// NOT go through the SDK's GetAllRecordNS. That high-level helper wraps a
+// failed search with a plain "%s"-formatted error
+// ("failed getting NS Record: <cause>"), which discards the underlying
+// *ibclient.NotFoundError's type. A genuinely empty result set is exactly
+// how the real WAPI answers a search that matches nothing, so on the live
+// Grid GetAllRecordNS turns "the object is confirmed gone" into an
+// unrecognized error that isNotFound cannot classify — Delete() then
+// treats the search as failed rather than as a clean absence, and the
+// managed resource can never be deleted. Going through the connector
+// directly keeps the *ibclient.NotFoundError's type intact so isNotFound
+// classifies it correctly. All three fields are required non-empty; when
+// any is missing there is no way to re-discover the object, so the
+// search is skipped (found=false) rather than treated as an error.
+func nsRecordExistsByNaturalKey(conn ibclient.IBConnector, name, view, nameserver *string) (bool, error) {
 	if strOrEmpty(name) == "" || strOrEmpty(view) == "" || strOrEmpty(nameserver) == "" {
 		return false, nil
 	}
@@ -520,7 +538,8 @@ func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view, nam
 		"view":       strOrEmpty(view),
 		"nameserver": strOrEmpty(nameserver),
 	}
-	res, err := objMgr.GetAllRecordNS(ibclient.NewQueryParams(false, sf))
+	var res []ibclient.RecordNS
+	err := conn.GetObject(ibclient.NewEmptyRecordNS(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
@@ -537,7 +556,7 @@ func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view, nam
 // finds a live NS record, deleting is refused because ownership of that
 // record cannot be verified from the search alone (see the staleref
 // package doc for the full rationale).
-func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, name, view, nameserver *string) error {
+func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name, view, nameserver *string) error {
 	delErr := deleteNSRecord(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -545,7 +564,7 @@ func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, nam
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteNSRecord)
 	}
-	found, searchErr := nsRecordExistsByNaturalKey(objMgr, name, view, nameserver)
+	found, searchErr := nsRecordExistsByNaturalKey(conn, name, view, nameserver)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteNSRecord)
 	}

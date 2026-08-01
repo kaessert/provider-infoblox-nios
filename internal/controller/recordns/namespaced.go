@@ -97,18 +97,22 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: mgrConn.Manager, conn: mgrConn.Connector}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.NSRecord].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector nsRecordExistsByNaturalKey
+	// searches against directly — it needs visibility into the match
+	// count that objMgr's typed getters hide. See that helper's doc.
+	conn ibclient.IBConnector
 }
 
 // namespacedAddressesToShared converts the namespaced-scoped
@@ -180,7 +184,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := nsRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
+			found, searchErr := nsRecordExistsByNaturalKey(e.conn, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNSRecord)
 			}
@@ -270,7 +274,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View, p.Nameserver); err != nil {
+	if err := deleteNSRecordResolving404(e.objMgr, e.conn, externalID, p.Name, p.View, p.Nameserver); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
