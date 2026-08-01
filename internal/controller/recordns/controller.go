@@ -283,8 +283,23 @@ func isUpToDate(nameserver, msDelegationName *string, addresses []nsRecordAddres
 	if strOrEmpty(nameserver) != strOrEmpty(rec.Nameserver) {
 		return false
 	}
-	if strOrEmpty(msDelegationName) != strOrEmpty(rec.MsDelegationName) {
-		return false
+	// msDelegationName is the MS delegation point name — it is only ever
+	// persisted on Microsoft/AD-integrated zones. On an ordinary
+	// Grid-managed zone, NIOS accepts a PUT that sets it with HTTP 200 but
+	// never stores the value, so the field comes back empty on every
+	// subsequent GET no matter what the spec asks for. Diffing a spec
+	// value against a field the API structurally cannot echo back
+	// produces a permanent phantom drift and an infinite Update loop that
+	// still reports ReconcileSuccess. This comparison is therefore
+	// observation-only-when-empty: it is skipped entirely when the
+	// observed value is empty (the API gives no evidence either way), but
+	// applied normally whenever the API has actually persisted a value
+	// (Microsoft/AD-integrated zones), so real drift there is still
+	// caught.
+	if observed := strOrEmpty(rec.MsDelegationName); observed != "" {
+		if strOrEmpty(msDelegationName) != observed {
+			return false
+		}
 	}
 	return addressesEqual(addresses, addressesFromZoneNameServers(rec.Addresses))
 }
