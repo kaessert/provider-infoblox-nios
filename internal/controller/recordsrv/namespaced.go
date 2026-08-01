@@ -121,12 +121,19 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.S
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.objMgr.GetSRVRecordByRef(externalID)
+	rec, refChanged, err := fetchSRVRecord(e.objMgr, externalID, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.Target, cr.Spec.ForProvider.Port)
 	if err != nil {
-		if isNotFound(err) {
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveSRVRecord)
+	}
+	if rec == nil {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	// The stored _ref 404d and fetchSRVRecord re-located the record by
+	// its natural key (view/name/target/port) instead — see
+	// clusterExternal.Observe for the full rationale.
+	if refChanged && rec.Ref != "" {
+		meta.SetExternalName(cr, rec.Ref)
+		externalID = rec.Ref
 	}
 
 	o := observeFromRecordSRV(externalID, rec)

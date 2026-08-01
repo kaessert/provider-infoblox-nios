@@ -51,6 +51,15 @@ func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...
 	return nil
 }
 
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
+
 // ── generic helpers ─────────────────────────────────────────────────────────
 
 func stringPtr(s string) *string { return &s }
@@ -235,6 +244,42 @@ func (m *mockWapiServer) handler() http.Handler {
 		rec.Zone = zoneFromName(rec.Name)
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
+	})
+
+	// Search endpoint used by GetSRVRecord's natural-key fallback, filtered
+	// by view/name/target/port query params. Registered as an exact
+	// literal path so Go's ServeMux prefers it over the {ref...} wildcard
+	// below for requests to precisely "record:srv" (real _refs always
+	// carry additional path segments).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:srv", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		view := q.Get("view")
+		name := q.Get("name")
+		target := q.Get("target")
+		port := q.Get("port")
+
+		m.mu.Lock()
+		var matches []ibclient.RecordSRV
+		for _, rec := range m.records {
+			if view != "" && rec.View != view {
+				continue
+			}
+			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			if target != "" && (rec.Target == nil || *rec.Target != target) {
+				continue
+			}
+			if port != "" && (rec.Port == nil || itoa(int(*rec.Port)) != port) {
+				continue
+			}
+			matches = append(matches, *rec)
+		}
+		m.mu.Unlock()
+
+		// Always respond 200 — WAPI search semantics report "not found"
+		// via an empty array, never an HTTP error status.
+		writeJSON(w, http.StatusOK, matches)
 	})
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -444,6 +489,49 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false for 404, got true")
+	}
+}
+
+// TestClusterObserveRefInstabilityFallsBackToSearch verifies that Observe
+// recovers from a stale external-name annotation (the stored _ref no
+// longer resolves because a prior Update rotated it and the refreshed
+// annotation was never persisted — e.g. a crash between the WAPI write
+// succeeding and the annotation Patch landing) by re-searching via the
+// CR's own identity fields (view, name, target, port), and refreshes the
+// external name to the record's current _ref. This is the defense in
+// depth called for by the external-name-refresh-conflict-safety fix:
+// even a conflict-proof persist has a crash window, and this fallback is
+// what turns that window from "wedged forever" into "self-heals on the
+// next reconcile".
+func TestClusterObserveRefInstabilityFallsBackToSearch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	realRef := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	// External-name annotation points at a stale _ref (as if the record
+	// was renamed by a prior reconcile that changed identity fields, but
+	// the annotation refresh was lost — e.g. controller restart).
+	cr := newClusterSRVRecord("my-srvrecord", "record:srv/stale:old.example.com/default")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true via fallback search, got false")
+	}
+	if got := meta.GetExternalName(cr); got != realRef {
+		t.Errorf("Observe: external-name = %q, want refreshed to %q", got, realRef)
 	}
 }
 
@@ -954,6 +1042,38 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false for 404, got true")
+	}
+}
+
+// TestNamespacedObserveRefInstabilityFallsBackToSearch is the namespaced
+// counterpart of TestClusterObserveRefInstabilityFallsBackToSearch — see
+// that test's doc comment for the full rationale.
+func TestNamespacedObserveRefInstabilityFallsBackToSearch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	realRef := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedSRVRecord("default", "my-srvrecord", "record:srv/stale:old.example.com/default", "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true via fallback search, got false")
+	}
+	if got := meta.GetExternalName(cr); got != realRef {
+		t.Errorf("Observe: external-name = %q, want refreshed to %q", got, realRef)
 	}
 }
 

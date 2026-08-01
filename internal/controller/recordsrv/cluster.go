@@ -101,12 +101,26 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.SRVReco
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.objMgr.GetSRVRecordByRef(externalID)
+	p := &cr.Spec.ForProvider
+	rec, refChanged, err := fetchSRVRecord(e.objMgr, externalID, p.View, p.Name, p.Target, p.Port)
 	if err != nil {
-		if isNotFound(err) {
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveSRVRecord)
+	}
+	if rec == nil {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	// The stored _ref 404d and fetchSRVRecord re-located the record by
+	// its natural key (view/name/target/port) instead. This is the
+	// self-healing path for a refreshed external name that was never
+	// persisted — e.g. a crash between the WAPI Update succeeding and
+	// externalname.Refresh landing. Update the in-memory external name
+	// so Create/Update/Delete for the rest of this reconcile — and,
+	// once the reconciler's own late-init/Update flush runs, the
+	// persisted annotation too — use the current _ref instead of
+	// repeating this fallback search every reconcile.
+	if refChanged && rec.Ref != "" {
+		meta.SetExternalName(cr, rec.Ref)
+		externalID = rec.Ref
 	}
 
 	o := observeFromRecordSRV(externalID, rec)
@@ -130,7 +144,6 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.SRVReco
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
 	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
 
 	// Set Available condition — required in crossplane-runtime v2, not

@@ -53,6 +53,15 @@ func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...
 	return nil
 }
 
+// Patch mirrors Update. The fix for this ticket persists the refreshed
+// external-name annotation via a conflict-safe JSON merge Patch instead
+// of a whole-object Update, so this stub must record Patch calls the
+// same way for the existing assertions on k.updated to keep working.
+func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	k.updated = obj
+	return nil
+}
+
 // ── generic helpers ─────────────────────────────────────────────────────────
 
 func stringPtr(s string) *string { return &s }
