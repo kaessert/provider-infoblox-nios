@@ -20,8 +20,8 @@ import (
 
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-zonedelegated.infobloxnios.crossplane.io"
@@ -73,18 +73,32 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Zone
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{
+		kube:     c.kube,
+		objMgr:   mgrConn.Manager,
+		conn:     mgrConn.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.ZoneDelegated].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
 // clusterDelegateToSDK converts the CRD's ZoneDelegatedNameServer list
@@ -115,41 +129,26 @@ func clusterDelegateFromSDK(in []ibclient.NameServer) []clusterv1alpha1.ZoneDele
 	return out
 }
 
-// Observe fetches the ZoneDelegated from the WAPI by its _ref external
-// name and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the ZoneDelegated through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetZoneDelegatedByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetZoneDelegatedByRef(externalID)
+	res, err := observeZoneDelegated(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.NsGroup, &p.Disable, &p.Locked, &p.UseDelegatedTTL, &p.DelegatedTTL, &p.ExtAttrs, &p.View, &p.ZoneFormat)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := zoneDelegatedExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Fqdn, cr.Spec.ForProvider.View)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneDelegated)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneDelegated)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromZoneDelegated(externalID, rec)
+	rec := res.rec
+	o := res.obs
 	cr.Status.AtProvider = clusterv1alpha1.ZoneDelegatedObservation{
 		Fqdn:            o.Fqdn,
 		DelegateTo:      clusterDelegateFromSDK(rec.DelegateTo.NameServers),
@@ -170,25 +169,38 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneDel
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.Disable, &p.Locked, &p.UseDelegatedTTL, &p.DelegatedTTL, &p.ExtAttrs, &p.View, &p.ZoneFormat, rec)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(clusterDelegateToSDK(p.DelegateTo), p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, p.ExtAttrs, rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(clusterDelegateToSDK(p.DelegateTo), p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new ZoneDelegated and records the server-assigned
-// _ref as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalCreation, error) {
+// Create provisions a new ZoneDelegated, stamping the managed resource's
+// own uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createZoneDelegated(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, clusterDelegateToSDK(p.DelegateTo), p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createZoneDelegated(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, clusterDelegateToSDK(p.DelegateTo), p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneDelegated)
 	}
@@ -198,12 +210,14 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneDele
 }
 
 // Update patches the mutable ZoneDelegated fields. fqdn, view, and
-// zoneFormat (immutable) are never sent — see updateZoneDelegated.
+// zoneFormat (immutable) are never sent — see updateZoneDelegated. Every
+// call re-asserts the identity stamp since a WAPI PUT carrying extattrs
+// replaces the whole map rather than merging it.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateZoneDelegated(e.objMgr, externalID, p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, clusterDelegateToSDK(p.DelegateTo), p.ExtAttrs)
+	rec, err := updateZoneDelegated(e.objMgr, externalID, p.Comment, p.NsGroup, p.Disable, p.Locked, p.UseDelegatedTTL, p.DelegatedTTL, clusterDelegateToSDK(p.DelegateTo), p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneDelegated)
 	}
@@ -216,13 +230,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDe
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ZoneDelegated. A 404 against the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteZoneDelegatedResolving404 — because the _ref is a derived handle
-// that rotates when fqdn/view changes.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalDelete, error) {
+// Delete removes the ZoneDelegated, resolving through the shared
+// identity ladder first — see deleteZoneDelegatedIdentity for the full
+// ownership-verification rules a stale or rotated _ref must satisfy
+// before a delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteZoneDelegatedResolving404(e.objMgr, externalID, cr.Spec.ForProvider.Fqdn, cr.Spec.ForProvider.View); err != nil {
+	if err := deleteZoneDelegatedIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
