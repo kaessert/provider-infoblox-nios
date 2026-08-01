@@ -212,7 +212,25 @@ type mockWapiServer struct {
 	// a refusal issues no ARecord create.
 	eaDefSearchCalls int
 	eaDefCreateCalls int
+
+	// undefinedEASearch simulates a Grid where the identity extensible
+	// attribute definition itself does not exist: a GET /record:a search
+	// filtered by "*<EA name>" returns HTTP 400
+	// ("AdmConProtoError: Unknown extensible attribute: ..."), live-
+	// verified against a real Grid, instead of the ordinary empty-array
+	// "no matches" response. Only the identity-EA search path (a filter
+	// key prefixed with "*") is affected — a plain
+	// view/name/ipv4addr search still returns normally, matching WAPI's
+	// actual behavior (an unknown *filter breaks the whole search, but
+	// this mock only exercises the identity ladder's own filter shape).
+	undefinedEASearch bool
 }
+
+// eaDefCreateForbiddenBody is the WAPI-shaped error payload tests use for
+// m.eaDefCreateBody to simulate a credential that cannot create the
+// identity extensible attribute definition (401/403) — shared by every
+// absent-and-forbidden probe scenario across both scopes.
+const eaDefCreateForbiddenBody = `{"Error":"AdmConProtoError: Not authorized"}`
 
 func newMockWapiServer() *mockWapiServer {
 	return &mockWapiServer{
@@ -369,6 +387,15 @@ func (m *mockWapiServer) handler() http.Handler {
 			if strings.HasPrefix(k, "*") && len(vals) > 0 {
 				eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
 			}
+		}
+
+		m.mu.Lock()
+		undefinedEA := m.undefinedEASearch
+		m.mu.Unlock()
+		if len(eaFilters) > 0 && undefinedEA {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+			return
 		}
 
 		m.mu.Lock()
@@ -1092,7 +1119,7 @@ func TestClusterCreateIdentityDefinitionAbsentAndForbidden(t *testing.T) {
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConProtoError: Not authorized"}`
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
@@ -1233,7 +1260,7 @@ func TestNamespacedCreateIdentityDefinitionAbsentAndForbidden(t *testing.T) {
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConProtoError: Not authorized"}`
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
@@ -1605,20 +1632,255 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	}
 }
 
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and an identity-EA
-// search that finds nothing either, means the object really is gone.
-func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// ── cluster: Observe/Delete identity prerequisite probe (reactive) ───────
+//
+// These tests inject a fresh identity.NewProber() per test (never
+// identity.DefaultProber) for the same test-isolation reason the Create
+// probe tests above do.
+
+// TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch covers an
+// unknown reference (never assigned — the annotation still holds the
+// framework's NameAsExternalName default) that forces the identity
+// ladder straight to the identity-EA search, which fails because the
+// definition itself does not exist on the Grid and the configured
+// credential cannot create one. Observe must surface the
+// *identity.PrerequisiteError verbatim, not the opaque WAPI 400 the raw
+// search failure would otherwise produce, and must not report
+// ResourceExists:true/false as if the search had merely found nothing.
+func TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) {
 	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
+	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-observe-undefined-ea",
+	}
+	// No external-name ever assigned: observeRefFor reports "" for this
+	// case, sending the ladder straight to the identity-EA search with
+	// no ref-GET attempt first.
+	cr := newClusterARecord("my-arecord", "")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Observe: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+	if !strings.Contains(err.Error(), "grid-observe-undefined-ea") || !strings.Contains(err.Error(), "POST /wapi/v2.12/extensibleattributedef") {
+		t.Errorf("Observe: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	// An absent definition makes the underlying SDK retry its existence
+	// check against the Grid Master proxy (_proxy_search=GM) before
+	// giving up — an implementation detail of the vendored client, not
+	// of this guard — so this only asserts the guard fired at least
+	// once, not an exact count (see the "already exists" Create-path
+	// probe tests above for the case where exactly one call is the
+	// correct expectation).
+	if eaDefSearchCalls < 1 {
+		t.Errorf("eaDefSearchCalls = %d, want at least 1 — the reactive guard must have probed", eaDefSearchCalls)
+	}
+}
+
+// TestClusterObserveRecoversRotatedRefStillSurfacesPrerequisiteError is
+// the "reference is stale, not merely unknown" variant: a stored _ref
+// that 404s falls through to the same identity-EA search, which fails
+// the same way.
+func TestClusterObserveRecoversRotatedRefStillSurfacesPrerequisiteError(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
+	m.undefinedEASearch = true
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-observe-stale-ref-undefined-ea",
+	}
 	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
 
+	_, err := e.Observe(context.Background(), cr)
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Observe: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+}
+
+// TestClusterObserveSteadyStateNeverProbesPrerequisite proves the
+// common-case cost claim: when the stored reference resolves directly
+// (no fallback search needed), Observe never calls the prerequisite
+// probe at all — even though the mock server is configured so the probe
+// (and the identity-EA search) would fail if it were ever reached.
+func TestClusterObserveSteadyStateNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	m.undefinedEASearch = true // would break the ladder if reached
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		Ea:       identity.Stamp(nil, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-steady-state",
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error on a reference that resolves directly: %v", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — the steady-state (reference resolves) path must never probe", eaDefSearchCalls)
+	}
+}
+
+// TestClusterObserveForeignIdentityNeverProbesPrerequisite proves the
+// guard's precision: a resolution failure that has nothing to do with
+// the identity-EA search (here, HandleReuseError — the reference
+// resolved fine, but its stamped uid belongs to someone else) must never
+// call the probe, which would otherwise risk poisoning the shared
+// verdict cache with an unrelated failure.
+func TestClusterObserveForeignIdentityNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	foreignRef := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(nil, "someone-elses-uid"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-foreign-identity",
+	}
+	cr := newClusterARecord("my-arecord", foreignRef)
+
+	_, err := e.Observe(context.Background(), cr)
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Fatalf("Observe: error = %v, want it to still be a *identity.HandleReuseError, not intercepted by the prerequisite guard", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — a HandleReuseError is unrelated to the identity-EA search and must not probe", eaDefSearchCalls)
+	}
+}
+
+// TestClusterDeleteSurfacesPrerequisiteErrorFromIdentitySearch is the
+// Delete-side counterpart of
+// TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch — Delete
+// resolves through the same identity ladder and must surface the same
+// *identity.PrerequisiteError verbatim, unwrapped, when a stale reference
+// falls through to a search that fails because the definition is absent
+// and uncreatable.
+func TestClusterDeleteSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
+	m.undefinedEASearch = true
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-delete-undefined-ea",
+	}
+	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Delete: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+	if !strings.Contains(err.Error(), "grid-delete-undefined-ea") {
+		t.Errorf("Delete: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+	}
+}
+
+// TestClusterDeleteSteadyStateNeverProbesPrerequisite is the Delete-side
+// counterpart of TestClusterObserveSteadyStateNeverProbesPrerequisite.
+func TestClusterDeleteSteadyStateNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	m.undefinedEASearch = true // would break the ladder if reached
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		Ea:       identity.Stamp(nil, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-delete-steady-state",
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: unexpected error on a reference that resolves directly: %v", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — the steady-state (reference resolves) path must never probe", eaDefSearchCalls)
 	}
 }
 
@@ -2157,21 +2419,140 @@ func TestNamespacedDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	}
 }
 
-// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch (identity-EA
-// search finds nothing either, so the object really is gone).
-func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// ── namespaced: Observe/Delete identity prerequisite probe (reactive) ────
+//
+// Namespaced-scope counterparts of the cluster-scope tests above — same
+// reasoning, same test-isolation precaution (a fresh identity.NewProber()
+// per test).
+
+func TestNamespacedObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) {
 	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
+	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-namespaced-observe-undefined-ea",
+	}
+	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Observe: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+	if !strings.Contains(err.Error(), "grid-namespaced-observe-undefined-ea") {
+		t.Errorf("Observe: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+	}
+}
+
+func TestNamespacedObserveSteadyStateNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	m.undefinedEASearch = true // would break the ladder if reached
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		Ea:       identity.Stamp(nil, testUIDNamespaced),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-namespaced-steady-state",
+	}
+	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error on a reference that resolves directly: %v", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — the steady-state (reference resolves) path must never probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedDeleteSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = eaDefCreateForbiddenBody
+	m.undefinedEASearch = true
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-namespaced-delete-undefined-ea",
+	}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/stale-ref:host.example.com/default", "ProviderConfig")
 
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Delete: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+}
+
+func TestNamespacedDeleteSteadyStateNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	m.undefinedEASearch = true // would break the ladder if reached
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		Ea:       identity.Stamp(nil, testUIDNamespaced),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-namespaced-delete-steady-state",
+	}
+	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
+
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: unexpected error on a reference that resolves directly: %v", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — the steady-state (reference resolves) path must never probe", eaDefSearchCalls)
 	}
 }
 

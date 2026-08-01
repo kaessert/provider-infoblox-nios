@@ -68,6 +68,23 @@ const (
 	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
 
+// identitySearchFailureMarker is the substring internal/clients/identity's
+// Resolve wraps a failed identity-EA search with (its unexported
+// errSearchByUID constant: "identity: cannot search for the object by
+// its stamped identity extensible attribute"). observeARecord and
+// deleteARecordIdentity match on it to fire the reactive prerequisite
+// probe (see those functions) only when resolveARecordIdentity's failure
+// actually came from the search step — never from a ref-GET failure
+// (wrapped with a different message) or one of the ladder's own typed
+// refusals (identity.HandleReuseError, identity.AmbiguousMatchError,
+// returned unwrapped), both of which are unrelated to whether the
+// identity extensible attribute definition exists. This textual
+// coupling mirrors the same-package precedent of matching WAPI error
+// text for classification (see isNotFound's errStatusRe above) since
+// identity.Resolve does not export a typed way to distinguish its
+// failure stages.
+const identitySearchFailureMarker = "cannot search for the object by its stamped identity extensible attribute"
+
 // unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
 // used when an ExternalClient is built without a resolved Grid endpoint.
 // Production code always goes through Connect(), which resolves the
@@ -554,10 +571,12 @@ func deleteARecord(objMgr ibclient.IBObjectManager, ref string) error {
 //
 // ADR-IN-0006 §4: the "Crossplane Internal ID" extensible-attribute
 // definition is an install prerequisite for every resource that stamps or
-// resolves identity through it. Wired into Create() only (not Connect(),
-// which must stay network-lazy — see newObjectManager's doc — and not
-// Observe(), whose identity-EA search takes a different failure path
-// documented on resolveARecordIdentity/observeARecord below).
+// resolves identity through it. Wired into Create() (before the identity
+// stamp), and into observeARecord/deleteARecordIdentity's identity-EA
+// search fallback (see the doc on those functions for why the guard is
+// reactive — only exercised on the search's own failure — instead of an
+// unconditional probe on every call). Not wired into Connect(), which
+// must stay network-lazy — see newObjectManager's doc.
 
 // ensureIdentityPrerequisite probes the Grid for the identity extensible
 // attribute definition before any call that stamps identity onto a new
@@ -601,20 +620,32 @@ func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, co
 // internal/clients/identity and reused by every rotating-identifier NIOS
 // type. ARecord is the pilot wiring.
 //
-// Observe's identity-EA search (searchByUID inside identity.Resolve, hit
-// whenever the stored reference is empty or has 404'd) queries WAPI by
-// "*Crossplane Internal ID=<uid>". Live verification against a real Grid
-// confirmed this fails exactly like the Create-time stamp does when the
-// definition is absent — WAPI returns HTTP 400
-// ("AdmConProtoError: Unknown extensible attribute: Crossplane Internal ID"),
-// not an empty result set — so an unguarded Observe would surface that
-// opaque 400 instead of the ADR §4 remediation on every reconcile that
-// needs the search path (an unknown or rotated reference). This is not
-// wired here: Observe's identity search is reachable far more often than
-// Create's stamp (every poll interval, for any object whose reference is
-// unknown or stale), so gating it on the same prerequisite probe is
-// tracked as its own follow-up rather than folded into this ticket's
-// Create-path scope.
+// The identity-EA search (searchByUID inside identity.Resolve, hit
+// whenever the stored reference is empty or has 404'd — both in
+// observeARecord and in deleteARecordIdentity, since both resolve through
+// the same ladder) queries WAPI by "*Crossplane Internal ID=<uid>". Live
+// verification against a real Grid confirmed this fails exactly like the
+// Create-time stamp does when the definition is absent — WAPI returns
+// HTTP 400 ("AdmConProtoError: Unknown extensible attribute: Crossplane
+// Internal ID"), not an empty result set — so an unguarded search would
+// surface that opaque 400 instead of the ADR §4 remediation.
+//
+// Unlike Create (which always stamps identity and so always needs the
+// prerequisite before it runs), the search is only reached on the
+// fallback path — the steady-state case (a stored reference that still
+// resolves) never touches it. Gating every observeARecord/
+// deleteARecordIdentity call on the probe would tax that steady-state
+// path with an extra WAPI round-trip it does not need — the Prober's TTL
+// cache amortizes this to at most one extra call per endpoint per cache
+// window, but "at most one per window" is still more than "zero" for the
+// common case. Both functions instead probe reactively: only when
+// resolveARecordIdentity itself returns an error, distinguishing "the
+// search failed because the prerequisite is missing" (surface
+// *identity.PrerequisiteError verbatim) from any other resolution failure
+// (HandleReuseError, AmbiguousMatchError, a transient WAPI error —
+// propagate unchanged). A successful resolution, including the ordinary
+// "reference resolves directly" and "search finds nothing" cases, never
+// calls the probe at all.
 
 // observeRefFor derives the reference the identity ladder should attempt
 // first for a managed resource's stored external-name. When the
@@ -682,11 +713,35 @@ type observeResult struct {
 // the given ForProvider field pointers from the resolved object. comment,
 // ttl, useTTL and extAttrs are pointers to the caller's
 // spec.forProvider fields, mutated in place exactly like lateInitialize.
-func observeARecord(ctx context.Context, conn ibclient.IBConnector, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+//
+// prober/endpoint are the caller's identity-prerequisite-probe cache
+// handle (see ensureIdentityPrerequisite) — used only reactively, and
+// only when the failure is identifiably from the identity-EA search step
+// (identitySearchFailureMarker). See the "Identity resolution" doc above
+// this function for why the guard does not run unconditionally, and why
+// it must not fire on every resolution error indiscriminately: doing so
+// would call the probe against servers/scenarios that were never set up
+// to answer it (an unrelated ref-GET failure, or one of the identity
+// ladder's own typed refusals), and since the identity-prerequisite
+// verdict is cached by endpoint for several minutes of wall-clock time, a
+// single mismatched probe call there would poison every later Observe
+// sharing that cache key for the rest of that window.
+func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
 	ref := observeRefFor(crName, externalName)
 
 	rec, outcome, err := resolveARecordIdentity(ctx, conn, ref, uid)
 	if err != nil {
+		if strings.Contains(err.Error(), identitySearchFailureMarker) {
+			// The identity-EA search itself failed — this is the one
+			// failure mode the missing-EA-definition 400 described above
+			// produces. Probing here, only for this specific cause,
+			// distinguishes it from a ref-GET failure or a typed
+			// resolution refusal, neither of which the probe has
+			// anything useful to say about.
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
 		return observeResult{}, err
 	}
 	if outcome == identity.OutcomeNotFound {
@@ -727,9 +782,25 @@ func observeARecord(ctx context.Context, conn ibclient.IBConnector, crName, exte
 //     adopt-and-re-stamp handling of the same "attribute absent" case —
 //     observing continues managing an object leniently, but destroying
 //     it requires proof.
-func deleteARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, ref, uid string) error {
+//
+// prober/endpoint are the caller's identity-prerequisite-probe cache
+// handle, used the same reactive way observeARecord uses them: only when
+// resolveARecordIdentity's own failure is identifiably from the
+// identity-EA search step (identitySearchFailureMarker), so a delete
+// whose reference still resolves — or whose failure is unrelated to the
+// search — never pays for the extra round-trip or risks poisoning the
+// shared probe cache with an unrelated verdict. A
+// *identity.PrerequisiteError found this way is returned verbatim,
+// unwrapped, matching Create's behavior — everything else stays wrapped
+// with delete-time context.
+func deleteARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
 	obj, outcome, err := resolveARecordIdentity(ctx, conn, ref, uid)
 	if err != nil {
+		if strings.Contains(err.Error(), identitySearchFailureMarker) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
 		// HandleReuseError, AmbiguousMatchError, or any other resolution
 		// failure (including a transient WAPI error on the lookup
 		// itself): refuse rather than guess. No mutating call is made.

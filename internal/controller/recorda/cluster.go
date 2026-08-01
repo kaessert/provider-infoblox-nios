@@ -114,9 +114,17 @@ type clusterExternal struct {
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeARecord(ctx, e.conn, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
+		// A *identity.PrerequisiteError carries the ADR-IN-0006 §4
+		// operator remediation verbatim in its own Error() text — return
+		// it unwrapped, matching Create's behavior, instead of burying it
+		// under the generic "cannot observe ARecord" prefix below.
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
+		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveARecord)
 	}
 	if !res.exists {
@@ -229,7 +237,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ARecor
 // delete is issued.
 func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteARecordIdentity(ctx, e.conn, e.objMgr, externalID, string(cr.GetUID())); err != nil {
+	if err := deleteARecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
