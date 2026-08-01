@@ -204,7 +204,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneFor
 		NsGroup:           o.NsGroup,
 		ExternalNsGroup:   o.ExternalNsGroup,
 		ForwardingServers: clusterForwardingServersFromSDK(nullableForwardingServersSlice(rec.ForwardingServers)),
-		Extattrs:          o.ExtAttrs,
+		ExtAttrs:          o.ExtAttrs,
 		Ref:               o.Ref,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
@@ -214,7 +214,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneFor
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.Extattrs, &p.View, &p.ZoneFormat, rec)
+	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.ExtAttrs, &p.View, &p.ZoneFormat, rec)
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
@@ -227,7 +227,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneFor
 			clusterForwardingServersToSDK(p.ForwardingServers),
 			p.Comment, p.NsGroup, p.ExternalNsGroup,
 			p.Disable, p.ForwardersOnly,
-			p.Extattrs,
+			p.ExtAttrs,
 			rec,
 		),
 		ResourceLateInitialized: lateInit,
@@ -238,7 +238,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneFor
 // _ref as the external name.
 func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneForward) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, clusterNameServersToSDK(p.ForwardTo), clusterForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, clusterNameServersToSDK(p.ForwardTo), clusterForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneForward)
 	}
@@ -253,7 +253,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneFo
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, clusterNameServersToSDK(p.ForwardTo), clusterForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, clusterNameServersToSDK(p.ForwardTo), clusterForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneForward)
 	}
