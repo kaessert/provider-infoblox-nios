@@ -15,8 +15,12 @@
 #               even though the underlying SDK's update call still
 #               accepts a name parameter.
 #   nameserver: FQDN of the authoritative server for the delegated zone.
-#               Mutable — not part of the record's (view, zone, name)
-#               identity, so changing it does not rotate the `_ref`.
+#               Mutable. Live-verified: changing it DOES rotate the
+#               `_ref` (WAPI reissues a new opaque reference on update);
+#               the controller's Update() detects when the returned ref
+#               differs from what was sent and refreshes the
+#               crossplane.io/external-name annotation accordingly, so
+#               no manual intervention is needed.
 #   view:       the DNS view the record is created in. Live-verified hard
 #               immutable (CEL rule enforced) — the update call has no
 #               view parameter.
@@ -49,18 +53,19 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
     # Runs the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
-    # nameserver and msDelegationName are the mutable scalars exercised
-    # here. They are intentionally NOT one of the record's identity
-    # fields (name, view) — changing either of those would rotate the
-    # WAPI `_ref` mid-test and destabilize the update-tester's
-    # convergence check. addresses is a list of glue address records —
-    # not a safe scalar update-test target (see the uptest
-    # update-parameter note above).
+    # nameserver is the mutable scalar exercised here. It is
+    # intentionally NOT one of the record's identity fields (name,
+    # view). msDelegationName is skipped — it is the MS delegation
+    # point name, only persisted on Microsoft/AD-integrated zones; NIOS
+    # silently drops it (HTTP 200, field absent from the response) on
+    # ordinary Grid-managed zones like this example. addresses is a
+    # list of glue address records — not a safe scalar update-test
+    # target (see the uptest update-parameter note above).
     crossplane.io/update-test: |
       - field: nameserver
         value: "ns2.example.com"
       - field: msDelegationName
-        value: "ms-delegation.example.com"
+        skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses
         skip: "list field of glue address records; not a safe scalar update-test target"
 spec:
