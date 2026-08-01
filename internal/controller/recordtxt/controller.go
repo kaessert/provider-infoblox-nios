@@ -6,6 +6,14 @@
 // instead of a generic HTTP request/response envelope, so there is no
 // internal REST client to compose.
 //
+// TXTRecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordtxt
@@ -31,28 +39,35 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveTXTRecord    = "cannot observe TXTRecord"
-	errCreateTXTRecord     = "cannot create TXTRecord"
-	errUpdateTXTRecord     = "cannot update TXTRecord"
-	errDeleteTXTRecord     = "cannot delete TXTRecord"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveTXTRecord          = "cannot observe TXTRecord"
+	errCreateTXTRecord           = "cannot create TXTRecord"
+	errUpdateTXTRecord           = "cannot update TXTRecord"
+	errDeleteTXTRecord           = "cannot delete TXTRecord"
+	errEmptyUID                  = "cannot stamp TXTRecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -108,12 +123,11 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 // newObjectManager constructs an authenticated
 // identity.ManagerAndConnector from the given credentials — the SDK's
 // high-level ObjectManager for the ordinary CRUD calls, and the
-// lower-level Connector that txtRecordExistsByNaturalKey needs directly
-// so it can issue a server-side filtered search and see the match count
-// (ObjectManager's typed getters hide that). The Connector performs HTTP
-// Basic Auth on every request and only validates configuration locally —
-// no network round-trip happens until the first Observe/Create/Update/
-// Delete call.
+// lower-level Connector the identity ladder needs directly (it operates
+// below ObjectManager's typed methods so it can see search match
+// counts). The Connector performs HTTP Basic Auth on every request and
+// only validates configuration locally — no network round-trip happens
+// until the first Observe/Create/Update/Delete call.
 func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
@@ -314,7 +328,7 @@ func isUpToDate(name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -347,7 +361,7 @@ func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -419,8 +433,14 @@ func observeFromRecordTXT(externalID string, rec *ibclient.RecordTXT) observedTX
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createTXTRecord issues the WAPI create call.
-func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordTXT, error) {
+// createTXTRecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp).
+func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordTXT, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateTXTRecord(
 		strOrEmpty(view),
 		strOrEmpty(name),
@@ -428,7 +448,7 @@ func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment 
 		uint32OrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -436,8 +456,13 @@ func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment 
 // never passed — UpdateTXTRecord has no view parameter (immutable
 // field). Update is PUT partial (merge) semantics: only the mutable
 // fields below are sent, and the WAPI merges them onto the existing
-// object rather than replacing it wholesale.
-func updateTXTRecord(objMgr ibclient.IBObjectManager, ref string, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordTXT, error) {
+// object rather than replacing it wholesale. Every call re-asserts the
+// identity stamp (identity.Stamp) so the merge never drops it.
+func updateTXTRecord(objMgr ibclient.IBObjectManager, ref string, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordTXT, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateTXTRecord(
 		ref,
 		strOrEmpty(name),
@@ -445,7 +470,7 @@ func updateTXTRecord(objMgr ibclient.IBObjectManager, ref string, name, text, co
 		uint32OrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -455,70 +480,108 @@ func deleteTXTRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// txtRecordExistsByNaturalKey reports whether a live TXTRecord still
-// exists under the CR's own (view, name, text) identity — the same tuple
-// WAPI uses to compute the _ref. Used by Delete() when the stored _ref
-// 404s: a hit here means the _ref is merely stale, not that the object is
-// gone.
-//
-// The SDK's high-level GetTXTRecord getter only accepts (view, name) —
-// it has no parameter for text — and always returns just the first
-// element of whatever the WAPI list response contains
-// (object_manager_txt-record.go: `return &res[0], nil`). (view, name) is
-// not a unique WAPI key (see the package-level defect this fixes), so
-// when a sibling shares (view, name) with the CR's own live object, the
-// SDK's list ordering — not the data — decides which one comes back,
-// silently taking the first match on ambiguity. This helper avoids that
-// by issuing the search itself through the raw connector with all three
-// fields as server-side filters (`text` is exactly-searchable on
-// record:txt) and answering from the match count, mirroring how
-// nsRecordExistsByNaturalKey and zoneDelegatedExistsByNaturalKey already
-// search. All three fields are required non-empty; when any is missing
-// there is no way to re-discover the object, so the search is skipped
-// (found=false) rather than treated as an error.
-func txtRecordExistsByNaturalKey(conn ibclient.IBConnector, view, name, text *string) (bool, error) {
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(text) == "" {
-		return false, nil
-	}
-	sf := map[string]string{
-		"view": strOrEmpty(view),
-		"name": strOrEmpty(name),
-		"text": strOrEmpty(text),
-	}
-	var res []ibclient.RecordTXT
-	err := conn.GetObject(ibclient.NewEmptyRecordTXT(), "", ibclient.NewQueryParams(false, sf), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteTXTRecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, view, name, text *string) error {
-	delErr := deleteTXTRecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteTXTRecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := txtRecordExistsByNaturalKey(conn, view, name, text)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteTXTRecord)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+func resolveTXTRecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordTXT, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordTXT](ctx, conn, ibclient.NewEmptyRecordTXT, ref, uid)
+}
+
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordTXT
+	obs          observedTXTRecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+func observeTXTRecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveTXTRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordTXT(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+func deleteTXTRecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveTXTRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteTXTRecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteTXTRecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteTXTRecord)
+	default:
+		return errors.New("identity: unresolved TXTRecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
