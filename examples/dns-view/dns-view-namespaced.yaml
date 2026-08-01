@@ -32,7 +32,7 @@ metadata:
       - field: useBlacklist
         value: true
       - field: blacklistAction
-        value: "REDIRECT"
+        value: "REFUSE"
       - field: blacklistLogQuery
         value: true
       - field: blacklistRedirectTtl
