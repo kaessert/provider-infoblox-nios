@@ -35,6 +35,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -383,6 +384,63 @@ func updateNetworkView(objMgr ibclient.IBObjectManager, ref string, name, commen
 func deleteNetworkView(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteNetworkView(ref)
 	return err
+}
+
+// isNetworkViewSearchMiss reports whether err is the SDK's own
+// synthesized "not found" error for GetNetworkView. Unlike GetNetwork/
+// GetNetworkContainer/GetHostRecord/GetFixedAddress, GetNetworkView does
+// not wrap a zero-result search in *ibclient.NotFoundError — it returns a
+// plain fmt.Errorf("network view '%s' not found", name) instead, which
+// isNotFound does not classify. This checks for that specific message
+// shape so the natural-key search below can still tell "no match" apart
+// from a genuine transport/server error.
+func isNetworkViewSearchMiss(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
+}
+
+// networkViewExistsByNaturalKey reports whether a live NetworkView still
+// exists under the CR's own name — the same field WAPI uses to compute
+// the _ref. Used by Delete() when the stored _ref 404s: a hit here means
+// the _ref is merely stale, not that the object is gone.
+func networkViewExistsByNaturalKey(objMgr ibclient.IBObjectManager, name *string) (bool, error) {
+	n := strOrEmpty(name)
+	if n == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetNetworkView(n)
+	if err != nil {
+		if isNotFound(err) || isNetworkViewSearchMiss(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteNetworkViewResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live network view, deleting is
+// refused because ownership of that network view cannot be verified
+// from the search alone (see the staleref package doc for the full
+// rationale).
+func deleteNetworkViewResolving404(objMgr ibclient.IBObjectManager, ref string, name *string) error {
+	delErr := deleteNetworkView(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteNetworkView)
+	}
+	found, searchErr := networkViewExistsByNaturalKey(objMgr, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteNetworkView)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

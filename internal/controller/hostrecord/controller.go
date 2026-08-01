@@ -30,6 +30,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -929,6 +930,66 @@ func updateHostRecord(objMgr ibclient.IBObjectManager, ref string, p hostRecordC
 func deleteHostRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteHostRecord(ref)
 	return err
+}
+
+// hostRecordExistsByNaturalKey reports whether a live HostRecord still
+// exists under the CR's own (networkView, view, name, ipv4Addr, ipv6Addr)
+// identity — the same fields WAPI uses to compute the _ref. Used by
+// Delete() when the stored _ref 404s: a hit here means the _ref is merely
+// stale, not that the object is gone. GetHostRecord always filters on
+// name regardless of emptiness, so an empty name makes the search
+// unreliable (it would match every record) — the search is skipped
+// (found=false) in that case rather than treated as an error. Only the
+// first ipv4/ipv6 address entry is used, mirroring the same
+// first-entry-only limitation documented on ipv4AddrsEqual: those are the
+// only addresses this provider's SDK wrappers ever send to WAPI, so they
+// are the only addresses that can participate in the object's identity
+// from this provider's point of view. GetHostRecord itself returns
+// (nil, nil) — not a *NotFoundError — when the search matches nothing, so
+// both a nil result and a classified-404 error are treated as "not
+// found".
+func hostRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, view, name *string, ipv4Addrs []ipv4AddrValue, ipv6Addrs []ipv6AddrValue) (bool, error) {
+	if strOrEmpty(name) == "" {
+		return false, nil
+	}
+	ipv4Addr, _ := firstIpv4AddrAndMAC(ipv4Addrs)
+	ipv6Addr, _ := firstIpv6AddrAndDuid(ipv6Addrs)
+	rec, err := objMgr.GetHostRecord(strOrEmpty(networkView), strOrEmpty(view), strOrEmpty(name), ipv4Addr, ipv6Addr)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if rec == nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// deleteHostRecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deleteHostRecordResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, view, name *string, ipv4Addrs []ipv4AddrValue, ipv6Addrs []ipv6AddrValue) error {
+	delErr := deleteHostRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteHostRecord)
+	}
+	found, searchErr := hostRecordExistsByNaturalKey(objMgr, networkView, view, name, ipv4Addrs, ipv6Addrs)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteHostRecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

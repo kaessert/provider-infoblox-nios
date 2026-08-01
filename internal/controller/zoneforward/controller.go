@@ -34,6 +34,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneforward/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -577,6 +578,59 @@ func updateZoneForward(objMgr ibclient.IBObjectManager, ref string, comment, nsG
 func deleteZoneForward(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteZoneForward(ref)
 	return err
+}
+
+// zoneForwardExistsByNaturalKey reports whether a live ZoneForward still
+// exists under the CR's own (fqdn, view) identity — the same fields WAPI
+// uses to compute the _ref. Used by Delete() when the stored _ref 404s: a
+// hit here means the _ref is merely stale, not that the object is gone.
+// The SDK exposes no single-object convenience getter for this object
+// type (only GetZoneForwardByRef and the list-returning
+// GetZoneForwardFilters), so this issues a filtered list search and
+// treats any result as a match. When fqdn is empty there is no way to
+// re-discover the object, so the search is skipped (found=false) rather
+// than treated as an error.
+func zoneForwardExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn, view *string) (bool, error) {
+	if strOrEmpty(fqdn) == "" {
+		return false, nil
+	}
+	sf := map[string]string{"fqdn": strOrEmpty(fqdn)}
+	if strOrEmpty(view) != "" {
+		sf["view"] = strOrEmpty(view)
+	}
+	res, err := objMgr.GetZoneForwardFilters(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteZoneForwardResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the handle
+// rotated, not evidence the object was removed: if the natural-key search
+// still finds a live zone, deleting is refused because ownership of that
+// zone cannot be verified from the search alone (see the staleref package
+// doc for the full rationale).
+func deleteZoneForwardResolving404(objMgr ibclient.IBObjectManager, ref string, fqdn, view *string) error {
+	delErr := deleteZoneForward(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteZoneForward)
+	}
+	found, searchErr := zoneForwardExistsByNaturalKey(objMgr, fqdn, view)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteZoneForward)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

@@ -242,6 +242,38 @@ func (m *mockWapiServer) handler() http.Handler {
 		writeJSON(w, http.StatusOK, ref)
 	})
 
+	// Search endpoint (GetCNAMERecord): a GET with no _ref path segment,
+	// filtered by view/canonical/name query params. Registered as an
+	// exact literal path so Go's ServeMux prefers it over the
+	// {ref...} wildcard below for requests to precisely "record:cname"
+	// (real _refs always carry additional path segments).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:cname", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		view := q.Get("view")
+		canonical := q.Get("canonical")
+		name := q.Get("name")
+
+		m.mu.Lock()
+		var matches []ibclient.RecordCNAME
+		for _, rec := range m.records {
+			if view != "" && (rec.View == nil || *rec.View != view) {
+				continue
+			}
+			if canonical != "" && (rec.Canonical == nil || *rec.Canonical != canonical) {
+				continue
+			}
+			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			matches = append(matches, *rec)
+		}
+		m.mu.Unlock()
+
+		// Always respond 200 — WAPI search semantics report "not found"
+		// via an empty array, never an HTTP error status.
+		writeJSON(w, http.StatusOK, matches)
+	})
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -764,6 +796,58 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// core defect fix: a 404 against the stored _ref must not be treated as
+// "already deleted" when a natural-key search finds the same identity
+// still live under a different _ref. Deleting that record would be
+// unverifiable ownership, so Delete() must refuse and leave the record in
+// place.
+func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordCNAME{
+		Name:      stringPtr("alias.example.com"),
+		Canonical: stringPtr("target.example.com"),
+		View:      stringPtr("default"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterCNAMERecord("my-cname", "record:cname/stale-ref:alias.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// companion happy path: a 404 against the stored _ref, and a natural-key
+// search that finds nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterCNAMERecord("my-cname", "record:cname/stale-ref:alias.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1147,6 +1231,55 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, errDeleteCNAMERecord) {
 		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteCNAMERecord)
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordCNAME{
+		Name:      stringPtr("alias.example.com"),
+		Canonical: stringPtr("target.example.com"),
+		View:      stringPtr("default"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", "record:cname/stale-ref:alias.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedCNAMERecord("default", "my-cname", "record:cname/stale-ref:alias.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
 	}
 }
 

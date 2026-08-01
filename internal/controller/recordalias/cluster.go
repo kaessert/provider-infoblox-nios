@@ -184,11 +184,9 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AliasR
 // (idempotent).
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.AliasRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteAliasRecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteAliasRecord)
+	p := cr.Spec.ForProvider
+	if err := deleteAliasRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.TargetName, p.TargetType); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

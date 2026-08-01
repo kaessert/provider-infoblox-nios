@@ -204,15 +204,14 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDe
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ZoneDelegated. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the ZoneDelegated. A 404 against the stored _ref is not
+// treated as already-deleted by itself — see
+// deleteZoneDelegatedResolving404 — because the _ref is a derived handle
+// that rotates when fqdn/view changes.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteZoneDelegated(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteZoneDelegated)
+	if err := deleteZoneDelegatedResolving404(e.objMgr, externalID, cr.Spec.ForProvider.Fqdn); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

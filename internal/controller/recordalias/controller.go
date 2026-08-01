@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordalias/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -492,6 +493,64 @@ func updateAliasRecord(conn ibclient.IBConnector, ref string, name, targetName, 
 func deleteAliasRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteAliasRecord(ref)
 	return err
+}
+
+// aliasRecordExistsByNaturalKey reports whether a live AliasRecord still
+// exists under the CR's own (view, name, targetName, targetType)
+// identity — the same tuple WAPI uses to compute the _ref. The full
+// four-field tuple is required (not merely name+view) because
+// name+view alone is not unique for this resource: multiple AliasRecord
+// objects can share the same name and view while pointing at different
+// targets. Used by Delete() when the stored _ref 404s: a hit here means
+// the _ref is merely stale, not that the object is gone. AliasRecord has
+// no single-object natural-key getter, so this searches via
+// GetAllAliasRecord (a list call) with a server-side query filter
+// instead. All four fields are required non-empty; when any is missing
+// there is no way to re-discover the object, so the search is skipped
+// (found=false) rather than treated as an error.
+func aliasRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, targetName, targetType *string) (bool, error) {
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(targetName) == "" || strOrEmpty(targetType) == "" {
+		return false, nil
+	}
+	sf := map[string]string{
+		"view":        strOrEmpty(view),
+		"name":        strOrEmpty(name),
+		"target_name": strOrEmpty(targetName),
+		"target_type": strOrEmpty(targetType),
+	}
+	res, err := objMgr.GetAllAliasRecord(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteAliasRecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live alias record, deleting is
+// refused because ownership of that record cannot be verified from the
+// search alone (see the staleref package doc for the full rationale).
+func deleteAliasRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, targetName, targetType *string) error {
+	delErr := deleteAliasRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteAliasRecord)
+	}
+	found, searchErr := aliasRecordExistsByNaturalKey(objMgr, view, name, targetName, targetType)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteAliasRecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

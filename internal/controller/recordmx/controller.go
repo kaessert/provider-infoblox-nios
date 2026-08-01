@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordmx/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordmx/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -515,6 +516,32 @@ func fetchMXRecord(objMgr ibclient.IBObjectManager, externalID string, view, nam
 		return nil, false, searchErr
 	}
 	return rec, true, nil
+}
+
+// deleteMXRecordResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding it
+// is gone. A 404 on a derived handle is evidence the handle rotated
+// (see fetchMXRecord), not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deleteMXRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64) error {
+	delErr := deleteMXRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteMXRecord)
+	}
+
+	rec, _, fetchErr := fetchMXRecord(objMgr, ref, view, name, mailExchanger, preference)
+	if fetchErr != nil {
+		return errors.Wrap(fetchErr, errDeleteMXRecord)
+	}
+	if rec != nil {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

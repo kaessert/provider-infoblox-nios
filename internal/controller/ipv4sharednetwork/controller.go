@@ -30,6 +30,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -643,6 +644,61 @@ func updateIPv4SharedNetwork(objMgr ibclient.IBObjectManager, ref string, name *
 func deleteIPv4SharedNetwork(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteIpv4SharedNetwork(ref)
 	return err
+}
+
+// ipv4SharedNetworkExistsByNaturalKey reports whether a live
+// IPv4SharedNetwork still exists under the CR's own (networkView, name)
+// identity — the same tuple WAPI uses to compute the _ref (a shared
+// network name is only unique within a network view). Used by Delete()
+// when the stored _ref 404s: a hit here means the _ref is merely stale,
+// not that the object is gone. IPv4SharedNetwork has no single-object
+// natural-key getter, so this searches via GetAllIpv4SharedNetwork (a
+// list call) with a server-side query filter instead. Both fields are
+// required non-empty; when either is missing there is no way to
+// re-discover the object, so the search is skipped (found=false) rather
+// than treated as an error.
+func ipv4SharedNetworkExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, name *string) (bool, error) {
+	if strOrEmpty(networkView) == "" || strOrEmpty(name) == "" {
+		return false, nil
+	}
+	sf := map[string]string{
+		"network_view": strOrEmpty(networkView),
+		"name":         strOrEmpty(name),
+	}
+	res, err := objMgr.GetAllIpv4SharedNetwork(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteIPv4SharedNetworkResolving404 issues the WAPI delete and, on a
+// 404 against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live shared network, deleting is
+// refused because ownership of that shared network cannot be verified
+// from the search alone (see the staleref package doc for the full
+// rationale).
+func deleteIPv4SharedNetworkResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, name *string) error {
+	delErr := deleteIPv4SharedNetwork(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteIPv4SharedNet)
+	}
+	found, searchErr := ipv4SharedNetworkExistsByNaturalKey(objMgr, networkView, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteIPv4SharedNet)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

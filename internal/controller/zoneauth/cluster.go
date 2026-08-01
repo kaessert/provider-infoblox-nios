@@ -289,15 +289,16 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneAuth
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ZoneAuth. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the ZoneAuth. A 404 against the stored _ref is not
+// treated as already-deleted by itself — see deleteZoneAuthResolving404
+// — because the _ref is a derived handle that could be stale even though
+// fqdn/view/zone_format are individually immutable (e.g. after an
+// external-name annotation edit or a prior partial failure).
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteZoneAuth(e.conn, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteZoneAuth)
+	p := cr.Spec.ForProvider
+	if err := deleteZoneAuthResolving404(e.conn, externalID, p.FQDN, p.View); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

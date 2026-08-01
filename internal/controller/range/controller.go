@@ -35,6 +35,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/range/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/range/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -436,6 +437,59 @@ func updateRange(objMgr ibclient.IBObjectManager, ref string, startAddr, endAddr
 func deleteRange(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteNetworkRange(ref)
 	return err
+}
+
+// rangeExistsByNaturalKey reports whether a live Range still exists under
+// the CR's own (startAddr, endAddr, networkView) identity — the same
+// tuple WAPI uses to compute the _ref. Used by Delete() when the stored
+// _ref 404s: a hit here means the _ref is merely stale, not that the
+// object is gone. Range has no single-object natural-key getter, so this
+// searches via GetNetworkRange (a list call) with a server-side query
+// filter instead. All three fields are required non-empty; when any is
+// missing there is no way to re-discover the object, so the search is
+// skipped (found=false) rather than treated as an error.
+func rangeExistsByNaturalKey(objMgr ibclient.IBObjectManager, startAddr, endAddr, networkView *string) (bool, error) {
+	if strOrEmpty(startAddr) == "" || strOrEmpty(endAddr) == "" || strOrEmpty(networkView) == "" {
+		return false, nil
+	}
+	sf := map[string]string{
+		"start_addr":   strOrEmpty(startAddr),
+		"end_addr":     strOrEmpty(endAddr),
+		"network_view": strOrEmpty(networkView),
+	}
+	res, err := objMgr.GetNetworkRange(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteRangeResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding
+// it is gone. A 404 on a derived handle is evidence the handle rotated,
+// not evidence the object was removed: if the natural-key search still
+// finds a live range, deleting is refused because ownership of that
+// range cannot be verified from the search alone (see the staleref
+// package doc for the full rationale).
+func deleteRangeResolving404(objMgr ibclient.IBObjectManager, ref string, startAddr, endAddr, networkView *string) error {
+	delErr := deleteRange(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteRange)
+	}
+	found, searchErr := rangeExistsByNaturalKey(objMgr, startAddr, endAddr, networkView)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteRange)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

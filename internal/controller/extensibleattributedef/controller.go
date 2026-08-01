@@ -37,6 +37,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/extensibleattributedef/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/extensibleattributedef/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -486,6 +487,55 @@ func updateEADefinition(conn *ibclient.Connector, ref, name string, comment, def
 func deleteEADefinition(conn *ibclient.Connector, ref string) error {
 	_, err := conn.DeleteObject(ref)
 	return err
+}
+
+// eaDefinitionExistsByNaturalKey reports whether a live EADefinition
+// still exists under the CR's own name — the same field WAPI uses to
+// compute the _ref (ExtensibleAttributeDef names are unique Grid-wide).
+// Used by Delete() when the stored _ref 404s: a hit here means the _ref
+// is merely stale, not that the object is gone. When name is empty
+// there is no way to re-discover the object, so the search is skipped
+// (found=false) rather than treated as an error.
+func eaDefinitionExistsByNaturalKey(conn *ibclient.Connector, name string) (bool, error) {
+	if name == "" {
+		return false, nil
+	}
+	var res []ibclient.EADefinition
+	obj := &ibclient.EADefinition{}
+	obj.SetReturnFields(eaDefReturnFields)
+	err := conn.GetObject(obj, "", ibclient.NewQueryParams(false, map[string]string{"name": name}), &res)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteEADefinitionResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the handle
+// rotated, not evidence the object was removed: if the natural-key search
+// still finds a live EADefinition, deleting is refused because ownership
+// of that object cannot be verified from the search alone (see the
+// staleref package doc for the full rationale).
+func deleteEADefinitionResolving404(conn *ibclient.Connector, ref, name string) error {
+	delErr := deleteEADefinition(conn, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteEADefinition)
+	}
+	found, searchErr := eaDefinitionExistsByNaturalKey(conn, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteEADefinition)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

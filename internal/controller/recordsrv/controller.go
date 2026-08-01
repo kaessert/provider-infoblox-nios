@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordsrv/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -512,6 +513,33 @@ func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, 
 func deleteSRVRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteSRVRecord(ref)
 	return err
+}
+
+// deleteSRVRecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated (see fetchSRVRecord), not evidence the object was
+// removed: if the natural-key search still finds a live record,
+// deleting is refused because ownership of that record cannot be
+// verified from the search alone (see the staleref package doc for the
+// full rationale).
+func deleteSRVRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, target *string, port *uint32) error {
+	delErr := deleteSRVRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteSRVRecord)
+	}
+
+	rec, _, fetchErr := fetchSRVRecord(objMgr, ref, view, name, target, port)
+	if fetchErr != nil {
+		return errors.Wrap(fetchErr, errDeleteSRVRecord)
+	}
+	if rec != nil {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

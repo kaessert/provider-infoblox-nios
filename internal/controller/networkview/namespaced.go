@@ -192,17 +192,19 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the NetworkView. A 404 is treated as already-deleted
-// (idempotent). Deleting the Grid's default NetworkView is rejected by
-// the server as a terminal error — this controller does not special-case
-// it; the error simply surfaces via the wrapped errDeleteNetworkView.
+// Delete removes the NetworkView. A 404 on the stored _ref is not
+// treated as already-deleted by itself — see
+// deleteNetworkViewResolving404 — because the _ref is a derived handle
+// that rotates whenever an identity field changes, and a stale handle
+// 404s exactly like a genuinely deleted object. Deleting the Grid's
+// default NetworkView is rejected by the server as a terminal error —
+// this controller does not special-case it; the error simply surfaces
+// via the wrapped errDeleteNetworkView.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.NetworkView) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteNetworkView(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteNetworkView)
+	p := cr.Spec.ForProvider
+	if err := deleteNetworkViewResolving404(e.objMgr, externalID, p.Name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

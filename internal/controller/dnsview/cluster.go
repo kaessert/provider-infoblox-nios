@@ -186,11 +186,8 @@ func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.DNSView)
 	}
 
 	externalID := meta.GetExternalName(cr)
-	if err := deleteView(e.conn, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteDNSView)
+	if err := deleteViewResolving404(e.conn, externalID, name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

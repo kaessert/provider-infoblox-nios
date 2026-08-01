@@ -260,6 +260,43 @@ func (m *mockWapiServer) handler() http.Handler {
 		writeJSON(w, http.StatusOK, ref)
 	})
 
+	// Search endpoint (GetAllAliasRecord): a GET with no _ref path
+	// segment, filtered by view/name/target_name/target_type query
+	// params. Registered as an exact literal path so Go's ServeMux
+	// prefers it over the {ref...} wildcard below for requests to
+	// precisely "record:alias" (real _refs always carry additional path
+	// segments).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:alias", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		view := q.Get("view")
+		name := q.Get("name")
+		targetName := q.Get("target_name")
+		targetType := q.Get("target_type")
+
+		m.mu.Lock()
+		var matches []ibclient.RecordAlias
+		for _, rec := range m.records {
+			if view != "" && (rec.View == nil || *rec.View != view) {
+				continue
+			}
+			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			if targetName != "" && (rec.TargetName == nil || *rec.TargetName != targetName) {
+				continue
+			}
+			if targetType != "" && rec.TargetType != targetType {
+				continue
+			}
+			matches = append(matches, *rec)
+		}
+		m.mu.Unlock()
+
+		// Always respond 200 — WAPI search semantics report "not found"
+		// via an empty array, never an HTTP error status.
+		writeJSON(w, http.StatusOK, matches)
+	})
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -821,6 +858,62 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// core defect fix: a 404 against the stored _ref must not be treated as
+// "already deleted" when a natural-key search finds the same identity
+// still live under a different _ref. Deleting that record would be
+// unverifiable ownership, so Delete() must refuse and leave the record in
+// place.
+func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	liveRef := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		View:       &view,
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+	})
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newClusterAliasRecord("my-alias", "record:alias/stale-ref:alias.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// companion happy path: a 404 against the stored _ref, and a natural-key
+// search that finds nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newClusterAliasRecord("my-alias", "record:alias/stale-ref:alias.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1133,6 +1226,59 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, errDeleteAliasRecord) {
 		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteAliasRecord)
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	liveRef := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		View:       &view,
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+	})
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/stale-ref:alias.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	objMgr, conn := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: objMgr, conn: conn}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", "record:alias/stale-ref:alias.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
 	}
 }
 

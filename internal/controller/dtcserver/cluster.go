@@ -181,15 +181,16 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCSer
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the DTCServer. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the DTCServer. A 404 on the stored _ref is not treated
+// as already-deleted by itself — see deleteDtcServerResolving404 —
+// because the _ref is a derived handle that rotates whenever an identity
+// field changes, and a stale handle 404s exactly like a genuinely
+// deleted object.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.DTCServer) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteDtcServer(e.clients.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteDTCServer)
+	p := cr.Spec.ForProvider
+	if err := deleteDtcServerResolving404(e.clients.objMgr, externalID, p.Name, p.Host); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

@@ -182,15 +182,16 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.MXReco
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the MXRecord. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the MXRecord. A 404 on the stored _ref is not treated as
+// already-deleted by itself — see deleteMXRecordResolving404 — because the
+// _ref is a derived handle that rotates whenever an identity field
+// changes, and a stale handle 404s exactly like a genuinely deleted
+// object.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteMXRecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteMXRecord)
+	p := cr.Spec.ForProvider
+	if err := deleteMXRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.MailExchanger, p.Preference); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

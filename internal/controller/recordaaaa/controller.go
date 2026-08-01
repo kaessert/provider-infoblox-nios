@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -470,6 +471,53 @@ func updateAAAARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv6Add
 func deleteAAAARecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteAAAARecord(ref)
 	return err
+}
+
+// aaaaRecordExistsByNaturalKey reports whether a live AAAARecord still
+// exists under the CR's own (view, name, ipv6Addr) identity — the same
+// tuple WAPI uses to compute the _ref. Used by Delete() when the stored
+// _ref 404s: a hit here means the _ref is merely stale, not that the
+// object is gone. GetAAAARecord requires all three fields non-empty (it
+// returns a hard error, not a NotFoundError, when any is missing); when
+// any is missing there is no way to re-discover the object, so the
+// search is skipped (found=false) rather than treated as an error.
+func aaaaRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, ipv6Addr *string) (bool, error) {
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(ipv6Addr) == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetAAAARecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(ipv6Addr))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteAAAARecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deleteAAAARecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, ipv6Addr *string) error {
+	delErr := deleteAAAARecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteAAAARecord)
+	}
+	found, searchErr := aaaaRecordExistsByNaturalKey(objMgr, view, name, ipv6Addr)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteAAAARecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

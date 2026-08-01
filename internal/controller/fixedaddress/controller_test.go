@@ -261,6 +261,63 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/fixedaddress", create("fixedaddress"))
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/ipv6fixedaddress", create("ipv6fixedaddress"))
 
+	// Search endpoint (GetFixedAddress): a GET with no _ref path segment,
+	// filtered by network_view/network/ipv4addr(+mac) or
+	// ipv6addr(+duid) query params depending on address family.
+	// Registered as an exact literal path so Go's ServeMux prefers it
+	// over the {ref...} wildcard below for requests to precisely
+	// "fixedaddress"/"ipv6fixedaddress" (real _refs always carry
+	// additional path segments).
+	search := func(objectType string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			networkView := q.Get("network_view")
+			network := q.Get("network")
+
+			m.mu.Lock()
+			var matches []ibclient.FixedAddress
+			for ref, fa := range m.records {
+				isIPv6 := strings.HasPrefix(ref, "ipv6fixedaddress/")
+				if isIPv6 && objectType != "ipv6fixedaddress" {
+					continue
+				}
+				if !isIPv6 && objectType != "fixedaddress" {
+					continue
+				}
+				if networkView != "" && fa.NetviewName != networkView {
+					continue
+				}
+				if network != "" && fa.Cidr != network {
+					continue
+				}
+				if objectType == "ipv6fixedaddress" {
+					if ipv6addr := q.Get("ipv6addr"); ipv6addr != "" && fa.IPv6Address != ipv6addr {
+						continue
+					}
+					if duid := q.Get("duid"); duid != "" && fa.Duid != duid {
+						continue
+					}
+				} else {
+					if ipv4addr := q.Get("ipv4addr"); ipv4addr != "" && fa.IPv4Address != ipv4addr {
+						continue
+					}
+					if mac := q.Get("mac"); mac != "" && (fa.Mac == nil || *fa.Mac != mac) {
+						continue
+					}
+				}
+				matches = append(matches, *fa)
+			}
+			m.mu.Unlock()
+
+			// Always respond 200 — WAPI search semantics report
+			// "not found" via an empty array, never an HTTP error
+			// status.
+			writeJSON(w, http.StatusOK, matches)
+		}
+	}
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/fixedaddress", search("fixedaddress"))
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/ipv6fixedaddress", search("ipv6fixedaddress"))
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -864,6 +921,61 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// core defect fix: a 404 against the stored _ref must not be treated as
+// "already deleted" when a natural-key search finds the same identity
+// still live under a different _ref. Deleting that record would be
+// unverifiable ownership, so Delete() must refuse and leave the record
+// in place.
+func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
+		IPv4Address: "10.0.0.5",
+		NetviewName: "default",
+		Cidr:        "10.0.0.0/24",
+		Mac:         stringPtr("00:11:22:33:44:55"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5")
+	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// companion happy path: a 404 against the stored _ref, and a natural-key
+// search that finds nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5")
+	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1158,6 +1270,58 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 
 	if _, err := e.Delete(context.Background(), cr); err == nil {
 		t.Fatal("Delete: expected error for 500, got nil")
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
+		IPv4Address: "10.0.0.5",
+		NetviewName: "default",
+		Cidr:        "10.0.0.0/24",
+		Mac:         stringPtr("00:11:22:33:44:55"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5", "ProviderConfig")
+	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5", "ProviderConfig")
+	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
 	}
 }
 

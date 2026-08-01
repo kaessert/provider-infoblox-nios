@@ -38,6 +38,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -615,6 +616,57 @@ func updateDtcServer(conn ibclient.IBConnector, ref string, name, host, comment 
 func deleteDtcServer(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteDtcServer(ref)
 	return err
+}
+
+// dtcServerExistsByNaturalKey reports whether a live DTCServer still
+// exists under the CR's own (name, host) identity — the same tuple WAPI
+// uses to compute the _ref. Used by Delete() when the stored _ref 404s: a
+// hit here means the _ref is merely stale, not that the object is gone.
+// Unlike dtclbdn/dtcpool, this resource has no auto_consolidated_monitors
+// schema mismatch on this deployment (confirmed: Observe() calls
+// objMgr.GetDtcServerByRef directly), so this uses the ObjectManager's
+// plain GetDtcServer(name, host) convenience method rather than a
+// low-level IBConnector search. GetDtcServer requires both fields
+// non-empty; when either is missing there is no way to re-discover the
+// object, so the search is skipped (found=false) rather than treated as
+// an error.
+func dtcServerExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, host *string) (bool, error) {
+	if strOrEmpty(name) == "" || strOrEmpty(host) == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetDtcServer(strOrEmpty(name), strOrEmpty(host))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteDtcServerResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the handle
+// rotated, not evidence the object was removed: if the natural-key search
+// still finds a live object, deleting is refused because ownership of
+// that object cannot be verified from the search alone (see the staleref
+// package doc for the full rationale).
+func deleteDtcServerResolving404(objMgr ibclient.IBObjectManager, ref string, name, host *string) error {
+	delErr := deleteDtcServer(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteDTCServer)
+	}
+	found, searchErr := dtcServerExistsByNaturalKey(objMgr, name, host)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteDTCServer)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

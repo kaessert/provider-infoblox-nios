@@ -205,15 +205,16 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the DTCLBDN. A 404 is treated as already-deleted
-// (idempotent, hard-delete).
+// Delete removes the DTCLBDN. A 404 on the stored _ref is not treated as
+// already-deleted by itself — see deleteDtcLbdnResolving404 — because the
+// _ref is a derived handle that rotates whenever an identity field
+// changes, and a stale handle 404s exactly like a genuinely deleted
+// object.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.DTCLBDN) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteDtcLbdn(e.clients.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteDTCLBDN)
+	p := cr.Spec.ForProvider
+	if err := deleteDtcLbdnResolving404(e.clients.objMgr, e.clients.conn, externalID, p.Name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }
