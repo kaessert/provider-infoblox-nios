@@ -305,8 +305,31 @@ func createDefinition(conn ibclient.IBConnector) error {
 	return err
 }
 
+// errSuperuserOnlyDefinition is the WAPI response text a Grid uses when
+// the credential lacks the superuser privilege required to manage
+// extensible attribute definitions, captured verbatim from a live Grid.
+// Managing extensible attribute definitions is a superuser-only Grid
+// operation — the admin-group permission catalog has no entry that
+// covers it, so this refusal can never be granted or denied per admin
+// group. That is also why the Grid answers it as an HTTP 400
+// IBDataConflictError instead of the 401/403 an ordinary WAPI
+// authorization failure uses: it is a permanent, correct answer from
+// the Grid, not a validation error worth retrying.
+const errSuperuserOnlyDefinition = "only superusers can manage extensible attribute definition"
+
 // isForbidden reports whether err indicates the WAPI credential lacks
-// permission to create the definition (HTTP 401 or 403).
+// permission to create the definition. Two distinct shapes count as a
+// refusal:
+//
+//   - An ordinary WAPI authorization failure: HTTP 401 or 403.
+//   - The superuser-only privilege required to manage extensible
+//     attribute definitions: HTTP 400 carrying errSuperuserOnlyDefinition
+//     in its body. WAPI does not expose a typed permission error through
+//     this SDK — every non-not-found HTTP error comes back as an
+//     opaquely formatted string — so this matches on the message text
+//     the same way isAlreadyExists already does in this package. A
+//     generic HTTP 400 (a validation failure unrelated to this
+//     privilege) does not match and stays a retriable wrapped error.
 func isForbidden(err error) bool {
 	if err == nil {
 		return false
@@ -319,7 +342,10 @@ func isForbidden(err error) bool {
 	if convErr != nil {
 		return false
 	}
-	return code == http.StatusUnauthorized || code == http.StatusForbidden
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		return true
+	}
+	return code == http.StatusBadRequest && strings.Contains(strings.ToLower(err.Error()), errSuperuserOnlyDefinition)
 }
 
 // isAlreadyExists reports whether err indicates a concurrent creator won
