@@ -87,6 +87,34 @@ func wapiStatusErr(status int, text string) error {
 	return fmt.Errorf("WAPI request error: %d('%s')\n%s", status, text, text)
 }
 
+// wapiSuperuserRefusalErr builds the error in the exact shape a live NIOS
+// Grid returns for a non-superuser attempt to create the identity
+// extensible attribute definition — HTTP 400 (not 401/403) with an
+// IBDataConflictError body. Captured verbatim from a real Grid using a
+// restricted, non-superuser credential:
+//
+//	HTTP 400
+//	{ "Error": "AdmConDataError: None (IBDataConflictError: IB.Data.Conflict:Cannot
+//	   create extensible attribute definition 'Crossplane Prereq Probe'. Only
+//	   superusers can manage extensible attribute definition)",
+//	  "code": "Client.Ibap.Data.Conflict",
+//	  "text": "Cannot create extensible attribute definition 'Crossplane Prereq
+//	   Probe'. Only superusers can manage extensible attribute definition" }
+func wapiSuperuserRefusalErr() error {
+	body := `{ "Error": "AdmConDataError: None (IBDataConflictError: IB.Data.Conflict:Cannot create extensible attribute definition 'Crossplane Prereq Probe'. Only superusers can manage extensible attribute definition)", "code": "Client.Ibap.Data.Conflict", "text": "Cannot create extensible attribute definition 'Crossplane Prereq Probe'. Only superusers can manage extensible attribute definition" }`
+	return fmt.Errorf("WAPI request error: 400('400 Bad Request')\nContents:\n%s\n", body)
+}
+
+// wapiGenericBadRequestErr builds an error in the real NIOS shape for an
+// ordinary WAPI validation failure unrelated to the superuser-only
+// EA-definition privilege — an AdmConProtoError on an unrelated field.
+// This must never be classified as a *PrerequisiteError; it stays a
+// retriable wrapped error like any other 400.
+func wapiGenericBadRequestErr() error {
+	body := `{ "Error": "AdmConProtoError: None (IBDataValueError: IB.Data.Value: 'flags' has an invalid value)", "code": "Client.Ibap.Proto", "text": "'flags' has an invalid value" }`
+	return fmt.Errorf("WAPI request error: 400('400 Bad Request')\nContents:\n%s\n", body)
+}
+
 // newTestProber builds a Prober with a controllable clock, so tests can
 // advance time deterministically instead of sleeping.
 func newTestProber(ttl time.Duration) (*Prober, *fakeClock) {
@@ -143,10 +171,15 @@ func TestEnsureDefinitionAbsentAndCreatable(t *testing.T) {
 }
 
 // ── absent + forbidden ───────────────────────────────────────────────────
+//
+// NIOS answers a non-superuser attempt to create the identity EA
+// definition with HTTP 400, not 401/403 — this is the shape a real Grid
+// actually returns, and the primary fixture below reproduces it
+// verbatim rather than a synthetic 403.
 
-func TestEnsureDefinitionAbsentAndForbidden(t *testing.T) {
+func TestEnsureDefinitionAbsentAndSuperuserOnly400Refuses(t *testing.T) {
 	p, _ := newTestProber(DefaultProbeTTL)
-	conn := &fakeProbeConnector{createErr: wapiStatusErr(403, "Forbidden")}
+	conn := &fakeProbeConnector{createErr: wapiSuperuserRefusalErr()}
 
 	err := p.Ensure(context.Background(), conn, "nios.example.com")
 	if err == nil {
@@ -173,6 +206,21 @@ func TestEnsureDefinitionAbsentAndForbidden(t *testing.T) {
 	}
 }
 
+// A Grid that does answer this refusal with an ordinary 401/403 must
+// still be classified as a refusal — the 400 handling above is
+// additive, not a replacement for the pre-existing 401/403 path.
+
+func TestEnsureDefinitionAbsentAndForbidden403AlsoRefuses(t *testing.T) {
+	p, _ := newTestProber(DefaultProbeTTL)
+	conn := &fakeProbeConnector{createErr: wapiStatusErr(403, "Forbidden")}
+
+	err := p.Ensure(context.Background(), conn, "grid-a")
+	var prereq *PrerequisiteError
+	if !errors.As(err, &prereq) {
+		t.Fatalf("err = %v (%T), want *PrerequisiteError", err, err)
+	}
+}
+
 func TestEnsureDefinitionAbsentAndUnauthorizedAlsoRefuses(t *testing.T) {
 	p, _ := newTestProber(DefaultProbeTTL)
 	conn := &fakeProbeConnector{createErr: wapiStatusErr(401, "Unauthorized")}
@@ -181,6 +229,37 @@ func TestEnsureDefinitionAbsentAndUnauthorizedAlsoRefuses(t *testing.T) {
 	var prereq *PrerequisiteError
 	if !errors.As(err, &prereq) {
 		t.Fatalf("err = %v (%T), want *PrerequisiteError", err, err)
+	}
+}
+
+// A generic HTTP 400 unrelated to the superuser-only privilege — e.g. an
+// AdmConProtoError on an unrelated field — must not be swept up by the
+// new 400 classification; it stays a retriable wrapped error.
+
+func TestEnsureDefinitionAbsentAndGenericBadRequestStaysRetriable(t *testing.T) {
+	p, _ := newTestProber(DefaultProbeTTL)
+	conn := &fakeProbeConnector{createErr: wapiGenericBadRequestErr()}
+
+	err := p.Ensure(context.Background(), conn, "grid-a")
+	if err == nil {
+		t.Fatal("Ensure returned nil, want the wrapped transient/validation error")
+	}
+	var prereq *PrerequisiteError
+	if errors.As(err, &prereq) {
+		t.Fatalf("a generic 400 unrelated to the superuser-only privilege must not be classified as a *PrerequisiteError: %v", err)
+	}
+}
+
+// An "already exists" 400 (a lost create race) must still be treated as
+// success, not swept up by the new 400 classification.
+
+func TestEnsureDefinitionAbsentAndAlreadyExists400StaysSuccess(t *testing.T) {
+	p, _ := newTestProber(DefaultProbeTTL)
+	conn := &fakeProbeConnector{createErr: wapiStatusErr(400, "IB.Data.Conflict: Extensible attribute definition with this name already exists.")}
+
+	err := p.Ensure(context.Background(), conn, "grid-a")
+	if err != nil {
+		t.Fatalf("Ensure returned error for an already-exists race: %v", err)
 	}
 }
 
