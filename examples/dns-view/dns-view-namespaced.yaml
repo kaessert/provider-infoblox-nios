@@ -28,7 +28,7 @@ metadata:
       - field: disable
         value: true
       - field: notifyDelay
-        value: 5
+        value: 10
       - field: useBlacklist
         value: true
       - field: blacklistAction
