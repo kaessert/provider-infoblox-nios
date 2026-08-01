@@ -102,11 +102,11 @@ func cmdRun(args []string) error {
 		return err
 	}
 
-	passed, failed := printResults(results)
+	passed, failed, noop := printResults(results)
 
 	total := passed + failed
-	fmt.Printf("%s: %d/%d tested, %d/%d skipped\n",
-		verdict(failed == 0), passed, total, skipped, len(m.Tests))
+	fmt.Printf("%s: %d/%d tested, %d/%d skipped, %d no-op\n",
+		verdict(failed == 0), passed, total, skipped, len(m.Tests), noop)
 
 	if failed > 0 {
 		os.Exit(1)
@@ -115,14 +115,20 @@ func cmdRun(args []string) error {
 }
 
 // printResults prints one line per test result (plus any side effects) and
-// returns the passed/failed counts.
-func printResults(results []TestResult) (passed, failed int) {
+// returns the passed/failed counts, plus the no-op count (a subset of
+// failed, reported separately so a stale test value is easy to spot in the
+// summary line without being confused with a genuine PASS or SKIP).
+func printResults(results []TestResult) (passed, failed, noop int) {
 	var hasSideFx bool
 	for _, r := range results {
 		switch {
 		case r.Skipped:
 			fmt.Printf("  ⊘ %s: SKIPPED (%s)\n", r.Field, r.SkipMsg)
 			continue
+		case r.NoOp:
+			fmt.Printf("  ⦸ %s: NO-OP (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
+			failed++
+			noop++
 		case r.Error != nil:
 			fmt.Printf("  ✗ %s: ERROR (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
 			failed++
@@ -146,7 +152,7 @@ func printResults(results []TestResult) (passed, failed int) {
 		fmt.Println("  Differential: all non-target fields stable ✓")
 		fmt.Println()
 	}
-	return passed, failed
+	return passed, failed, noop
 }
 
 // printSideEffects prints the fields that changed unexpectedly alongside a
