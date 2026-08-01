@@ -105,6 +105,7 @@ func clusterFieldsFromSpec(p *clusterv1alpha1.ZoneAuthParameters) zoneAuthFields
 		GridSecondaries:     clusterMemberServerValues(p.GridSecondaries),
 		ExternalPrimaries:   clusterExternalServerValues(p.ExternalPrimaries),
 		ExternalSecondaries: clusterExternalServerValues(p.ExternalSecondaries),
+		UseExternalPrimary:  p.UseExternalPrimary,
 	}
 }
 
@@ -226,6 +227,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 	cr.Status.AtProvider.GridSecondaries = clusterMemberServersFromValues(observed.GridSecondaries)
 	cr.Status.AtProvider.ExternalPrimaries = clusterExternalServersFromValues(observed.ExternalPrimaries)
 	cr.Status.AtProvider.ExternalSecondaries = clusterExternalServersFromValues(observed.ExternalSecondaries)
+	cr.Status.AtProvider.UseExternalPrimary = observed.UseExternalPrimary
 	cr.Status.AtProvider.Ref = strPtrOrNil(rec.Ref)
 
 	p := &cr.Spec.ForProvider
@@ -246,6 +248,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneAut
 		p.GridSecondaries = clusterMemberServersFromValues(updated.GridSecondaries)
 		p.ExternalPrimaries = clusterExternalServersFromValues(updated.ExternalPrimaries)
 		p.ExternalSecondaries = clusterExternalServersFromValues(updated.ExternalSecondaries)
+		p.UseExternalPrimary = updated.UseExternalPrimary
 		desired = updated
 	}
 

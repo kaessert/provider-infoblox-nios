@@ -252,6 +252,7 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.GridSecondaries = incoming.GridSecondaries
 		existing.ExternalPrimaries = incoming.ExternalPrimaries
 		existing.ExternalSecondaries = incoming.ExternalSecondaries
+		existing.UseExternalPrimary = incoming.UseExternalPrimary
 		m.mu.Unlock()
 
 		writeJSON(w, http.StatusOK, ref)

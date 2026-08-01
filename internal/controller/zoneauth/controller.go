@@ -263,6 +263,19 @@ func gatedUint32Equal(useFlag *bool, desired, observed *uint32) bool {
 	return uint32OrZero(desired) == uint32OrZero(observed)
 }
 
+// gatedExternalServerValuesEqual compares desired and observed
+// ExternalPrimaries slices only when useFlag (UseExternalPrimary) is on.
+// When useFlag is off, the zone is grid-primary-served and the appliance
+// does not apply ExternalPrimaries — the two sides are unrelated
+// quantities, so always report equal here; the flag's own (unconditional)
+// comparator is what actually detects drift on the flag itself.
+func gatedExternalServerValuesEqual(useFlag *bool, desired, observed []externalServerValue) bool {
+	if !boolOrFalse(useFlag) {
+		return true
+	}
+	return externalServerValuesEqual(desired, observed)
+}
+
 // ── error classification ─────────────────────────────────────────────────
 
 // errStatusRe extracts the HTTP status code from the SDK's generic
@@ -492,10 +505,13 @@ func externalServerValuesToSDK(in []externalServerValue) []ibclient.NameServer {
 // exactly once.
 //
 // Use-flag audit: the SDK's zone_auth object documents 18 "Use flag for:"
-// fields. use_grid_zone_timer (gating the five SOA timer fields below) is
-// the only one whose paired value field(s) are modelled in this CRD —
-// every other flag's paired value(s) (allow_active_dir, allow_query,
-// allow_transfer, allow_update, allow_update_forwarding,
+// fields, plus a handful of semantically-named flags whose doc comment
+// describes the same use-flag relationship without the literal
+// "Use flag for:" phrasing. use_grid_zone_timer (gating the five SOA
+// timer fields below) is the only one of the 18 "Use flag for:"-phrased
+// fields whose paired value field(s) are modelled in this CRD — every
+// other "Use flag for:" flag's paired value(s) (allow_active_dir,
+// allow_query, allow_transfer, allow_update, allow_update_forwarding,
 // copy_xfer_to_notify, ddns_force_creation_timestamp_update,
 // ddns_restrict_patterns/ddns_restrict_patterns_list,
 // ddns_restrict_secure/ddns_principal_tracking/ddns_principal_group,
@@ -503,10 +519,12 @@ func externalServerValuesToSDK(in []externalServerValue) []ibclient.NameServer {
 // import_from, notify_delay, record_name_policy,
 // scavenging_settings/last_queried_acl, soa_email) are absent from
 // ZoneAuthParameters entirely, so there is nothing for those flags to
-// gate here. use_tsig_key_name (ExternalServer) and
-// enable_preferred_primaries (MemberServer, semantically a use flag
-// though not use_*-named) are separately modelled and gated in
-// externalServerValueEqual/memberServerValuesEqual above.
+// gate here. Three further flags are semantically use-flags without
+// "Use flag for:" phrasing and are separately modelled and gated:
+// use_external_primary (gating ExternalPrimaries below — see isUpToDate
+// and lateInitializeFields), use_tsig_key_name (ExternalServer, gated in
+// externalServerValueEqual), and enable_preferred_primaries
+// (MemberServer, gated in memberServerValuesEqual).
 type zoneAuthFields struct {
 	FQDN           string
 	View           *string // nil = unset (let WAPI apply the Grid's default view)
@@ -535,6 +553,13 @@ type zoneAuthFields struct {
 	GridSecondaries     []memberServerValue
 	ExternalPrimaries   []externalServerValue
 	ExternalSecondaries []externalServerValue
+	// UseExternalPrimary is the SDK-documented use flag for
+	// ExternalPrimaries: when false, the zone is grid-primary-served
+	// (GridPrimary) and the appliance does not apply ExternalPrimaries —
+	// see isUpToDate and lateInitializeFields for how ExternalPrimaries is
+	// gated on it, the same way UseGridZoneTimer gates the SOA timer
+	// fields above.
+	UseExternalPrimary *bool
 }
 
 // fieldsFromZoneAuth extracts the full-mirror field bag from a WAPI
@@ -558,6 +583,7 @@ func fieldsFromZoneAuth(rec *ibclient.ZoneAuth) zoneAuthFields {
 		GridSecondaries:     memberServerValuesFromSDK(rec.GridSecondaries),
 		ExternalPrimaries:   externalServerValuesFromSDK(rec.ExternalPrimaries),
 		ExternalSecondaries: externalServerValuesFromSDK(rec.ExternalSecondaries),
+		UseExternalPrimary:  rec.UseExternalPrimary,
 	}
 }
 
@@ -594,6 +620,55 @@ func effectiveUseGridZoneTimer(f zoneAuthFields) *bool {
 	return f.UseGridZoneTimer
 }
 
+// soaTimerFieldsEqual compares use_grid_zone_timer and the five SOA
+// timer fields it gates, encapsulating the flag-then-gated-value
+// comparison pattern as a single call so isUpToDate's own branching
+// stays within its complexity budget. use_grid_zone_timer is compared
+// first and unconditionally (via effectiveUseGridZoneTimer — see its
+// doc comment for why the *effective*, not raw, flag value is used), so
+// a true -> false (or false -> true) transition on the flag itself is
+// always detected as drift regardless of what the SOA fields say. When
+// the flag is off, the zone inherits the Grid's timer settings and the
+// appliance echoes back the Grid's values rather than what was
+// submitted — the two sides are unrelated quantities, so the SOA fields
+// are only compared once the flag is (or will become) on.
+func soaTimerFieldsEqual(desired, observed zoneAuthFields) bool {
+	desiredUseGridZoneTimer := effectiveUseGridZoneTimer(desired)
+	if boolOrFalse(desiredUseGridZoneTimer) != boolOrFalse(observed.UseGridZoneTimer) {
+		return false
+	}
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaDefaultTTL, observed.SoaDefaultTTL) {
+		return false
+	}
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaExpire, observed.SoaExpire) {
+		return false
+	}
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaNegativeTTL, observed.SoaNegativeTTL) {
+		return false
+	}
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRefresh, observed.SoaRefresh) {
+		return false
+	}
+	return gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRetry, observed.SoaRetry)
+}
+
+// externalPrimariesFieldsEqual compares use_external_primary and the
+// ExternalPrimaries slice it gates, encapsulating the same
+// flag-then-gated-value pattern as soaTimerFieldsEqual so isUpToDate's
+// own branching stays within its complexity budget. use_external_primary
+// is compared first and unconditionally, so a true -> false (or false ->
+// true) transition on the flag itself is always detected as drift
+// regardless of what ExternalPrimaries says. When the flag is off, the
+// zone is grid-primary-served and the appliance does not apply
+// ExternalPrimaries — the two sides are unrelated quantities, so
+// ExternalPrimaries is only compared once the flag is on.
+func externalPrimariesFieldsEqual(desired, observed zoneAuthFields) bool {
+	if boolOrFalse(desired.UseExternalPrimary) != boolOrFalse(observed.UseExternalPrimary) {
+		return false
+	}
+	return gatedExternalServerValuesEqual(desired.UseExternalPrimary, desired.ExternalPrimaries, observed.ExternalPrimaries)
+}
+
 // isUpToDate compares the desired ZoneAuth fields against the observed
 // ones. FQDN, View, and ZoneFormat are immutable (WAPI rejects a PUT that
 // changes any of them — see the package doc comment and the blueprint's
@@ -607,36 +682,7 @@ func isUpToDate(desired, observed zoneAuthFields) bool {
 	if boolOrFalse(desired.Disable) != boolOrFalse(observed.Disable) {
 		return false
 	}
-	// use_grid_zone_timer is the SDK-documented use flag for all five
-	// SOA timer fields — compare it first and unconditionally, so a
-	// true -> false (or false -> true) transition on the flag itself is
-	// always detected as drift regardless of what the SOA fields say.
-	// desiredUseGridZoneTimer is the *effective* value (see
-	// effectiveUseGridZoneTimer): once any soa_* field is set, the wire
-	// builders force the flag on, so comparing against the raw,
-	// unforced field would either loop forever (if desired explicitly
-	// says false) or mask real drift (if desired never sets the flag).
-	desiredUseGridZoneTimer := effectiveUseGridZoneTimer(desired)
-	if boolOrFalse(desiredUseGridZoneTimer) != boolOrFalse(observed.UseGridZoneTimer) {
-		return false
-	}
-	// When the flag is off, the zone inherits the Grid's timer settings
-	// and the appliance echoes back the Grid's values rather than what
-	// was submitted — the two sides are unrelated quantities, so only
-	// compare the SOA fields when the flag is (or will become) on.
-	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaDefaultTTL, observed.SoaDefaultTTL) {
-		return false
-	}
-	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaExpire, observed.SoaExpire) {
-		return false
-	}
-	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaNegativeTTL, observed.SoaNegativeTTL) {
-		return false
-	}
-	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRefresh, observed.SoaRefresh) {
-		return false
-	}
-	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRetry, observed.SoaRetry) {
+	if !soaTimerFieldsEqual(desired, observed) {
 		return false
 	}
 	if strOrEmpty(desired.NsGroup) != strOrEmpty(observed.NsGroup) {
@@ -651,7 +697,7 @@ func isUpToDate(desired, observed zoneAuthFields) bool {
 	if !memberServerValuesEqual(desired.GridSecondaries, observed.GridSecondaries) {
 		return false
 	}
-	if !externalServerValuesEqual(desired.ExternalPrimaries, observed.ExternalPrimaries) {
+	if !externalPrimariesFieldsEqual(desired, observed) {
 		return false
 	}
 	if !externalServerValuesEqual(desired.ExternalSecondaries, observed.ExternalSecondaries) {
@@ -709,6 +755,10 @@ func lateInitializeScalars(desired, observed zoneAuthFields) (zoneAuthFields, bo
 	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRefresh, observed.SoaRefresh) || changed
 	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRetry, observed.SoaRetry) || changed
 	changed = lateInitStringPtr(&desired.NsGroup, observed.NsGroup) || changed
+	// UseExternalPrimary itself always back-fills unconditionally (it is
+	// the gate, not a gated value) — see lateInitializeCollections for
+	// the gated ExternalPrimaries back-fill that reads through it.
+	changed = lateInitPtr(&desired.UseExternalPrimary, observed.UseExternalPrimary) || changed
 	if len(desired.ExtAttrs) == 0 && len(observed.ExtAttrs) > 0 {
 		desired.ExtAttrs = observed.ExtAttrs
 		changed = true
@@ -742,6 +792,24 @@ func gatedLateInitPtr[T any](useFlagDesired, useFlagObserved *bool, desired **T,
 	return lateInitPtr(desired, observed)
 }
 
+// gatedLateInitExternalServers is the []externalServerValue counterpart
+// of gatedLateInitPtr, needed because ExternalPrimaries is a slice rather
+// than a scalar pointer field: back-fills *desired from observed only
+// when the gating use flag (UseExternalPrimary) is (or will become)
+// true. When the flag is off, the observed ExternalPrimaries value is
+// not something the user's spec implies — writing it into spec would
+// silently claim a setting that is not actually in effect.
+func gatedLateInitExternalServers(useFlagDesired, useFlagObserved *bool, desired *[]externalServerValue, observed []externalServerValue) bool {
+	if !effectiveUseFlag(useFlagDesired, useFlagObserved) {
+		return false
+	}
+	if len(*desired) == 0 && len(observed) > 0 {
+		*desired = observed
+		return true
+	}
+	return false
+}
+
 // lateInitPtr back-fills *desired from observed when desired is unset.
 // Used for pointer fields (bool, uint32, ...) where the server's zero
 // value is itself a meaningful, back-fillable answer.
@@ -766,7 +834,11 @@ func lateInitStringPtr(desired **string, observed *string) bool {
 }
 
 // lateInitializeCollections back-fills the slice-valued mutable fields
-// (grid/external primaries and secondaries).
+// (grid/external primaries and secondaries). ExternalPrimaries is gated
+// on UseExternalPrimary (via gatedLateInitExternalServers) — see
+// zoneAuthFields.UseExternalPrimary and isUpToDate for why: when the
+// flag is off, the observed value is not something the user's spec
+// implies.
 func lateInitializeCollections(desired, observed zoneAuthFields) (zoneAuthFields, bool) {
 	changed := false
 
@@ -778,10 +850,7 @@ func lateInitializeCollections(desired, observed zoneAuthFields) (zoneAuthFields
 		desired.GridSecondaries = observed.GridSecondaries
 		changed = true
 	}
-	if len(desired.ExternalPrimaries) == 0 && len(observed.ExternalPrimaries) > 0 {
-		desired.ExternalPrimaries = observed.ExternalPrimaries
-		changed = true
-	}
+	changed = gatedLateInitExternalServers(desired.UseExternalPrimary, observed.UseExternalPrimary, &desired.ExternalPrimaries, observed.ExternalPrimaries) || changed
 	if len(desired.ExternalSecondaries) == 0 && len(observed.ExternalSecondaries) > 0 {
 		desired.ExternalSecondaries = observed.ExternalSecondaries
 		changed = true
@@ -812,6 +881,7 @@ func newZoneAuthForGet() *ibclient.ZoneAuth {
 		"grid_secondaries",
 		"external_primaries",
 		"external_secondaries",
+		"use_external_primary",
 	))
 	return z
 }
@@ -847,6 +917,7 @@ func buildZoneAuthForCreate(f zoneAuthFields) *ibclient.ZoneAuth {
 		GridSecondaries:     memberServerValuesToSDK(f.GridSecondaries),
 		ExternalPrimaries:   externalServerValuesToSDK(f.ExternalPrimaries),
 		ExternalSecondaries: externalServerValuesToSDK(f.ExternalSecondaries),
+		UseExternalPrimary:  f.UseExternalPrimary,
 	}
 	return z
 }
@@ -876,6 +947,7 @@ func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 		GridSecondaries:     memberServerValuesToSDK(f.GridSecondaries),
 		ExternalPrimaries:   externalServerValuesToSDK(f.ExternalPrimaries),
 		ExternalSecondaries: externalServerValuesToSDK(f.ExternalSecondaries),
+		UseExternalPrimary:  f.UseExternalPrimary,
 	}
 	return z
 }

@@ -129,6 +129,7 @@ func namespacedFieldsFromSpec(p *namespacedv1alpha1.ZoneAuthParameters) zoneAuth
 		GridSecondaries:     namespacedMemberServerValues(p.GridSecondaries),
 		ExternalPrimaries:   namespacedExternalServerValues(p.ExternalPrimaries),
 		ExternalSecondaries: namespacedExternalServerValues(p.ExternalSecondaries),
+		UseExternalPrimary:  p.UseExternalPrimary,
 	}
 }
 
@@ -246,6 +247,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	cr.Status.AtProvider.GridSecondaries = namespacedMemberServersFromValues(observed.GridSecondaries)
 	cr.Status.AtProvider.ExternalPrimaries = namespacedExternalServersFromValues(observed.ExternalPrimaries)
 	cr.Status.AtProvider.ExternalSecondaries = namespacedExternalServersFromValues(observed.ExternalSecondaries)
+	cr.Status.AtProvider.UseExternalPrimary = observed.UseExternalPrimary
 	cr.Status.AtProvider.Ref = strPtrOrNil(rec.Ref)
 
 	p := &cr.Spec.ForProvider
@@ -266,6 +268,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 		p.GridSecondaries = namespacedMemberServersFromValues(updated.GridSecondaries)
 		p.ExternalPrimaries = namespacedExternalServersFromValues(updated.ExternalPrimaries)
 		p.ExternalSecondaries = namespacedExternalServersFromValues(updated.ExternalSecondaries)
+		p.UseExternalPrimary = updated.UseExternalPrimary
 		desired = updated
 	}
 

@@ -475,6 +475,151 @@ func TestLateInitializeGatesSoaFieldsOnEffectivePostBackfillFlag(t *testing.T) {
 	}
 }
 
+// ── isUpToDate / lateInitialize: use_external_primary gating ────────────
+//
+// use_external_primary is the SDK-documented use flag for
+// ExternalPrimaries. When off, the zone is grid-primary-served
+// (GridPrimary) and the appliance does not apply ExternalPrimaries — but
+// it can still echo back a realistic, non-empty external_primaries list
+// (a value the zone previously had, or a value staged for a future
+// switch to external-primary mode) rather than an empty one. Comparing
+// it unconditionally would create a permanent no-op Update loop for any
+// zone that has ever had ExternalPrimaries populated while
+// use_external_primary is off.
+
+// externalPrimariesObserved returns a zoneAuthFields populated with a
+// realistic non-empty ExternalPrimaries list, standing in for what a
+// real appliance echoes back on GET regardless of use_external_primary's
+// state.
+func externalPrimariesObserved(useExternalPrimary *bool) zoneAuthFields {
+	return zoneAuthFields{
+		ExternalPrimaries: []externalServerValue{
+			{Address: "10.0.0.9", Name: "ext1.example.com"},
+		},
+		UseExternalPrimary: useExternalPrimary,
+	}
+}
+
+// TestIsUpToDateIgnoresExternalPrimariesMismatchWhenFlagOff proves an
+// ExternalPrimaries mismatch is ignored while use_external_primary is
+// off — this must fail against a naive unconditional
+// externalServerValuesEqual(desired, observed) comparison, since desired
+// and observed genuinely differ here (empty vs. non-empty).
+func TestIsUpToDateIgnoresExternalPrimariesMismatchWhenFlagOff(t *testing.T) {
+	desired := zoneAuthFields{UseExternalPrimary: boolPtr(false)}
+	observed := externalPrimariesObserved(boolPtr(false))
+
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true (use_external_primary off, externalPrimaries is server-owned), got false")
+	}
+}
+
+// TestIsUpToDateDetectsExternalPrimariesMismatchWhenFlagOn is the
+// flag-on counterpart: the same kind of mismatch is real drift once the
+// flag is on.
+func TestIsUpToDateDetectsExternalPrimariesMismatchWhenFlagOn(t *testing.T) {
+	desired := zoneAuthFields{
+		UseExternalPrimary: boolPtr(true),
+		ExternalPrimaries: []externalServerValue{
+			{Address: "10.0.0.1", Name: "different.example.com"},
+		},
+	}
+	observed := externalPrimariesObserved(boolPtr(true))
+
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (use_external_primary on, externalPrimaries differs), got true")
+	}
+}
+
+// TestIsUpToDateDetectsUseExternalPrimaryTransition proves the flag's
+// own comparison stays unconditional even though the ExternalPrimaries
+// comparison is gated, so a false -> true transition is still detected
+// as drift on its own, independent of whether ExternalPrimaries happens
+// to already match.
+func TestIsUpToDateDetectsUseExternalPrimaryTransition(t *testing.T) {
+	desired := externalPrimariesObserved(boolPtr(true))
+	observed := externalPrimariesObserved(boolPtr(false))
+
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (use_external_primary transitioned false -> true), got true")
+	}
+}
+
+// TestIsUpToDateMutationCheckExternalPrimariesGate is a mutation-check:
+// it proves the "true" result from
+// TestIsUpToDateIgnoresExternalPrimariesMismatchWhenFlagOff comes from
+// the gate genuinely suppressing a real difference, not from the two
+// sides accidentally already matching. Removing the gate (i.e. reverting
+// isUpToDate to compare ExternalPrimaries unconditionally) would flip
+// this desired/observed pair to ResourceUpToDate=false forever, even
+// though use_external_primary is off and the API ignores
+// ExternalPrimaries entirely in that state.
+func TestIsUpToDateMutationCheckExternalPrimariesGate(t *testing.T) {
+	desired := zoneAuthFields{UseExternalPrimary: boolPtr(false)}
+	observed := externalPrimariesObserved(boolPtr(false))
+
+	if externalServerValuesEqual(desired.ExternalPrimaries, observed.ExternalPrimaries) {
+		t.Fatal("test setup invalid: desired/observed ExternalPrimaries must genuinely differ for this mutation check to be meaningful")
+	}
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true with the use_external_primary gate in place, got false")
+	}
+}
+
+// TestLateInitializeGatesExternalPrimariesOnUseExternalPrimary proves
+// ExternalPrimaries is only back-filled from observed when
+// use_external_primary is (or will become) on — back-filling a
+// server-owned ExternalPrimaries value into spec while the flag is off
+// would silently claim a setting the zone does not actually have in
+// effect.
+func TestLateInitializeGatesExternalPrimariesOnUseExternalPrimary(t *testing.T) {
+	desired := zoneAuthFields{UseExternalPrimary: boolPtr(false)}
+	observed := externalPrimariesObserved(boolPtr(false))
+
+	updated, _ := lateInitializeFields(desired, observed)
+	if len(updated.ExternalPrimaries) != 0 {
+		t.Errorf("lateInitializeFields: ExternalPrimaries = %+v, want empty (use_external_primary off, nothing to back-fill)", updated.ExternalPrimaries)
+	}
+}
+
+// TestLateInitializeBackfillsExternalPrimariesWhenUseExternalPrimaryOn
+// is the flag-on counterpart: ExternalPrimaries does back-fill once the
+// flag is on.
+func TestLateInitializeBackfillsExternalPrimariesWhenUseExternalPrimaryOn(t *testing.T) {
+	desired := zoneAuthFields{UseExternalPrimary: boolPtr(true)}
+	observed := externalPrimariesObserved(boolPtr(true))
+
+	updated, changed := lateInitializeFields(desired, observed)
+	if !changed {
+		t.Fatal("lateInitializeFields: want changed=true, got false")
+	}
+	if !externalServerValuesEqual(updated.ExternalPrimaries, observed.ExternalPrimaries) {
+		t.Errorf("lateInitializeFields: ExternalPrimaries = %+v, want %+v", updated.ExternalPrimaries, observed.ExternalPrimaries)
+	}
+}
+
+// TestLateInitializeGatesExternalPrimariesOnEffectivePostBackfillFlag
+// proves the gate does not depend on op ordering: when the user has not
+// set use_external_primary at all (desired nil) but the observed side
+// has it on, the flag itself back-fills to true AND that same effective
+// value gates the ExternalPrimaries back-fill — regardless of which op
+// happens to run first.
+func TestLateInitializeGatesExternalPrimariesOnEffectivePostBackfillFlag(t *testing.T) {
+	desired := zoneAuthFields{} // UseExternalPrimary unset by the user
+	observed := externalPrimariesObserved(boolPtr(true))
+
+	updated, changed := lateInitializeFields(desired, observed)
+	if !changed {
+		t.Fatal("lateInitializeFields: want changed=true, got false")
+	}
+	if updated.UseExternalPrimary == nil || !*updated.UseExternalPrimary {
+		t.Errorf("lateInitializeFields: UseExternalPrimary = %v, want true (back-filled from observed)", updated.UseExternalPrimary)
+	}
+	if !externalServerValuesEqual(updated.ExternalPrimaries, observed.ExternalPrimaries) {
+		t.Errorf("lateInitializeFields: ExternalPrimaries = %+v, want %+v (gated on the effective post-backfill flag value, not the pre-backfill nil)", updated.ExternalPrimaries, observed.ExternalPrimaries)
+	}
+}
+
 // ── isUpToDate: exhaustive field-mismatch coverage ──────────────────────
 //
 // isUpToDate short-circuits on the first mismatched field, so a single
@@ -503,6 +648,7 @@ func TestIsUpToDateFieldMismatches(t *testing.T) {
 		ExternalSecondaries: []externalServerValue{
 			{Address: "10.0.0.2", Name: "ns2.example.com"},
 		},
+		UseExternalPrimary: boolPtr(true),
 	}
 
 	// Baseline sanity check: an identical copy must compare equal.
@@ -571,6 +717,10 @@ func TestIsUpToDateFieldMismatches(t *testing.T) {
 				return f
 			},
 		},
+		"UseExternalPrimary": {
+			reason: "UseExternalPrimary mismatch must be detected on a pure flag transition, independent of the gated ExternalPrimaries comparison.",
+			mutate: func(f zoneAuthFields) zoneAuthFields { f.UseExternalPrimary = boolPtr(false); return f },
+		},
 	}
 
 	for name, tc := range cases {
@@ -592,6 +742,11 @@ func TestLateInitializeCollectionsBackfillsServerLists(t *testing.T) {
 		GridSecondaries:     []memberServerValue{{Name: "member2.example.com"}},
 		ExternalPrimaries:   []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com"}},
 		ExternalSecondaries: []externalServerValue{{Address: "10.0.0.2", Name: "ns2.example.com"}},
+		// UseExternalPrimary must be on (or back-filled to on) for
+		// ExternalPrimaries to back-fill — see
+		// TestLateInitializeGatesExternalPrimariesOnUseExternalPrimary
+		// for the flag-off counterpart.
+		UseExternalPrimary: boolPtr(true),
 	}
 
 	updated, changed := lateInitializeCollections(desired, observed)
