@@ -27,9 +27,17 @@
 # `_ref` immediately; no async polling is needed.
 #
 # Optional but notable fields:
-#   mac:         match key for MAC_ADDRESS/CIRCUIT_ID/REMOTE_ID match_client
-#                modes. Defaults to the zero MAC address when omitted and no
-#                matchClient is set.
+#   mac:         match key used only in MAC_ADDRESS matchClient mode (the
+#                default when matchClient is left unset). WAPI requires it
+#                whenever matchClient is omitted — Create fails with "MAC
+#                address is required when match_client is undefined"
+#                otherwise (live-verified on the Grid). Setting matchClient
+#                explicitly to any other mode (RESERVED, CLIENT_ID,
+#                CIRCUIT_ID, REMOTE_ID) makes mac optional at Create time,
+#                but changing matchClient away from MAC_ADDRESS on an
+#                existing object clears whatever mac value it already
+#                holds — see the crossplane.io/update-test annotation
+#                below for why matchClient itself is not update-tested.
 #   networkView: defaults to "default" when unset.
 #
 # No immutable fields are known for this resource — every Create parameter
@@ -52,19 +60,35 @@ metadata:
     # field-level update testing runs through the post-assert hook wiring
     # and the crossplane.io/update-test annotation below.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address.sh
-    # comment, mac, name, matchClient, disable, and useOptions are the
-    # mutable scalars exercised here. matchClient is set to MAC_ADDRESS,
-    # which is compatible with the mac value already set in spec (no
-    # extra business-rule-required fields needed). ipv4addr/ipv6addr are
-    # skipped: changing either changes the record's UNSTABLE `_ref`
-    # (ADR-IN-0004) and they are mutually exclusive. networkView is only
-    # safely mutable prior to first apply (see the field doc above), so
-    # it is not exercised post-create here. network only applies to
-    # dynamic CIDR allocation, which this example does not use (it sets
-    # a literal ipv4addr). agentCircuitId/agentRemoteId/
-    # dhcpClientIdentifier/clientIdentifierPrependZero are only relevant
-    # to matchClient modes (CIRCUIT_ID/REMOTE_ID/CLIENT_ID) not exercised
-    # by this example's MAC_ADDRESS test. extAttrs and options are
+    # comment, mac, name, disable, and useOptions are the mutable scalars
+    # exercised here. ipv4addr/ipv6addr are skipped: changing either
+    # changes the record's UNSTABLE `_ref` (ADR-IN-0004) and they are
+    # mutually exclusive. networkView is only safely mutable prior to
+    # first apply (see the field doc above), so it is not exercised
+    # post-create here. network only applies to dynamic CIDR allocation,
+    # which this example does not use (it sets a literal ipv4addr).
+    #
+    # matchClient is skipped rather than value-tested: the mac field is
+    # required at Create time whenever match_client is left unset (WAPI
+    # rejects Create otherwise), so match_client always starts at
+    # MAC_ADDRESS and this field's current spec value is always
+    # MAC_ADDRESS too (late-initialized from the Grid's Create response —
+    # see the FixedAddress controller's lateInitializeIdentityMeta).
+    # Live-verified on the Grid (WAPI 2.12): every non-MAC_ADDRESS value
+    # (RESERVED, CLIENT_ID, CIRCUIT_ID) clears the mac field as a side
+    # effect of the mode switch — the field disappears from a GET that
+    # explicitly requests it, the same destructive side effect already
+    # documented for RESERVED. Since mac is independently exercised as
+    # its own update-test target above (in the same cumulative per-field
+    # run), any real matchClient transition would clobber that field's
+    # value out from under it. There is no matchClient value that both
+    # differs from MAC_ADDRESS and leaves mac untouched, so the field is
+    # skipped here rather than either breaking the mac coverage or
+    # accepting a known, unavoidable side effect on every run.
+    # agentCircuitId/agentRemoteId/dhcpClientIdentifier/
+    # clientIdentifierPrependZero are only relevant to the CIRCUIT_ID/
+    # REMOTE_ID/CLIENT_ID matchClient modes, which are never entered by
+    # this example for the same reason. extAttrs and options are
     # map/list fields skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
@@ -74,7 +98,7 @@ metadata:
       - field: name
         value: "updated-fixed-address"
       - field: matchClient
-        value: "MAC_ADDRESS"
+        skip: "mac is required at Create time whenever match_client is unset, so match_client always starts (and stays, absent a real transition) at MAC_ADDRESS; live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
       - field: disable
         value: true
       - field: useOptions
@@ -88,13 +112,13 @@ metadata:
       - field: network
         skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv4addr"
       - field: agentCircuitId
-        skip: "only relevant when matchClient=CIRCUIT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=CIRCUIT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: agentRemoteId
-        skip: "only relevant when matchClient=REMOTE_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=REMOTE_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: dhcpClientIdentifier
-        skip: "only relevant when matchClient=CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=CLIENT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: clientIdentifierPrependZero
-        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: options
