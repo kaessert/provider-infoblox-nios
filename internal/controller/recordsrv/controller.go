@@ -13,7 +13,6 @@ package recordsrv
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -216,31 +215,10 @@ func extAttrsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// uint32OrZero converts an optional *int64 field (priority, weight, port
-// — all validated 0-65535 or 0-MaxUint32 by CRD/CEL rules) into the
-// uint32 the SDK's CreateSRVRecord/UpdateSRVRecord methods expect. Values
-// outside the valid uint32 range (or negative) are clamped to 0 rather
-// than silently wrapping.
-func uint32OrZero(v *int64) uint32 {
-	if v == nil || *v < 0 || *v > math.MaxUint32 {
-		return 0
-	}
-	return uint32(*v)
-}
-
-// uint32PtrToInt64Ptr converts an observed *uint32 SDK field into the
-// *int64 CRD representation, returning nil when the SDK did not populate
-// the field.
-func uint32PtrToInt64Ptr(v *uint32) *int64 {
-	if v == nil {
-		return nil
-	}
-	i := int64(*v)
-	return &i
-}
-
-// uint32PtrOrZero converts an optional *uint32 (as returned by the SDK)
-// into a plain uint32 for comparison against uint32OrZero.
+// uint32PtrOrZero converts an optional *uint32 (either the desired spec
+// value or the observed SDK value) into a plain uint32 for comparison
+// and for passing straight through to the SDK's
+// CreateSRVRecord/UpdateSRVRecord methods.
 func uint32PtrOrZero(v *uint32) uint32 {
 	if v == nil {
 		return 0
@@ -308,20 +286,20 @@ func isNotFound(err error) bool {
 // RecordSRV. View is immutable (WAPI ties the object's _ref to
 // view+name+zone; the UpdateSRVRecord SDK method has no view parameter)
 // and is intentionally excluded from this comparison.
-func isUpToDate(name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordSRV) bool {
+func isUpToDate(name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordSRV) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
 	}
 	if strOrEmpty(target) != strOrEmpty(rec.Target) {
 		return false
 	}
-	if uint32OrZero(priority) != uint32PtrOrZero(rec.Priority) {
+	if uint32PtrOrZero(priority) != uint32PtrOrZero(rec.Priority) {
 		return false
 	}
-	if uint32OrZero(weight) != uint32PtrOrZero(rec.Weight) {
+	if uint32PtrOrZero(weight) != uint32PtrOrZero(rec.Weight) {
 		return false
 	}
-	if uint32OrZero(port) != uint32PtrOrZero(rec.Port) {
+	if uint32PtrOrZero(port) != uint32PtrOrZero(rec.Port) {
 		return false
 	}
 	if strOrEmpty(comment) != strOrEmpty(rec.Comment) {
@@ -392,9 +370,9 @@ type observedSRVRecord struct {
 	ID       string
 	Name     *string
 	Target   *string
-	Priority *int64
-	Weight   *int64
-	Port     *int64
+	Priority *uint32
+	Weight   *uint32
+	Port     *uint32
 	Comment  *string
 	TTL      *uint32
 	UseTTL   *bool
@@ -418,9 +396,9 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 		ID:       externalID,
 		Name:     rec.Name,
 		Target:   rec.Target,
-		Priority: uint32PtrToInt64Ptr(rec.Priority),
-		Weight:   uint32PtrToInt64Ptr(rec.Weight),
-		Port:     uint32PtrToInt64Ptr(rec.Port),
+		Priority: rec.Priority,
+		Weight:   rec.Weight,
+		Port:     rec.Port,
 		ExtAttrs: extAttrsFromEA(rec.Ea),
 	}
 	if rec.Comment != nil && *rec.Comment != "" {
@@ -453,13 +431,13 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
 // createSRVRecord issues the WAPI create call.
-func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
 	return objMgr.CreateSRVRecord(
 		view,
 		strOrEmpty(name),
-		uint32OrZero(priority),
-		uint32OrZero(weight),
-		uint32OrZero(port),
+		uint32PtrOrZero(priority),
+		uint32PtrOrZero(weight),
+		uint32PtrOrZero(port),
 		strOrEmpty(target),
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
@@ -474,13 +452,13 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 // every PUT, and any of them changing causes NIOS to mint a new _ref, the
 // caller MUST re-read Ref from the response and refresh the external-name
 // annotation if it changed.
-func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *int64, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
 	return objMgr.UpdateSRVRecord(
 		ref,
 		strOrEmpty(name),
-		uint32OrZero(priority),
-		uint32OrZero(weight),
-		uint32OrZero(port),
+		uint32PtrOrZero(priority),
+		uint32PtrOrZero(weight),
+		uint32PtrOrZero(port),
 		strOrEmpty(target),
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
