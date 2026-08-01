@@ -1,9 +1,9 @@
 // Package rangetemplate unit tests for the RangeTemplate MR controllers.
 // Tests use inline httptest.NewServer mocks that emulate the WAPI
 // rangetemplate endpoints, PascalCase test names (no underscores), and
-// white-box access to the unexported connectors/clients so both scopes can
-// be exercised without going through the full Connect() credential bridge
-// on every test.
+// white-box access to the unexported connectors/clients so both scopes
+// can be exercised without going through the full Connect() credential
+// bridge on every test.
 package rangetemplate
 
 import (
@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
@@ -34,41 +33,14 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
-// recordingKubeClient is a minimal client.Client stub used to verify that
-// Update() persists a rotated external-name annotation via a real kube
-// client call, not merely an in-memory meta.SetExternalName mutation that
-// crossplane-runtime's managed reconciler would silently discard after a
-// successful external Update(). Only Update is exercised by these tests;
-// every other client.Client method is unused here and left to the
-// embedded nil interface (calling one would panic, which is the correct
-// failure mode for an accidental, untested dependency).
-type recordingKubeClient struct {
-	client.Client
-	updated client.Object
-}
-
-func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
-	k.updated = obj
-	return nil
-}
-
-// Patch mirrors Update. The fix for this ticket persists the refreshed
-// external-name annotation via a conflict-safe JSON merge Patch instead
-// of a whole-object Update, so this stub must record Patch calls the
-// same way for the existing assertions on k.updated to keep working.
-func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
-	k.updated = obj
-	return nil
-}
-
-// ── generic helpers ─────────────────────────────────────────────────────────
+const (
+	testUIDCluster    = "test-uid-cluster"
+	testUIDNamespaced = "test-uid-namespaced"
+)
 
 func stringPtr(s string) *string { return &s }
-func uint32Ptr(v uint32) *uint32 { return &v }
-func boolPtr(b bool) *bool       { return &b }
+func uint32Ptr(u uint32) *uint32 { return &u }
 
-// newTestScheme returns a scheme with corev1 (for Secrets) and the
-// provider's API types registered.
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -86,8 +58,6 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// credentialsSecret returns a Secret carrying the host/username/password
-// keys the credential bridge expects.
 func credentialsSecret(ns, name, host, username, password string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -99,20 +69,15 @@ func credentialsSecret(ns, name, host, username, password string) *corev1.Secret
 	}
 }
 
-// newClusterRangeTemplate builds a minimal cluster-scoped RangeTemplate
-// CR. When externalName is empty, the external-name annotation is left
-// unset. When it equals crName it simulates the framework's
-// NameAsExternalName initializer (the pre-create state); any other value
-// simulates a Create()-assigned server ref.
 func newClusterRangeTemplate(crName, externalName string) *clusterv1alpha1.RangeTemplate {
 	cr := &clusterv1alpha1.RangeTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: testUIDCluster},
 		Spec: clusterv1alpha1.RangeTemplateSpec{
 			ResourceSpec: xpv1.ResourceSpec{
 				ProviderConfigReference: &xpv1.Reference{Name: "default"},
 			},
 			ForProvider: clusterv1alpha1.RangeTemplateParameters{
-				Name:              stringPtr("template1"),
+				Name:              stringPtr("test-template"),
 				NumberOfAddresses: uint32Ptr(10),
 				Offset:            uint32Ptr(5),
 			},
@@ -124,17 +89,15 @@ func newClusterRangeTemplate(crName, externalName string) *clusterv1alpha1.Range
 	return cr
 }
 
-// newNamespacedRangeTemplate is the namespaced variant of
-// newClusterRangeTemplate.
 func newNamespacedRangeTemplate(ns, crName, externalName, pcKind string) *namespacedv1alpha1.RangeTemplate {
 	cr := &namespacedv1alpha1.RangeTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: testUIDNamespaced},
 		Spec: namespacedv1alpha1.RangeTemplateSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
 				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
 			},
 			ForProvider: namespacedv1alpha1.RangeTemplateParameters{
-				Name:              stringPtr("template1"),
+				Name:              stringPtr("test-template"),
 				NumberOfAddresses: uint32Ptr(10),
 				Offset:            uint32Ptr(5),
 			},
@@ -147,62 +110,46 @@ func newNamespacedRangeTemplate(ns, crName, externalName, pcKind string) *namesp
 }
 
 // ── mock WAPI server ─────────────────────────────────────────────────────
-//
-// mockWapiServer emulates the subset of NIOS WAPI rangetemplate endpoints
-// exercised by the RangeTemplate controller (POST create, GET/PUT/DELETE
-// by _ref). Records are marshaled/unmarshaled using the real
-// ibclient.Rangetemplate type so the wire format (including the Member
-// nested-object envelope and the EA {"value": ...} envelope) exactly
-// matches what the SDK sends and expects.
 
 type mockWapiServer struct {
-	mu        sync.Mutex
-	templates map[string]*ibclient.Rangetemplate
-	nextRef   int
+	mu          sync.Mutex
+	templates   map[string]*ibclient.Rangetemplate
+	nextRef     int
+	searchCalls int
 
-	// lastUpdateBody captures the raw JSON body of the most recent PUT
-	// request, for tests that assert request-body shape.
-	lastUpdateBody []byte
+	eaDefExists bool
 }
 
 func newMockWapiServer() *mockWapiServer {
-	return &mockWapiServer{templates: map[string]*ibclient.Rangetemplate{}}
+	return &mockWapiServer{
+		templates:   map[string]*ibclient.Rangetemplate{},
+		eaDefExists: true,
+	}
 }
 
-func (m *mockWapiServer) seed(rt *ibclient.Rangetemplate) string {
+func (m *mockWapiServer) seed(rec *ibclient.Rangetemplate) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextRef++
-	if rt.Ref == "" {
-		rt.Ref = m.newRefLocked(rt)
+	if rec.Ref == "" {
+		name := ""
+		if rec.Name != nil {
+			name = *rec.Name
+		}
+		rec.Ref = "rangetemplate/test" + itoa(m.nextRef) + ":" + name
 	}
-	m.templates[rt.Ref] = rt
-	return rt.Ref
-}
-
-func (m *mockWapiServer) newRefLocked(rt *ibclient.Rangetemplate) string {
-	name := ""
-	if rt.Name != nil {
-		name = *rt.Name
-	}
-	return "rangetemplate/test" + itoa(m.nextRef) + ":" + name
+	m.templates[rec.Ref] = rec
+	return rec.Ref
 }
 
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
 	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
 	var b []byte
 	for i > 0 {
 		b = append([]byte{byte('0' + i%10)}, b...)
 		i /= 10
-	}
-	if neg {
-		b = append([]byte{'-'}, b...)
 	}
 	return string(b)
 }
@@ -218,59 +165,89 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_, _ = w.Write(body)
 }
 
-// handler returns an http.Handler implementing the rangetemplate WAPI
-// surface.
 func (m *mockWapiServer) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/rangetemplate", func(w http.ResponseWriter, r *http.Request) {
-		var rt ibclient.Rangetemplate
-		if err := json.NewDecoder(r.Body).Decode(&rt); err != nil {
+		var rec ibclient.Rangetemplate
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		ref := m.seed(&rt)
+		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
 
-	// Search endpoint (GetAllRangeTemplate): a GET with no _ref path
-	// segment, filtered by the name query param. Registered as an exact
-	// literal path so Go's ServeMux prefers it over the {ref...}
-	// wildcard below for requests to precisely "rangetemplate" (real
-	// _refs always carry additional path segments).
-	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/rangetemplate", func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name")
-
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
-		// Initialized (not nil) so an empty result set marshals to a
-		// JSON "[]" body, matching real WAPI search semantics — the SDK
-		// connector treats literal "[]" as its NotFoundError trigger, and
-		// a nil slice marshaling to "null" would mask that behavior in
-		// tests (see the package-level defect this mock now reproduces).
-		matches := []ibclient.Rangetemplate{}
-		for _, rt := range m.templates {
-			if name != "" && (rt.Name == nil || *rt.Name != name) {
-				continue
-			}
-			matches = append(matches, *rt)
+		exists := m.eaDefExists
+		m.mu.Unlock()
+		if !exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+			return
 		}
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefExists = true
+		m.mu.Unlock()
+		writeJSON(w, http.StatusOK, "extensibleattributedef/test:"+url.QueryEscape(identity.EAKey))
+	})
+
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/rangetemplate", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.searchCalls++
 		m.mu.Unlock()
 
-		// Always respond 200 — WAPI search semantics report "not found"
-		// via an empty array, never an HTTP error status.
+		q := r.URL.Query()
+		name := q.Get("name")
+		eaFilters := map[string]string{}
+		for k, vals := range q {
+			if strings.HasPrefix(k, "*") && len(vals) > 0 {
+				eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
+			}
+		}
+
+		m.mu.Lock()
+		var matches []ibclient.Rangetemplate
+		for _, rec := range m.templates {
+			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			mismatch := false
+			for k, v := range eaFilters {
+				got, ok := rec.Ea[k]
+				if !ok {
+					mismatch = true
+					break
+				}
+				if s, ok := got.(string); !ok || s != v {
+					mismatch = true
+					break
+				}
+			}
+			if mismatch {
+				continue
+			}
+			matches = append(matches, *rec)
+		}
+		m.mu.Unlock()
 		writeJSON(w, http.StatusOK, matches)
 	})
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
-		rt, ok := m.templates[ref]
+		rec, ok := m.templates[ref]
 		m.mu.Unlock()
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		writeJSON(w, http.StatusOK, rt)
+		writeJSON(w, http.StatusOK, rec)
 	})
 
 	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -282,20 +259,12 @@ func (m *mockWapiServer) handler() http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-
-		body, err := readAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
 		var incoming ibclient.Rangetemplate
-		if err := json.Unmarshal(body, &incoming); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-
 		m.mu.Lock()
-		m.lastUpdateBody = body
 		existing.Name = incoming.Name
 		existing.NumberOfAddresses = incoming.NumberOfAddresses
 		existing.Offset = incoming.Offset
@@ -303,12 +272,7 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.Ea = incoming.Ea
 		existing.Options = incoming.Options
 		existing.UseOptions = incoming.UseOptions
-		existing.ServerAssociationType = incoming.ServerAssociationType
-		existing.FailoverAssociation = incoming.FailoverAssociation
-		existing.Member = incoming.Member
-		existing.CloudApiCompatible = incoming.CloudApiCompatible
 		m.mu.Unlock()
-
 		writeJSON(w, http.StatusOK, ref)
 	})
 
@@ -328,51 +292,7 @@ func (m *mockWapiServer) handler() http.Handler {
 	return mux
 }
 
-func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
-	buf := make([]byte, 0, 512)
-	tmp := make([]byte, 512)
-	for {
-		n, err := rc.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			if err.Error() == "EOF" {
-				return buf, nil
-			}
-			return buf, err
-		}
-	}
-}
-
-// fixedStatusHandler always responds with the given HTTP status — used to
-// exercise the generic (non-404) error classification paths.
-func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"Error":"boom"}`))
-	})
-}
-
-// newTestObjectManager builds an ibclient.IBObjectManager pointed at the
-// given httptest.Server via plain HTTP (no TLS needed — the WapiRequestBuilder
-// only switches to HTTPS when hostCfg.Scheme != "http").
-func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectManager {
-	t.Helper()
-	return newTestManagerAndConnector(t, srv).Manager
-}
-
-// newTestConnector returns the raw ibclient.IBConnector pointed at the
-// given httptest.Server, for tests that construct a clusterExternal or
-// namespacedExternal directly and need its conn field populated so
-// rangeTemplateExistsByNaturalKey can search.
-func newTestConnector(t *testing.T, srv *httptest.Server) ibclient.IBConnector {
-	t.Helper()
-	return newTestManagerAndConnector(t, srv).Connector
-}
-
-// newTestManagerAndConnector is the shared constructor behind
-// newTestObjectManager and newTestConnector — both handles come from the
-// same underlying Connector, exactly like production's newObjectManager.
-func newTestManagerAndConnector(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
+func newTestClient(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
 	if err != nil {
@@ -384,48 +304,32 @@ func newTestManagerAndConnector(t *testing.T, srv *httptest.Server) identity.Man
 		Password: "test-pass",
 	}, true, "http", u.Port())
 	if err != nil {
-		t.Fatalf("cannot build test object manager: %v", err)
+		t.Fatalf("cannot build test client: %v", err)
 	}
 	return mc
 }
 
-// ── cluster: Observe ────────────────────────────────────────────────────
+// ── Observe ──────────────────────────────────────────────────────────────
 
-func TestClusterObserveSuccess(t *testing.T) {
+func TestClusterObserveResolvedUpToDate(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:                  stringPtr("template1"),
-		NumberOfAddresses:     uint32Ptr(10),
-		Offset:                uint32Ptr(5),
-		Comment:               stringPtr("hello"),
-		Ea:                    ibclient.EA{"env": "prod"},
-		ServerAssociationType: "MEMBER",
-	})
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rec)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
-	cr.Spec.ForProvider.ServerAssociationType = "MEMBER"
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true, got false")
-	}
-	if !got.ResourceUpToDate {
-		t.Error("Observe: want ResourceUpToDate=true, got false")
-	}
-	if cr.Status.AtProvider.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
-	}
-	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
-		t.Errorf("condition Ready = %v, want True", cond.Status)
+	if !obs.ResourceExists || !obs.ResourceUpToDate {
+		t.Fatalf("expected exists+up-to-date, got %+v", obs)
 	}
 }
 
@@ -433,1298 +337,383 @@ func TestClusterObserveNotFound(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/does-not-exist:template1")
+	cr := newClusterRangeTemplate("my-tpl", "rangetemplate/doesnotexist:my-tpl")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false for 404, got true")
+	if obs.ResourceExists {
+		t.Fatalf("expected ResourceExists=false, got %+v", obs)
 	}
 }
 
-// TestObservePreCreateState verifies that Observe short-circuits (no HTTP
-// call) when the external-name still equals the CR's Kubernetes name — the
-// pre-create state for a server-assigned external-name strategy.
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "") // external-name unset
-	meta.SetExternalName(cr, cr.GetName())                // simulate NameAsExternalName initializer
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
-	}
-}
-
-func TestClusterObserveServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/test1:template1")
-
-	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 500, got nil")
-	}
-}
-
-func TestClusterObserveForbidden(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/test1:template1")
-
-	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 403, got nil")
-	}
-}
-
-// TestClusterObserveMinimalResponse pins nil-safety in Observe: a WAPI
-// response carrying only the object's _ref (the resource identifier) and
-// every other field at its Go zero value (nil pointers, an empty
-// options/member) must not panic and must produce a valid observation
-// with nil-safe AtProvider fields.
-func TestClusterObserveMinimalResponse(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed(&ibclient.Rangetemplate{})
+	cr := newClusterRangeTemplate("my-tpl", "my-tpl")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
-
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true for minimal response, got false")
-	}
-
-	ap := cr.Status.AtProvider
-	if ap.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
-	}
-	if ap.Name != nil {
-		t.Errorf("AtProvider.Name = %v, want nil", ap.Name)
-	}
-	if ap.Comment != nil {
-		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
-	}
-	if ap.ExtAttrs != nil {
-		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
-	}
-	if ap.Options != nil {
-		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
-	}
-	if ap.Member != nil {
-		t.Errorf("AtProvider.Member = %v, want nil", ap.Member)
-	}
-	if ap.ServerAssociationType != nil {
-		t.Errorf("AtProvider.ServerAssociationType = %v, want nil", ap.ServerAssociationType)
-	}
-}
-
-// ── cluster: Create ─────────────────────────────────────────────────────
-
-func TestClusterCreateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "") // no external-name yet
-
-	_, err := e.Create(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
-	}
-
-	got := meta.GetExternalName(cr)
-	if got == "" || got == cr.GetName() {
-		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
-	}
-}
-
-// ── cluster: Update ─────────────────────────────────────────────────────
-
-func TestClusterUpdateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Comment:           stringPtr("old comment"),
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("new comment")
-
-	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
+	if obs.ResourceExists {
+		t.Fatalf("expected ResourceExists=false, got %+v", obs)
 	}
 
 	m.mu.Lock()
-	stored := m.templates[ref]
+	searchCalls := m.searchCalls
 	m.mu.Unlock()
-	if stored.Comment == nil || *stored.Comment != "new comment" {
-		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
+	if searchCalls == 0 {
+		t.Fatal("expected the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
-// TestClusterUpdateSendsAllMutableFields verifies the PUT (partial/merge)
-// request body carries the required fields (name, numberOfAddresses,
-// offset) even when only an optional field changed — this provider's
-// UpdateRangeTemplate wrapper always re-sends the full set of mutable
-// fields (no immutable-field table for RangeTemplate).
-func TestClusterUpdateSendsAllMutableFields(t *testing.T) {
+func TestClusterObserveAdoptsUnstampedObjectAndForcesUpdate(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-	})
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	ref := m.seed(rec)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceExists {
+		t.Fatalf("expected exists, got %+v", obs)
+	}
+	if obs.ResourceUpToDate {
+		t.Fatal("adopted object must never report up to date")
+	}
+}
+
+func TestClusterObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec.Ea = identity.Stamp(nil, testUIDCluster)
+	realRef := m.seed(rec)
+
+	cr := newClusterRangeTemplate("my-tpl", "rangetemplate/stale:my-tpl")
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceExists {
+		t.Fatalf("expected exists, got %+v", obs)
+	}
+	if meta.GetExternalName(cr) != realRef {
+		t.Fatalf("expected external-name refreshed to %q, got %q", realRef, meta.GetExternalName(cr))
+	}
+}
+
+func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template")}
+	rec.Ea = identity.Stamp(nil, "someone-elses-uid")
+	ref := m.seed(rec)
+
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Observe(context.Background(), cr); err == nil {
+		t.Fatal("expected an error for foreign identity")
+	}
+}
+
+// ── Create ───────────────────────────────────────────────────────────────
+
+func TestClusterCreateStampsIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	cr := newClusterRangeTemplate("my-tpl", "my-tpl")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.GetExternalName(cr) == "my-tpl" {
+		t.Fatal("expected external-name to be set to the server _ref")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, rec := range m.templates {
+		got, ok := rec.Ea[identity.EAKey]
+		if !ok || got != testUIDCluster {
+			t.Fatalf("expected identity stamp %q, got %v", testUIDCluster, rec.Ea)
+		}
+	}
+}
+
+func TestCreateRangeTemplateRefusesEmptyUID(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	if _, err := createRangeTemplate(mc.Manager, stringPtr("x"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, nil, nil, ""); err == nil {
+		t.Fatal("expected an error for empty uid")
+	}
+}
+
+// ── Update ───────────────────────────────────────────────────────────────
+
+func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rec)
+
+	cr := newClusterRangeTemplate("my-tpl", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("updated")
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	m.mu.Lock()
-	body := m.lastUpdateBody
-	m.mu.Unlock()
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		t.Fatalf("cannot decode captured PUT body: %v", err)
-	}
-	if raw["name"] != "template1" {
-		t.Errorf("Update: request body name = %v, want %q", raw["name"], "template1")
-	}
-	if raw["number_of_addresses"] != float64(10) {
-		t.Errorf("Update: request body number_of_addresses = %v, want 10", raw["number_of_addresses"])
+	defer m.mu.Unlock()
+	updated := m.templates[ref]
+	if updated.Ea[identity.EAKey] != testUIDCluster {
+		t.Fatalf("expected identity stamp to survive update, got %v", updated.Ea)
 	}
 }
 
-// ── cluster: Delete ─────────────────────────────────────────────────────
+// ── Delete ───────────────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template")}
+	rec.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rec)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.templates[ref]
-	m.mu.Unlock()
-	if stillExists {
-		t.Error("Delete: record still present after Delete")
-	}
-}
-
-func TestClusterDeleteNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/does-not-exist:template1")
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// core defect fix: a 404 against the stored _ref must not be treated as
-// "already deleted" when a natural-key search finds the same identity
-// still live under a different _ref. Deleting that range template would
-// be unverifiable ownership, so Delete() must refuse and leave the
-// record in place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/stale-ref:template1")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
-	}
-
 	m.mu.Lock()
-	_, stillExists := m.templates[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	defer m.mu.Unlock()
+	if _, ok := m.templates[ref]; ok {
+		t.Fatal("expected the object to be deleted")
 	}
 }
 
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
-func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+func TestClusterDeleteNotFoundIsSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/stale-ref:template1")
+	cr := newClusterRangeTemplate("my-tpl", "rangetemplate/gone:my-tpl")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("expected nil error for already-gone object, got %v", err)
 	}
 }
 
-// TestClusterDeleteServerError verifies that a 5xx response from the WAPI
-// delete endpoint is propagated (wrapped, not swallowed) rather than being
-// treated as a not-found/already-deleted success.
-func TestClusterDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/test1:template1")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected error for 500, got nil")
-	}
-	if got := err.Error(); !strings.Contains(got, errDeleteRangeTemplate) {
-		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteRangeTemplate)
-	}
-}
-
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+func TestClusterDeleteRefusesUnverifiedOwnership(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	liveRef := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template")}
+	ref := m.seed(rec)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/stale-ref:template1")
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	if _, err := e.Delete(context.Background(), cr); err == nil {
+		t.Fatal("expected delete to be refused for an unstamped object")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
-	}
-
 	m.mu.Lock()
-	_, stillExists := m.templates[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	defer m.mu.Unlock()
+	if _, ok := m.templates[ref]; !ok {
+		t.Fatal("object must not be deleted when ownership cannot be verified")
 	}
 }
 
-// TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch verifies the
-// genuine-absence direction of the same defect: a 404 against the stored
-// _ref, and a natural-key search over the CR's own name that genuinely
-// finds nothing, must report ResourceExists:false with no error — not
-// the "failed getting Range Template Record: not found" error the SDK's
-// ObjectManager.GetAllRangeTemplate produced before this fix. Without
-// this, Observe fails, the delete finalizer is never cleared, and the MR
-// is stuck forever even though the backend object is already gone.
-func TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", "rangetemplate/stale-ref:template1")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: want nil error when the natural-key search also finds nothing, got: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false when the natural-key search finds nothing, got true")
-	}
-}
-
-// ── cluster: Disconnect ──────────────────────────────────────────────────
-
-func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
-	if err := e.Disconnect(context.Background()); err != nil {
-		t.Errorf("Disconnect: unexpected error: %v", err)
-	}
-}
-
-// ── cluster: Connect ─────────────────────────────────────────────────────
-
-func TestClusterConnectSuccess(t *testing.T) {
-	const (
-		ns     = "crossplane-system"
-		secret = "infobloxnios-api-key"
-	)
-
-	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&clusterpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
-				Spec: clusterpcv1alpha1.ProviderConfigSpec{
-					Credentials: clusterpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
-				},
-			},
-		).Build()
-
-	conn := &clusterConnector{
-		kube:  kube,
-		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newClusterRangeTemplate("my-rangetemplate", "")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
-	}
-}
+// ── Connect ──────────────────────────────────────────────────────────────
 
 func TestClusterConnectProviderConfigNotFound(t *testing.T) {
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := &clusterConnector{kube: kube, usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{})}
+	cr := newClusterRangeTemplate("my-tpl", "")
 
-	conn := &clusterConnector{
-		kube:  kube,
-		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newClusterRangeTemplate("my-rangetemplate", "")
-	if _, err := conn.Connect(context.Background(), cr); err == nil {
-		t.Fatal("Connect: expected error for missing ProviderConfig, got nil")
+	if _, err := c.Connect(context.Background(), cr); err == nil {
+		t.Fatal("expected an error when ProviderConfig is missing")
 	}
 }
 
-// ── namespaced: Observe ──────────────────────────────────────────────────
-
-func TestNamespacedObserveSuccess(t *testing.T) {
+func TestClusterConnectSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", ref, "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true, got false")
-	}
-	if !got.ResourceUpToDate {
-		t.Error("Observe: want ResourceUpToDate=true, got false")
-	}
-}
-
-func TestNamespacedObserveNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/does-not-exist:template1", "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false for 404, got true")
-	}
-}
-
-func TestNamespacedObservePreCreateState(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "", "ProviderConfig")
-	meta.SetExternalName(cr, cr.GetName())
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
-	}
-}
-
-func TestNamespacedObserveServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/test1:template1", "ProviderConfig")
-
-	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 500, got nil")
-	}
-}
-
-func TestNamespacedObserveForbidden(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/test1:template1", "ProviderConfig")
-
-	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 403, got nil")
-	}
-}
-
-// ── namespaced: Create ────────────────────────────────────────────────────
-
-func TestNamespacedCreateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "", "ProviderConfig")
-
-	_, err := e.Create(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
-	}
-
-	got := meta.GetExternalName(cr)
-	if got == "" || got == cr.GetName() {
-		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
-	}
-}
-
-// ── namespaced: Update ─────────────────────────────────────────────────────
-
-func TestNamespacedUpdateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Comment:           stringPtr("old comment"),
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", ref, "ProviderConfig")
-	cr.Spec.ForProvider.Comment = stringPtr("new comment")
-
-	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	stored := m.templates[ref]
-	m.mu.Unlock()
-	if stored.Comment == nil || *stored.Comment != "new comment" {
-		t.Errorf("Update: stored comment = %v, want %q", stored.Comment, "new comment")
-	}
-}
-
-// ── namespaced: Delete ──────────────────────────────────────────────────
-
-func TestNamespacedDeleteSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", ref, "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.templates[ref]
-	m.mu.Unlock()
-	if stillExists {
-		t.Error("Delete: record still present after Delete")
-	}
-}
-
-func TestNamespacedDeleteNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/does-not-exist:template1", "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
-	}
-}
-
-func TestNamespacedDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/test1:template1", "ProviderConfig")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected error for 500, got nil")
-	}
-}
-
-// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/stale-ref:template1", "ProviderConfig")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.templates[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
-	}
-}
-
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed(&ibclient.Rangetemplate{Name: stringPtr("template1")})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/stale-ref:template1", "ProviderConfig")
-
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.templates[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
-	}
-}
-
-// TestNamespacedObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch.
-func TestNamespacedObserveSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/stale-ref:template1", "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: want nil error when the natural-key search also finds nothing, got: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false when the natural-key search finds nothing, got true")
-	}
-}
-
-// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
-func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "rangetemplate/stale-ref:template1", "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
-	}
-}
-
-// ── namespaced: Connect ───────────────────────────────────────────────────
-
-func TestNamespacedConnectWithProviderConfig(t *testing.T) {
-	const (
-		ns     = "default"
-		secret = "infobloxnios-api-key"
-	)
+	u, _ := url.Parse(srv.URL)
 
 	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&namespacedpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
-				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
-					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
+	pc := &clusterpcv1alpha1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: clusterpcv1alpha1.ProviderConfigSpec{
+			Credentials: clusterpcv1alpha1.ProviderCredentials{
+				Source: xpv1.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
 				},
 			},
-		).Build()
-
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
+		},
 	}
+	secret := credentialsSecret("ns", "creds", u.Hostname(), "user", "pass")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pc, secret).Build()
+	c := &clusterConnector{kube: kube, usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{})}
+	cr := newClusterRangeTemplate("my-tpl", "")
 
-	cr := newNamespacedRangeTemplate(ns, "my-rangetemplate", "", "ProviderConfig")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
-	}
-}
-
-func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
-	const secret = "infobloxnios-api-key"
-	ns := "crossplane-system"
-
-	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&namespacedpcv1alpha1.ClusterProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
-				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
-					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
-				},
-			},
-		).Build()
-
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", "", "ClusterProviderConfig")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+	if _, err := c.Connect(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := &namespacedConnector{kube: kube, usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{})}
+	cr := newNamespacedRangeTemplate("ns", "my-tpl", "", "SomethingElse")
 
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newNamespacedRangeTemplate("default", "my-rangetemplate", "", "SomeOtherKind")
-	if _, err := conn.Connect(context.Background(), cr); err == nil {
-		t.Fatal("Connect: expected error for unsupported provider config kind, got nil")
+	if _, err := c.Connect(context.Background(), cr); err == nil {
+		t.Fatal("expected an error for an unsupported providerConfigRef Kind")
 	}
 }
 
-func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
-	if err := e.Disconnect(context.Background()); err != nil {
-		t.Errorf("Disconnect: unexpected error: %v", err)
+func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+
+	scheme := newTestScheme(t)
+	cpc := &namespacedpcv1alpha1.ClusterProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+			Credentials: namespacedpcv1alpha1.ProviderCredentials{
+				Source: xpv1.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
+				},
+			},
+		},
+	}
+	secret := credentialsSecret("ns", "creds", u.Hostname(), "user", "pass")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpc, secret).Build()
+	c := &namespacedConnector{kube: kube, usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{})}
+	cr := newNamespacedRangeTemplate("ns", "my-tpl", "", "ClusterProviderConfig")
+
+	if _, err := c.Connect(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-// ── shared helper unit tests ─────────────────────────────────────────────
+// ── newEmpty correctness (dual-object-type gate — single-type resource) ──
 
-func TestExtAttrsRoundTrip(t *testing.T) {
-	in := map[string]string{"env": "prod", "owner": "platform-team"}
-	ea := buildEA(in)
-	out := extAttrsFromEA(ea)
-	if !extAttrsEqual(in, out) {
-		t.Errorf("ExtAttrs round-trip: got %v, want %v", out, in)
+func TestNewEmptyRangeTemplateCorrectness(t *testing.T) {
+	rec := ibclient.NewEmptyRangeTemplate()
+	if rec.ObjectType() != "rangetemplate" {
+		t.Fatalf("expected ObjectType rangetemplate, got %q", rec.ObjectType())
+	}
+	found := false
+	for _, f := range rec.ReturnFields() {
+		if f == "extattrs" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected ReturnFields to include extattrs, got %v", rec.ReturnFields())
 	}
 }
 
-func TestExtAttrsEqualTreatsNilAndEmptyAsEqual(t *testing.T) {
-	if !extAttrsEqual(nil, map[string]string{}) {
-		t.Error("extAttrsEqual(nil, {}) = false, want true")
-	}
-}
+// ── Identity EA must never late-init into spec.forProvider ───────────────
 
-func TestIsNotFoundClassifiesTypedError(t *testing.T) {
-	err := ibclient.NewNotFoundError("boom")
-	if !isNotFound(err) {
-		t.Error("isNotFound(*ibclient.NotFoundError) = false, want true")
-	}
-}
+func TestLateInitializeDoesNotLeakIdentityKeyIntoExtAttrs(t *testing.T) {
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template")}
+	rec.Ea = identity.Stamp(ibclient.EA{"Site": "dc1"}, "some-uid")
 
-func TestIsNotFoundClassifiesGenericStatusError(t *testing.T) {
-	err := errGenericStatus(404)
-	if !isNotFound(err) {
-		t.Error("isNotFound(generic 404 error) = false, want true")
-	}
-	if isNotFound(errGenericStatus(500)) {
-		t.Error("isNotFound(generic 500 error) = true, want false")
-	}
-}
-
-func errGenericStatus(code int) error {
-	return &genericStatusError{code: code}
-}
-
-type genericStatusError struct{ code int }
-
-func (e *genericStatusError) Error() string {
-	return "WAPI request error: " + itoa(e.code) + "('boom')\nContents:\n{}\n"
-}
-
-// ── DHCP option/member conversion helpers ────────────────────────────────
-
-func TestDhcpOptionsRoundTrip(t *testing.T) {
-	in := []templateOption{
-		{Name: stringPtr("routers"), Num: uint32Ptr(3), VendorClass: stringPtr("DHCP"), Value: stringPtr("10.0.0.1"), UseOption: boolPtr(true)},
-	}
-	got := dhcpOptionsToCommon(buildDhcpOptions(in))
-	if !optionsEqual(in, got) {
-		t.Errorf("Dhcpoption round-trip: got %+v, want %+v", got, in)
-	}
-}
-
-func TestDhcpMemberRoundTrip(t *testing.T) {
-	in := &templateMember{Ipv4Addr: stringPtr("10.0.0.5"), Name: stringPtr("member1.example.com")}
-	got := dhcpMemberToCommon(buildDhcpMember(in))
-	if !memberEqual(in, got) {
-		t.Errorf("Dhcpmember round-trip: got %+v, want %+v", got, in)
-	}
-}
-
-func TestMemberEqualTreatsNilAsZeroValue(t *testing.T) {
-	if !memberEqual(nil, &templateMember{}) {
-		t.Error("memberEqual(nil, &templateMember{}) = false, want true")
-	}
-}
-
-// ── lateInitialize ────────────────────────────────────────────────────────
-
-func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
-	var comment *string
-	extAttrs := map[string]string(nil)
-	var options []templateOption
-	var useOptions *bool
-	serverAssociationType := ""
-	var failoverAssociation *string
-	var member *templateMember
-	var cloudApiCompatible *bool
-
-	rec := &ibclient.Rangetemplate{
-		Comment:               stringPtr("server default"),
-		Ea:                    ibclient.EA{"env": "prod"},
-		Options:               []*ibclient.Dhcpoption{{Name: "routers", Num: 3}},
-		UseOptions:            boolPtr(true),
-		ServerAssociationType: "MEMBER",
-		FailoverAssociation:   stringPtr("fa1"),
-		Member:                &ibclient.Dhcpmember{Name: "member1.example.com"},
-		CloudApiCompatible:    boolPtr(true),
-	}
-
-	changed := lateInitialize(&comment, &extAttrs, &options, &useOptions, &serverAssociationType, &failoverAssociation, &member, &cloudApiCompatible, rec)
-	if !changed {
-		t.Fatal("lateInitialize: want changed=true, got false")
-	}
-	if comment == nil || *comment != "server default" {
-		t.Errorf("lateInitialize: comment = %v, want %q", comment, "server default")
-	}
-	if !extAttrsEqual(extAttrs, map[string]string{"env": "prod"}) {
-		t.Errorf("lateInitialize: extAttrs = %v, want {env: prod}", extAttrs)
-	}
-	if len(options) != 1 || strOrEmpty(options[0].Name) != "routers" {
-		t.Errorf("lateInitialize: options = %+v, want a single routers option", options)
-	}
-	if useOptions == nil || !*useOptions {
-		t.Errorf("lateInitialize: useOptions = %v, want true", useOptions)
-	}
-	if serverAssociationType != "MEMBER" {
-		t.Errorf("lateInitialize: serverAssociationType = %q, want %q", serverAssociationType, "MEMBER")
-	}
-	if failoverAssociation == nil || *failoverAssociation != "fa1" {
-		t.Errorf("lateInitialize: failoverAssociation = %v, want %q", failoverAssociation, "fa1")
-	}
-	if member == nil || strOrEmpty(member.Name) != "member1.example.com" {
-		t.Errorf("lateInitialize: member = %+v, want Name=member1.example.com", member)
-	}
-	if cloudApiCompatible == nil || !*cloudApiCompatible {
-		t.Errorf("lateInitialize: cloudApiCompatible = %v, want true", cloudApiCompatible)
-	}
-}
-
-func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
-	comment := stringPtr("user comment")
-	extAttrs := map[string]string{"env": "staging"}
-	options := []templateOption{{Name: stringPtr("user-option")}}
-	useOptions := boolPtr(false)
-	serverAssociationType := "FAILOVER"
-	failoverAssociation := stringPtr("user-fa")
-	member := &templateMember{Name: stringPtr("user-member")}
-	cloudApiCompatible := boolPtr(false)
-
-	rec := &ibclient.Rangetemplate{
-		Comment:               stringPtr("server default"),
-		Ea:                    ibclient.EA{"env": "prod"},
-		Options:               []*ibclient.Dhcpoption{{Name: "server-option"}},
-		UseOptions:            boolPtr(true),
-		ServerAssociationType: "MEMBER",
-		FailoverAssociation:   stringPtr("server-fa"),
-		Member:                &ibclient.Dhcpmember{Name: "server-member"},
-		CloudApiCompatible:    boolPtr(true),
-	}
-
-	changed := lateInitialize(&comment, &extAttrs, &options, &useOptions, &serverAssociationType, &failoverAssociation, &member, &cloudApiCompatible, rec)
-	if changed {
-		t.Error("lateInitialize: want changed=false when all fields already set, got true")
-	}
-	if *comment != "user comment" {
-		t.Error("lateInitialize: overwrote already-set comment")
-	}
-	if extAttrs["env"] != "staging" {
-		t.Error("lateInitialize: overwrote already-set extAttrs")
-	}
-	if strOrEmpty(options[0].Name) != "user-option" {
-		t.Error("lateInitialize: overwrote already-set options")
-	}
-	if *useOptions != false {
-		t.Error("lateInitialize: overwrote already-set useOptions")
-	}
-	if serverAssociationType != "FAILOVER" {
-		t.Error("lateInitialize: overwrote already-set serverAssociationType")
-	}
-	if *failoverAssociation != "user-fa" {
-		t.Error("lateInitialize: overwrote already-set failoverAssociation")
-	}
-	if strOrEmpty(member.Name) != "user-member" {
-		t.Error("lateInitialize: overwrote already-set member")
-	}
-	if *cloudApiCompatible != false {
-		t.Error("lateInitialize: overwrote already-set cloudApiCompatible")
-	}
-}
-
-// TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff proves that
-// when useOptions is false the observed DHCP options (WAPI's own default
-// set, not values the user's config implies) are never written back into
-// spec.forProvider.options.
-func TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff(t *testing.T) {
 	var comment *string
 	var extAttrs map[string]string
-	var options []templateOption
-	useOptions := boolPtr(false)
+	options := []templateOption{}
+	var useOptions *bool
 	var serverAssociationType string
 	var failoverAssociation *string
 	var member *templateMember
 	var cloudApiCompatible *bool
-
-	rec := &ibclient.Rangetemplate{
-		Options:    []*ibclient.Dhcpoption{{Name: "server-option"}},
-		UseOptions: boolPtr(false),
-	}
-
 	lateInitialize(&comment, &extAttrs, &options, &useOptions, &serverAssociationType, &failoverAssociation, &member, &cloudApiCompatible, rec)
 
-	if len(options) != 0 {
-		t.Errorf("lateInitialize: options = %+v, want empty (useOptions is off, observed options are the server's own default set, not user values)", options)
+	if _, ok := extAttrs[identity.EAKey]; ok {
+		t.Fatalf("identity key must never late-init into spec.forProvider.extAttrs, got %v", extAttrs)
+	}
+	if extAttrs["Site"] != "dc1" {
+		t.Fatalf("expected non-reserved EA to still be back-filled, got %v", extAttrs)
 	}
 }
 
-// TestObserveDoesNotLateInitializeRequiredFields proves that name,
-// numberOfAddresses, and offset — the CRD's required
-// RangeTemplateParameters fields — are never overwritten by Observe()'s
-// late-init step. lateInitialize only accepts pointers to the optional
-// fields, so a spec/observed mismatch on a required field can never occur
-// through the real WAPI flow — this test drives it artificially to pin
-// the guarantee.
-func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec.Ea = identity.Stamp(nil, "some-uid")
 
-	ref := m.seed(&ibclient.Rangetemplate{
-		Name:              stringPtr("observed-template"),
-		NumberOfAddresses: uint32Ptr(99),
-		Offset:            uint32Ptr(1),
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv), conn: newTestConnector(t, srv)}
-	cr := newClusterRangeTemplate("my-rangetemplate", ref)
-	cr.Spec.ForProvider.Name = stringPtr("template1")
-	cr.Spec.ForProvider.NumberOfAddresses = uint32Ptr(10)
-	cr.Spec.ForProvider.Offset = uint32Ptr(5)
-
-	if _, err := e.Observe(context.Background(), cr); err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-
-	if got := *cr.Spec.ForProvider.Name; got != "template1" {
-		t.Errorf("Observe: required field Name late-initialized to %q, want unchanged %q", got, "template1")
-	}
-	if got := *cr.Spec.ForProvider.NumberOfAddresses; got != 10 {
-		t.Errorf("Observe: required field NumberOfAddresses late-initialized to %d, want unchanged 10", got)
-	}
-	if got := *cr.Spec.ForProvider.Offset; got != 5 {
-		t.Errorf("Observe: required field Offset late-initialized to %d, want unchanged 5", got)
+	if !isUpToDate(stringPtr("test-template"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, nil, rec) {
+		t.Fatal("expected isUpToDate to ignore the identity EA when spec.extAttrs is empty")
 	}
 }
 
-// ── isUpToDate: table-driven field comparison ───────────────────────────
-
-func TestIsUpToDate(t *testing.T) {
-	observedTemplate := func() *ibclient.Rangetemplate {
-		return &ibclient.Rangetemplate{
-			Name:                  stringPtr("template1"),
-			NumberOfAddresses:     uint32Ptr(10),
-			Offset:                uint32Ptr(5),
-			Comment:               stringPtr("hello"),
-			Ea:                    ibclient.EA{"env": "prod"},
-			ServerAssociationType: "MEMBER",
-		}
-	}
-
-	cases := map[string]struct {
-		reason                string
-		name                  *string
-		numberOfAddresses     *uint32
-		offset                *uint32
-		comment               *string
-		extAttrs              map[string]string
-		serverAssociationType string
-		want                  bool
-	}{
-		"IdenticalFieldsAreUpToDate": {
-			reason:                "when every mutable field matches the observed record, the resource must be reported up to date",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "MEMBER",
-			want:                  true,
-		},
-		"ChangedNameIsNotUpToDate": {
-			reason:                "a changed name must be detected as drift",
-			name:                  stringPtr("renamed-template"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "MEMBER",
-			want:                  false,
-		},
-		"ChangedNumberOfAddressesIsNotUpToDate": {
-			reason:                "a changed numberOfAddresses must be detected as drift",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(20),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "MEMBER",
-			want:                  false,
-		},
-		"ChangedOffsetIsNotUpToDate": {
-			reason:                "a changed offset must be detected as drift",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(6),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "MEMBER",
-			want:                  false,
-		},
-		"ChangedCommentIsNotUpToDate": {
-			reason:                "a changed comment must be detected as drift",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("goodbye"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "MEMBER",
-			want:                  false,
-		},
-		"ExtAttrsDifferentValueIsNotUpToDate": {
-			reason:                "an extAttrs value change on an existing key must be detected as drift",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "staging"},
-			serverAssociationType: "MEMBER",
-			want:                  false,
-		},
-		"ChangedServerAssociationTypeIsNotUpToDate": {
-			reason:                "a changed serverAssociationType must be detected as drift",
-			name:                  stringPtr("template1"),
-			numberOfAddresses:     uint32Ptr(10),
-			offset:                uint32Ptr(5),
-			comment:               stringPtr("hello"),
-			extAttrs:              map[string]string{"env": "prod"},
-			serverAssociationType: "FAILOVER",
-			want:                  false,
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := isUpToDate(tc.name, tc.numberOfAddresses, tc.offset, tc.comment, tc.extAttrs, nil, nil, tc.serverAssociationType, nil, nil, nil, observedTemplate())
-			if got != tc.want {
-				t.Errorf("%s: isUpToDate() = %v, want %v", tc.reason, got, tc.want)
-			}
-		})
+func TestClusterDisconnectIsNoop(t *testing.T) {
+	e := &clusterExternal{}
+	if err := e.Disconnect(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
-	rec := &ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-	}
-	// The observed record carries no extattrs (nil Ea) — a spec with an
-	// explicit empty map must still compare as up to date, since
-	// extAttrsEqual treats nil and empty as equivalent (avoids a phantom
-	// diff when the WAPI response omits an empty extattrs object).
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, map[string]string{}, nil, nil, "", nil, nil, nil, rec)
-	if !got {
-		t.Error("isUpToDate: empty ExtAttrs spec vs nil observed Ea = false, want true")
-	}
-}
-
-func TestIsUpToDateDetectsOptionsDrift(t *testing.T) {
-	rec := &ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
-		UseOptions:        boolPtr(true),
-	}
-	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
-
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(true), "", nil, nil, nil, rec)
-	if got {
-		t.Error("isUpToDate: changed option value not detected as drift")
-	}
-}
-
-// TestIsUpToDateIgnoresOptionsWhenUseOptionsOff proves the options
-// comparison is gated on useOptions. When useOptions is off, WAPI ignores
-// the submitted options and returns its own default set on every GET —
-// the spec options and the observed options are unrelated, and comparing
-// them unconditionally can never converge.
-func TestIsUpToDateIgnoresOptionsWhenUseOptionsOff(t *testing.T) {
-	rec := &ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
-		UseOptions:        boolPtr(false),
-	}
-	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
-
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(false), "", nil, nil, nil, rec)
-	if !got {
-		t.Error("isUpToDate: want true when useOptions is off and only the server-owned options differ, got false (non-convergent drift comparison)")
-	}
-}
-
-// TestIsUpToDateDetectsUseOptionsTransition proves a useOptions
-// true -> false transition is still detected as drift even though the
-// value comparison is gated off. The flag comparison must be
-// unconditional.
-func TestIsUpToDateDetectsUseOptionsTransition(t *testing.T) {
-	rec := &ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Options:           []*ibclient.Dhcpoption{{Name: "routers", Value: "10.0.0.1"}},
-		UseOptions:        boolPtr(true),
-	}
-	specOptions := []templateOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")}}
-
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, specOptions, boolPtr(false), "", nil, nil, nil, rec)
-	if got {
-		t.Error("isUpToDate: want false on a useOptions true -> false transition, got true (drift not detected)")
-	}
-}
-
-func TestIsUpToDateDetectsMemberDrift(t *testing.T) {
-	rec := &ibclient.Rangetemplate{
-		Name:              stringPtr("template1"),
-		NumberOfAddresses: uint32Ptr(10),
-		Offset:            uint32Ptr(5),
-		Member:            &ibclient.Dhcpmember{Name: "member1.example.com"},
-	}
-	specMember := &templateMember{Name: stringPtr("member2.example.com")}
-
-	got := isUpToDate(stringPtr("template1"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, specMember, nil, rec)
-	if got {
-		t.Error("isUpToDate: changed member not detected as drift")
-	}
-}
-
-// ── extractCredentials: ssl_verify key is fully ignored ────────────────
-//
-// TLS verification is governed by the ProviderConfig's own sslVerify spec
-// field (see cluster.go/namespaced.go's Connect methods), never by a key
-// in the credentials Secret. This pins the migration: a legacy
-// "ssl_verify" key in the Secret must have zero effect on
-// extractCredentials — nioCredentials has no SslVerify field to read it
-// into.
-func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	secret.Data["ssl_verify"] = []byte("false")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
-		t.Errorf("extractCredentials: got %+v, want Host/Username/Password populated regardless of the ssl_verify key", creds)
-	}
-}
-
-func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
-	// Regression guard: newObjectManagerWithScheme must not hardcode
-	// SslVerify to "true" — it must honor the sslVerify parameter. Both branches
-	// must construct successfully (transport config validation happens
-	// locally; no network round-trip occurs here).
-	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
-		t.Run(name, func(t *testing.T) {
-			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
-			mc, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
-			if err != nil {
-				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
-			}
-			if mc.Manager == nil {
-				t.Fatal("newObjectManagerWithScheme: expected non-nil object manager")
-			}
-			if mc.Connector == nil {
-				t.Fatal("newObjectManagerWithScheme: expected non-nil connector")
-			}
-		})
+func TestNamespacedDisconnectIsNoop(t *testing.T) {
+	e := &namespacedExternal{}
+	if err := e.Disconnect(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

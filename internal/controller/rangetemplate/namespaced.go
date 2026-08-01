@@ -19,8 +19,8 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-rangetemplate.infobloxnios.m.crossplane.io"
@@ -102,19 +102,28 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: mc.Manager, conn: mc.Connector}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.RangeTemplate].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
-	// conn is the same connector underlying objMgr, kept separately so
-	// rangeTemplateExistsByNaturalKey can issue its search directly
-	// through it rather than through objMgr.GetAllRangeTemplate — see
-	// rangeTemplateExistsByNaturalKey for why that distinction matters
-	// for error classification.
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveRangeTemplateIdentity.
 	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
 // ── namespaced type <-> scope-neutral currency conversion ──────────────────
@@ -159,37 +168,23 @@ func commonToNamespacedMember(m *templateMember) *namespacedv1alpha1.RangeTempla
 	return &namespacedv1alpha1.RangeTemplateMember{Ipv4Addr: m.Ipv4Addr, Ipv6Addr: m.Ipv6Addr, Name: m.Name}
 }
 
-// Observe fetches the RangeTemplate from the WAPI by its _ref external
-// name and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
-
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetRangeTemplateByRef(externalID)
+// Observe resolves the RangeTemplate through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalObservation, error) {
+	res, err := observeRangeTemplate(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := rangeTemplateExistsByNaturalKey(e.conn, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveRangeTemplate)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveRangeTemplate)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	rec := res.rec
 
-	o := observeFromRangeTemplate(externalID, rec)
+	o := res.obs
 	cr.Status.AtProvider = namespacedv1alpha1.RangeTemplateObservation{
 		Name:                  o.Name,
 		NumberOfAddresses:     o.NumberOfAddresses,
@@ -218,23 +213,41 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.R
 		p.Options = commonToNamespacedOptions(options)
 		p.Member = commonToNamespacedMember(member)
 	}
+	if res.lateInit {
+		lateInit = true
+	}
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, rec),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
-// Create provisions a new RangeTemplate and records the server-assigned
-// _ref as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalCreation, error) {
+// Create provisions a new RangeTemplate, stamping the managed resource's
+// own uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer)
+	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateRangeTemplate)
 	}
@@ -244,12 +257,13 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ra
 }
 
 // Update patches the mutable RangeTemplate fields. No immutable fields are
-// known for RangeTemplate — every ForProvider field is sent.
+// known for RangeTemplate — every ForProvider field is sent. Every call
+// re-asserts the identity stamp.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer)
+	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateRangeTemplate)
 	}
@@ -264,15 +278,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the RangeTemplate. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteRangeTemplateResolving404 — because the _ref is a derived handle
-// that rotates whenever an identity field changes, and a stale handle
-// 404s exactly like a genuinely deleted object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalDelete, error) {
+// Delete removes the RangeTemplate, resolving through the shared
+// identity ladder first.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteRangeTemplateResolving404(e.objMgr, e.conn, externalID, p.Name); err != nil {
+	if err := deleteRangeTemplateIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

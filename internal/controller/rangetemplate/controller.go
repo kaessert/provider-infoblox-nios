@@ -6,6 +6,15 @@
 // DeleteRangeTemplate) instead of a generic HTTP request/response
 // envelope, so there is no internal REST client to compose.
 //
+// RangeTemplate is wired to the UID-in-EA object-identity ladder (see the
+// internal/clients/identity package doc): the WAPI _ref every create
+// call returns is a derived handle — a rendering of the object's own
+// name, not a stable backend-assigned ID — so this controller stamps the
+// managed resource's own metadata.uid onto the Grid object as an
+// extensible attribute and resolves every Observe/Delete through the
+// shared identity.Resolve ladder instead of trusting the stored _ref
+// alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package rangetemplate
@@ -30,28 +39,37 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage         = "cannot track ProviderConfig usage"
-	errPersistExternalName  = "cannot persist refreshed external name"
-	errGetPC                = "cannot get ProviderConfig"
-	errGetClusterPC         = "cannot get ClusterProviderConfig"
-	errUnsupportedKind      = "unsupported provider config kind"
-	errGetSecret            = "cannot get credentials secret"
-	errNoSecretRef          = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds     = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey       = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager     = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveRangeTemplate = "cannot observe RangeTemplate"
-	errCreateRangeTemplate  = "cannot create RangeTemplate"
-	errUpdateRangeTemplate  = "cannot update RangeTemplate"
-	errDeleteRangeTemplate  = "cannot delete RangeTemplate"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveRangeTemplate      = "cannot observe RangeTemplate"
+	errCreateRangeTemplate       = "cannot create RangeTemplate"
+	errUpdateRangeTemplate       = "cannot update RangeTemplate"
+	errDeleteRangeTemplate       = "cannot delete RangeTemplate"
+	errEmptyUID                  = "cannot stamp RangeTemplate identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// See the doc on this constant in the recorda package for the full
+// rationale — production code always goes through Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -104,18 +122,13 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated
-// identity.ManagerAndConnector from the given credentials — the SDK's
-// high-level ObjectManager for the ordinary CRUD calls, and the
-// lower-level Connector that rangeTemplateExistsByNaturalKey needs
-// directly so it can issue a server-side filtered search through
-// conn.GetObject and let the SDK's typed *ibclient.NotFoundError reach
-// isNotFound unwrapped (ObjectManager's GetAllRangeTemplate re-wraps
-// that error with fmt.Errorf's %s verb, which flattens it into a plain
-// string no classifier can unwrap). The Connector performs HTTP Basic
-// Auth on every request and only validates configuration locally — no
-// network round-trip happens until the first Observe/Create/Update/
-// Delete call.
+// newObjectManager constructs an authenticated identity.ManagerAndConnector
+// from the given credentials — the SDK's high-level ObjectManager for the
+// ordinary CRUD calls, and the lower-level Connector the identity ladder
+// needs directly (it operates below ObjectManager's typed methods so it
+// can see search match counts). The Connector performs HTTP Basic Auth on
+// every request and only validates configuration locally — no network
+// round-trip happens until the first Observe/Create/Update/Delete call.
 func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
@@ -450,7 +463,7 @@ func isUpToDate(name *string, numberOfAddresses, offset *uint32, comment *string
 	if strOrEmpty(comment) != strOrEmpty(rec.Comment) {
 		return false
 	}
-	if !extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea)) {
+	if !extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea))) {
 		return false
 	}
 	// Compare the flag first and unconditionally, so a true -> false
@@ -518,7 +531,7 @@ func lateInitExtAttrs(extAttrs *map[string]string, rec *ibclient.Rangetemplate) 
 	if len(*extAttrs) != 0 {
 		return false
 	}
-	fromRec := extAttrsFromEA(rec.Ea)
+	fromRec := extAttrsFromEA(identity.Strip(rec.Ea))
 	if len(fromRec) == 0 {
 		return false
 	}
@@ -655,14 +668,22 @@ func observeFromRangeTemplate(externalID string, rec *ibclient.Rangetemplate) ob
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createRangeTemplate issues the WAPI create call.
-func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string) (*ibclient.Rangetemplate, error) {
+// createRangeTemplate issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp) — there is no follow-up
+// call, so there is no window in which the object exists without its
+// identity stamp.
+func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateRangeTemplate(
 		strOrEmpty(name),
 		uint32OrZero(numberOfAddresses),
 		uint32OrZero(offset),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 		buildDhcpOptions(options),
 		boolOrFalse(useOptions),
 		serverAssociationType,
@@ -676,15 +697,24 @@ func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOf
 // updateRangeTemplate issues the WAPI update call (PUT partial/merge — the
 // blueprint records no immutable fields for RangeTemplate, so every
 // mutable ForProvider field, including the write-only msServer
-// convenience field, is sent on every update).
-func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string) (*ibclient.Rangetemplate, error) {
+// convenience field, is sent on every update). Every call re-asserts the
+// identity stamp (identity.Stamp) in the extattrs it sends. Live
+// verification against a real NIOS Grid Manager confirmed that a PUT
+// carrying an extattrs object *replaces* the whole map — it is not a
+// per-key merge — so omitting the stamp here would wipe it off the
+// object on the very first field update after create.
+func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateRangeTemplate(
 		ref,
 		strOrEmpty(name),
 		uint32OrZero(numberOfAddresses),
 		uint32OrZero(offset),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 		buildDhcpOptions(options),
 		boolOrFalse(useOptions),
 		serverAssociationType,
@@ -701,67 +731,132 @@ func deleteRangeTemplate(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// rangeTemplateExistsByNaturalKey reports whether a live RangeTemplate
-// still exists under the CR's own name identity — the same value WAPI
-// uses to compute the _ref. Used by Delete() when the stored _ref 404s:
-// a hit here means the _ref is merely stale, not that the object is
-// gone. RangeTemplate has no single-object natural-key getter, so this
-// issues the search directly through the raw connector with a
-// server-side query filter and answers from the match count.
-//
-// This deliberately bypasses ibclient.IBObjectManager.GetAllRangeTemplate:
-// that method re-wraps a genuinely empty result with
-// fmt.Errorf("failed getting Range Template Record: %s", err), which
-// flattens the SDK's typed *ibclient.NotFoundError into a plain string
-// no classifier can unwrap — isNotFound would then see neither a typed
-// error nor an HTTP status code in the message and misreport a clean
-// "nothing matched" result as a hard error. Calling conn.GetObject
-// directly lets the SDK's connector return the *ibclient.NotFoundError
-// unwrapped, so isNotFound classifies it correctly.
-//
-// name is required non-empty; when it is missing there is no way to
-// re-discover the object, so the search is skipped (found=false) rather
-// than treated as an error.
-func rangeTemplateExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
-	if strOrEmpty(name) == "" {
-		return false, nil
-	}
-	sf := map[string]string{"name": strOrEmpty(name)}
-	var res []ibclient.Rangetemplate
-	err := conn.GetObject(ibclient.NewEmptyRangeTemplate(), "", ibclient.NewQueryParams(false, sf), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteRangeTemplateResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live range template, deleting is
-// refused because ownership of that range template cannot be verified
-// from the search alone (see the staleref package doc for the full
-// rationale).
-func deleteRangeTemplateResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name *string) error {
-	delErr := deleteRangeTemplate(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteRangeTemplate)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := rangeTemplateExistsByNaturalKey(conn, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteRangeTemplate)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. See recorda's doc
+// for the full rationale.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveRangeTemplateIdentity resolves the RangeTemplate identified by
+// ref/uid through the shared UID-in-EA ladder.
+func resolveRangeTemplateIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.Rangetemplate, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.Rangetemplate](ctx, conn, ibclient.NewEmptyRangeTemplate, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// RangeTemplate through the identity ladder during Observe — common to
+// both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.Rangetemplate
+	obs          observedRangeTemplate
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeRangeTemplate runs the identity ladder for Observe. Unlike the
+// simpler resources, RangeTemplate's late-init step needs scope-specific
+// type conversion for options/member, so the caller (cluster.go /
+// namespaced.go) performs lateInitialize itself using the returned
+// observeResult.rec — this function only resolves identity and builds the
+// observation snapshot.
+func observeRangeTemplate(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveRangeTemplateIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRangeTemplate(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteRangeTemplateIdentity issues the WAPI delete for the RangeTemplate
+// this managed resource owns, resolving through the identity ladder first
+// so a stale _ref is never mistaken for a deleted object.
+func deleteRangeTemplateIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveRangeTemplateIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteRangeTemplate)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteRangeTemplate(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteRangeTemplate)
+	default:
+		return errors.New("identity: unresolved RangeTemplate outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
