@@ -240,6 +240,7 @@ func (m *mockWapiServer) handler() http.Handler {
 		q := r.URL.Query()
 		name := q.Get("name")
 		view := q.Get("view")
+		nameserver := q.Get("nameserver")
 
 		m.mu.Lock()
 		var matches []ibclient.RecordNS
@@ -248,6 +249,9 @@ func (m *mockWapiServer) handler() http.Handler {
 				continue
 			}
 			if view != "" && rec.View != view {
+				continue
+			}
+			if nameserver != "" && (rec.Nameserver == nil || *rec.Nameserver != nameserver) {
 				continue
 			}
 			matches = append(matches, *rec)
@@ -843,7 +847,7 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
@@ -912,7 +916,7 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
@@ -930,6 +934,68 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces the
+// live-Grid defect this ticket fixes: WAPI accepts two record:ns objects
+// sharing (name, view) with different nameserver values, so a sibling
+// under the loose tuple must not wedge deletion of an MR whose own
+// object was genuinely deleted out-of-band. Before the fix,
+// nsRecordExistsByNaturalKey searched on (name, view) only and found the
+// sibling, incorrectly refusing the delete forever.
+func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// The sibling shares (name, view) with the CR but carries a
+	// different nameserver — same loose tuple the old helper searched
+	// on, but not the same WAPI identity.
+	siblingRef := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
 	}
 }
 
@@ -1343,7 +1409,7 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
@@ -1388,7 +1454,7 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
@@ -1406,6 +1472,61 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	siblingRef := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
 	}
 }
 

@@ -160,7 +160,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.NSRecor
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := nsRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View)
+			found, searchErr := nsRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNSRecord)
 			}
@@ -253,7 +253,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NSReco
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View); err != nil {
+	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View, p.Nameserver); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

@@ -450,25 +450,37 @@ func deleteTXTRecord(objMgr ibclient.IBObjectManager, ref string) error {
 }
 
 // txtRecordExistsByNaturalKey reports whether a live TXTRecord still
-// exists under the CR's own (view, name) identity — the same tuple WAPI
-// uses to compute the _ref. Used by Delete() when the stored _ref 404s:
-// a hit here means the _ref is merely stale, not that the object is
-// gone. GetTXTRecord requires both fields non-empty (it returns a hard
-// error, not a NotFoundError, when either is missing); when either is
-// missing there is no way to re-discover the object, so the search is
-// skipped (found=false) rather than treated as an error.
-func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name *string) (bool, error) {
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" {
+// exists under the CR's own (view, name, text) identity — the same tuple
+// WAPI uses to compute the _ref. Used by Delete() when the stored _ref
+// 404s: a hit here means the _ref is merely stale, not that the object is
+// gone.
+//
+// The SDK's GetTXTRecord only accepts (view, name) — it has no parameter
+// for text — and filters server-side on those two fields only, returning
+// just the first match from whatever the WAPI list response contains.
+// (view, name) is not a unique WAPI key (see the package-level defect
+// this fixes), so a second live object can share it with a different
+// text value. This helper closes that gap by comparing the returned
+// record's Text against the CR's own text: a sibling with a different
+// text value fails the comparison and reports found=false, while an
+// object that matches the full (view, name, text) tuple reports
+// found=true. All three fields are required non-empty (GetTXTRecord
+// itself errors on a missing view or name, and an empty text can never
+// equal a populated sibling's text); when any is missing there is no way
+// to re-discover the object, so the search is skipped (found=false)
+// rather than treated as an error.
+func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, text *string) (bool, error) {
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(text) == "" {
 		return false, nil
 	}
-	_, err := objMgr.GetTXTRecord(strOrEmpty(view), strOrEmpty(name))
+	rec, err := objMgr.GetTXTRecord(strOrEmpty(view), strOrEmpty(name))
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	return true, nil
+	return strOrEmpty(rec.Text) == strOrEmpty(text), nil
 }
 
 // deleteTXTRecordResolving404 issues the WAPI delete and, on a 404
@@ -478,7 +490,7 @@ func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name *st
 // natural-key search still finds a live record, deleting is refused
 // because ownership of that record cannot be verified from the search
 // alone (see the staleref package doc for the full rationale).
-func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name *string) error {
+func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, text *string) error {
 	delErr := deleteTXTRecord(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -486,7 +498,7 @@ func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, vi
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteTXTRecord)
 	}
-	found, searchErr := txtRecordExistsByNaturalKey(objMgr, view, name)
+	found, searchErr := txtRecordExistsByNaturalKey(objMgr, view, name, text)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteTXTRecord)
 	}

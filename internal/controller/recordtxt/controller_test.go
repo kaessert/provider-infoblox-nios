@@ -911,6 +911,67 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces the
+// live-Grid defect this ticket fixes: a sibling TXTRecord sharing (view,
+// name) but with a different text value must not wedge deletion of an
+// MR whose own object was genuinely deleted out-of-band. Before the
+// fix, txtRecordExistsByNaturalKey searched on (view, name) only and
+// found the sibling, incorrectly refusing the delete forever.
+func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// The sibling shares (view, name) with the CR but carries different
+	// text — same loose tuple the old helper searched on, but not the
+	// same WAPI identity.
+	siblingRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different text matches the loose (view, name) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different text matches the loose (view, name) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1338,6 +1399,61 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	siblingRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different text matches the loose (view, name) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different text matches the loose (view, name) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
 	}
 }
 

@@ -244,11 +244,15 @@ func (m *mockWapiServer) handler() http.Handler {
 	// path segments).
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/zone_delegated", func(w http.ResponseWriter, r *http.Request) {
 		fqdn := r.URL.Query().Get("fqdn")
+		view := r.URL.Query().Get("view")
 
 		m.mu.Lock()
 		var matches []ibclient.ZoneDelegated
 		for _, rec := range m.records {
 			if fqdn != "" && rec.Fqdn != fqdn {
+				continue
+			}
+			if view != "" && (rec.View == nil || *rec.View != view) {
 				continue
 			}
 			matches = append(matches, *rec)
@@ -832,6 +836,60 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces the
+// defect this ticket fixes: a delegated zone with the same fqdn in a
+// different view must not wedge deletion of an MR whose own object was
+// genuinely deleted out-of-band. Before the fix,
+// zoneDelegatedExistsByNaturalKey searched on fqdn alone (via
+// GetZoneDelegated, which also truncates to the first match) and found
+// the sibling, incorrectly refusing the delete forever.
+func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// The sibling shares fqdn with the CR but lives in a different
+	// view — same loose key the old helper searched on, but not the
+	// same WAPI identity.
+	siblingRef := m.seed(&ibclient.ZoneDelegated{Fqdn: "delegated.example.com", View: stringPtr("other-view")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterZoneDelegated("my-zone", "zone_delegated/stale-ref:delegated.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling in a different view matches the loose fqdn, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.ZoneDelegated{Fqdn: "delegated.example.com", View: stringPtr("other-view")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterZoneDelegated("my-zone", "zone_delegated/stale-ref:delegated.example.com/default")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling in a different view matches the loose fqdn, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose fqdn")
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1225,6 +1283,53 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	siblingRef := m.seed(&ibclient.ZoneDelegated{Fqdn: "delegated.example.com", View: stringPtr("other-view")})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "zone_delegated/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling in a different view matches the loose fqdn, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is
+// the namespaced-scope counterpart of
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.ZoneDelegated{Fqdn: "delegated.example.com", View: stringPtr("other-view")})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "zone_delegated/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling in a different view matches the loose fqdn, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose fqdn")
 	}
 }
 

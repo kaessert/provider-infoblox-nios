@@ -497,22 +497,28 @@ func deleteNSRecord(objMgr ibclient.IBObjectManager, ref string) error {
 }
 
 // nsRecordExistsByNaturalKey reports whether a live NSRecord still exists
-// under the CR's own (name, view) identity — the same tuple WAPI uses to
-// compute the _ref (both fields are hard-immutable, see isUpToDate's doc
-// comment). Used by Delete() when the stored _ref 404s: a hit here means
-// the _ref is merely stale, not that the object is gone. NSRecord has no
-// single-object natural-key getter, so this searches via
-// GetAllRecordNS (a list call) with a server-side query filter instead.
-// Both fields are required non-empty; when either is missing there is no
-// way to re-discover the object, so the search is skipped (found=false)
-// rather than treated as an error.
-func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view *string) (bool, error) {
-	if strOrEmpty(name) == "" || strOrEmpty(view) == "" {
+// under the CR's own (name, view, nameserver) identity — the same tuple
+// WAPI uses to compute the _ref (name and view are hard-immutable, see
+// isUpToDate's doc comment; nameserver is mutable but still part of the
+// _ref identity — the live evidence recorded against this helper showed
+// two record:ns objects sharing (name, view) with different nameserver
+// values are both accepted by WAPI, so (name, view) alone is not unique).
+// Used by Delete() when the stored _ref 404s: a hit here means the _ref
+// is merely stale, not that the object is gone. NSRecord has no
+// single-object natural-key getter, so this searches via GetAllRecordNS
+// (a list call) with a server-side query filter instead — all three
+// fields are passed as filters, so WAPI itself narrows the result set to
+// exact matches. All three fields are required non-empty; when any is
+// missing there is no way to re-discover the object, so the search is
+// skipped (found=false) rather than treated as an error.
+func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view, nameserver *string) (bool, error) {
+	if strOrEmpty(name) == "" || strOrEmpty(view) == "" || strOrEmpty(nameserver) == "" {
 		return false, nil
 	}
 	sf := map[string]string{
-		"name": strOrEmpty(name),
-		"view": strOrEmpty(view),
+		"name":       strOrEmpty(name),
+		"view":       strOrEmpty(view),
+		"nameserver": strOrEmpty(nameserver),
 	}
 	res, err := objMgr.GetAllRecordNS(ibclient.NewQueryParams(false, sf))
 	if err != nil {
@@ -531,7 +537,7 @@ func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view *str
 // finds a live NS record, deleting is refused because ownership of that
 // record cannot be verified from the search alone (see the staleref
 // package doc for the full rationale).
-func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, name, view *string) error {
+func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, name, view, nameserver *string) error {
 	delErr := deleteNSRecord(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -539,7 +545,7 @@ func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, nam
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteNSRecord)
 	}
-	found, searchErr := nsRecordExistsByNaturalKey(objMgr, name, view)
+	found, searchErr := nsRecordExistsByNaturalKey(objMgr, name, view, nameserver)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteNSRecord)
 	}

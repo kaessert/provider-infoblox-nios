@@ -137,7 +137,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneDel
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := zoneDelegatedExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Fqdn)
+			found, searchErr := zoneDelegatedExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Fqdn, cr.Spec.ForProvider.View)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneDelegated)
 			}
@@ -222,7 +222,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDe
 // that rotates when fqdn/view changes.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteZoneDelegatedResolving404(e.objMgr, externalID, cr.Spec.ForProvider.Fqdn); err != nil {
+	if err := deleteZoneDelegatedResolving404(e.objMgr, externalID, cr.Spec.ForProvider.Fqdn, cr.Spec.ForProvider.View); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
