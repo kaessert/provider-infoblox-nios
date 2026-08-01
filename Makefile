@@ -130,6 +130,16 @@ UPTEST_MANIFESTS_ALL := $(subst $(space),$(comma),$(_UPTEST_MANIFESTS_ALL_RAW))
 # Default e2e input: CORE manifests
 UPTEST_INPUT_MANIFESTS ?= $(UPTEST_MANIFESTS_CORE)
 
+# uptest's built-in default process budget is 1200s, which is shorter than a
+# single multi-resource apply stage once post-assert update-test hooks run
+# (~3-4 min per resource). Without this, uptest SIGKILLs chainsaw AFTER it
+# has already reported PASS on the apply stage and never runs the
+# import/delete stages — leaking external Grid objects that then collide
+# with the next run. `?=` keeps this overridable per invocation. This is
+# independent of the per-resource `uptest.upbound.io/timeout` annotations,
+# which gate a single chainsaw assertion, not the whole process.
+UPTEST_DEFAULT_TIMEOUT ?= 3600s
+
 UPTEST_SETUP_SCRIPT ?= test/setup.sh
 
 # Per-run uptest test-directory isolation (each concurrent E2E run gets its own
