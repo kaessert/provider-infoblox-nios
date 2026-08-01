@@ -30,6 +30,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
@@ -104,18 +105,23 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector that txtRecordExistsByNaturalKey needs directly
+// so it can issue a server-side filtered search and see the match count
+// (ObjectManager's typed getters hide that). The Connector performs HTTP
+// Basic Auth on every request and only validates configuration locally —
+// no network round-trip happens until the first Observe/Create/Update/
+// Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -145,10 +151,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -455,32 +461,39 @@ func deleteTXTRecord(objMgr ibclient.IBObjectManager, ref string) error {
 // 404s: a hit here means the _ref is merely stale, not that the object is
 // gone.
 //
-// The SDK's GetTXTRecord only accepts (view, name) — it has no parameter
-// for text — and filters server-side on those two fields only, returning
-// just the first match from whatever the WAPI list response contains.
-// (view, name) is not a unique WAPI key (see the package-level defect
-// this fixes), so a second live object can share it with a different
-// text value. This helper closes that gap by comparing the returned
-// record's Text against the CR's own text: a sibling with a different
-// text value fails the comparison and reports found=false, while an
-// object that matches the full (view, name, text) tuple reports
-// found=true. All three fields are required non-empty (GetTXTRecord
-// itself errors on a missing view or name, and an empty text can never
-// equal a populated sibling's text); when any is missing there is no way
-// to re-discover the object, so the search is skipped (found=false)
-// rather than treated as an error.
-func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, text *string) (bool, error) {
+// The SDK's high-level GetTXTRecord getter only accepts (view, name) —
+// it has no parameter for text — and always returns just the first
+// element of whatever the WAPI list response contains
+// (object_manager_txt-record.go: `return &res[0], nil`). (view, name) is
+// not a unique WAPI key (see the package-level defect this fixes), so
+// when a sibling shares (view, name) with the CR's own live object, the
+// SDK's list ordering — not the data — decides which one comes back,
+// silently taking the first match on ambiguity. This helper avoids that
+// by issuing the search itself through the raw connector with all three
+// fields as server-side filters (`text` is exactly-searchable on
+// record:txt) and answering from the match count, mirroring how
+// nsRecordExistsByNaturalKey and zoneDelegatedExistsByNaturalKey already
+// search. All three fields are required non-empty; when any is missing
+// there is no way to re-discover the object, so the search is skipped
+// (found=false) rather than treated as an error.
+func txtRecordExistsByNaturalKey(conn ibclient.IBConnector, view, name, text *string) (bool, error) {
 	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(text) == "" {
 		return false, nil
 	}
-	rec, err := objMgr.GetTXTRecord(strOrEmpty(view), strOrEmpty(name))
+	sf := map[string]string{
+		"view": strOrEmpty(view),
+		"name": strOrEmpty(name),
+		"text": strOrEmpty(text),
+	}
+	var res []ibclient.RecordTXT
+	err := conn.GetObject(ibclient.NewEmptyRecordTXT(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	return strOrEmpty(rec.Text) == strOrEmpty(text), nil
+	return len(res) > 0, nil
 }
 
 // deleteTXTRecordResolving404 issues the WAPI delete and, on a 404
@@ -490,7 +503,7 @@ func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, te
 // natural-key search still finds a live record, deleting is refused
 // because ownership of that record cannot be verified from the search
 // alone (see the staleref package doc for the full rationale).
-func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, text *string) error {
+func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, view, name, text *string) error {
 	delErr := deleteTXTRecord(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -498,7 +511,7 @@ func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, vi
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteTXTRecord)
 	}
-	found, searchErr := txtRecordExistsByNaturalKey(objMgr, view, name, text)
+	found, searchErr := txtRecordExistsByNaturalKey(conn, view, name, text)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteTXTRecord)
 	}

@@ -31,6 +31,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -247,15 +248,23 @@ func (m *mockWapiServer) handler() http.Handler {
 		writeJSON(w, http.StatusOK, ref)
 	})
 
-	// Search endpoint (GetTXTRecord): a GET with no _ref path segment,
-	// filtered by view/name query params. Registered as an exact
-	// literal path so Go's ServeMux prefers it over the {ref...}
-	// wildcard below for requests to precisely "record:txt" (real
-	// _refs always carry additional path segments).
+	// Search endpoint: a GET with no _ref path segment, filtered by
+	// view/name/text query params. Used both by the SDK's GetTXTRecord
+	// (view+name only) and by txtRecordExistsByNaturalKey's server-side
+	// filtered search (view+name+text) issued directly through the raw
+	// connector. Registered as an exact literal path so Go's ServeMux
+	// prefers it over the {ref...} wildcard below for requests to
+	// precisely "record:txt" (real _refs always carry additional path
+	// segments). Filtering server-side (like the real WAPI, which
+	// live-verified supports an exact filter on text) is what makes
+	// txtRecordExistsByNaturalKey's match-count answer meaningful in
+	// these tests, instead of a client-side comparison hiding an
+	// ordering bug.
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:txt", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		view := q.Get("view")
 		name := q.Get("name")
+		text := q.Get("text")
 
 		m.mu.Lock()
 		var matches []ibclient.RecordTXT
@@ -264,6 +273,9 @@ func (m *mockWapiServer) handler() http.Handler {
 				continue
 			}
 			if name != "" && (rec.Name == nil || *rec.Name != name) {
+				continue
+			}
+			if text != "" && (rec.Text == nil || *rec.Text != text) {
 				continue
 			}
 			matches = append(matches, *rec)
@@ -390,16 +402,18 @@ func fixedStatusHandler(status int) http.Handler {
 	})
 }
 
-// newTestObjectManager builds an ibclient.IBObjectManager pointed at the
-// given httptest.Server via plain HTTP (no TLS needed — the WapiRequestBuilder
-// only switches to HTTPS when hostCfg.Scheme != "http").
-func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectManager {
+// newTestObjectManager builds an identity.ManagerAndConnector pointed at
+// the given httptest.Server via plain HTTP (no TLS needed — the
+// WapiRequestBuilder only switches to HTTPS when hostCfg.Scheme !=
+// "http"). Callers that only need the high-level ObjectManager can use
+// .Manager; txtRecordExistsByNaturalKey additionally needs .Connector.
+func newTestObjectManager(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	objMgr, err := newObjectManagerWithScheme(&nioCredentials{
+	mgrConn, err := newObjectManagerWithScheme(&nioCredentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
@@ -407,7 +421,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectM
 	if err != nil {
 		t.Fatalf("cannot build test object manager: %v", err)
 	}
-	return objMgr
+	return mgrConn
 }
 
 // ── cluster: Observe ────────────────────────────────────────────────────
@@ -427,7 +441,8 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:      ibclient.EA{"env": "prod"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.TTL = uint32Ptr(300)
@@ -460,7 +475,8 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/does-not-exist:host.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -481,7 +497,8 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())        // simulate NameAsExternalName initializer
 
@@ -498,7 +515,8 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -510,7 +528,8 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -535,7 +554,8 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	// (nil), so zoneFromName leaves Zone at "" too.
 	ref := m.seed(&ibclient.RecordTXT{})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -583,7 +603,8 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -604,7 +625,8 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "")
 
 	_, err := e.Create(context.Background(), cr)
@@ -630,7 +652,8 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 		View: stringPtr("original-view"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	// Mutate the immutable view field in spec — this must NOT affect
 	// ResourceUpToDate, since view is excluded from isUpToDate (the SDK's
@@ -661,7 +684,8 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment: stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -688,7 +712,8 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -715,7 +740,8 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	ref := "record:txt/test1:host.example.com/default"
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -748,7 +774,8 @@ func TestClusterUpdateCapturesNewRefOnRename(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	cr.Spec.ForProvider.Text = stringPtr("v=spf1 include:example.com -all")
 
@@ -774,7 +801,8 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordTXT{Name: stringPtr("host.example.com"), View: stringPtr("default")})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -794,7 +822,8 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/does-not-exist:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -809,7 +838,8 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/test1:host.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -838,7 +868,8 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -865,7 +896,8 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -892,7 +924,8 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -931,7 +964,8 @@ func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -960,7 +994,8 @@ func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T)
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
 
 	obs, err := e.Observe(context.Background(), cr)
@@ -969,6 +1004,89 @@ func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T)
 	}
 	if obs.ResourceExists {
 		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey seeds
+// BOTH the CR's own object (matching the full (view, name, text) tuple)
+// AND a sibling sharing only the loose (view, name) tuple. This is the
+// case an own-object-only test and a sibling-only test cannot see: if
+// txtRecordExistsByNaturalKey ever regresses to a client-side comparison
+// against a single element from an ambiguous list response (the shape
+// this ticket fixed), Go's random map iteration order in the mock server
+// would make this test flaky/failing roughly half the time, catching the
+// exact defect a fixed answer from either single-object test would miss.
+// The refusal must fire deterministically regardless of which object the
+// backend happens to enumerate first.
+func TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("v=spf1 -all"),
+		View: stringPtr("default"),
+	})
+	siblingRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("v=spf1 -all"),
+		View: stringPtr("default"),
+	})
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterTXTRecord("my-txtrecord", "record:txt/stale-ref:host.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
 	}
 }
 
@@ -1057,7 +1175,8 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		Ea:      ibclient.EA{"env": "prod"},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.TTL = uint32Ptr(300)
@@ -1087,7 +1206,8 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1103,7 +1223,8 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1120,7 +1241,8 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1132,7 +1254,8 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1147,7 +1270,8 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordTXT{})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1177,7 +1301,8 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1198,7 +1323,8 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1227,7 +1353,8 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Comment: stringPtr("old comment"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1250,7 +1377,8 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	ref := "record:txt/test1:host.example.com/default"
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -1276,7 +1404,8 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordTXT{Name: stringPtr("host.example.com"), View: stringPtr("default")})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1296,7 +1425,8 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1308,7 +1438,8 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/test1:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1334,7 +1465,8 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 		View: stringPtr("default"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1361,7 +1493,8 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1383,7 +1516,8 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 		View: stringPtr("default"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1416,7 +1550,8 @@ func TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1445,7 +1580,8 @@ func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing
 		View: stringPtr("default"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
 
 	obs, err := e.Observe(context.Background(), cr)
@@ -1454,6 +1590,85 @@ func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing
 	}
 	if obs.ResourceExists {
 		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey — see
+// that test's doc for why seeding both the own object and a sibling
+// together (not each alone) is the case that actually exercises
+// txtRecordExistsByNaturalKey's server-side match-count answer instead
+// of a client-side first-match comparison.
+func TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("v=spf1 -all"),
+		View: stringPtr("default"),
+	})
+	siblingRef := m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the Observe()-side companion of
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("v=spf1 -all"),
+		View: stringPtr("default"),
+	})
+	m.seed(&ibclient.RecordTXT{
+		Name: stringPtr("host.example.com"),
+		Text: stringPtr("value-two-SIBLING-not-ours"),
+		View: stringPtr("default"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedTXTRecord("default", "my-txtrecord", "record:txt/stale-ref:host.example.com/default", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
 	}
 }
 
@@ -1698,7 +1913,8 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 		View: stringPtr("observed-view"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterTXTRecord("my-txtrecord", ref)
 	cr.Spec.ForProvider.Name = stringPtr("host.example.com")
 	cr.Spec.ForProvider.Text = stringPtr("v=spf1 -all")
@@ -1947,12 +2163,15 @@ func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
 		t.Run(name, func(t *testing.T) {
 			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
-			objMgr, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
+			mgrConn, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
 			if err != nil {
 				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
 			}
-			if objMgr == nil {
+			if mgrConn.Manager == nil {
 				t.Fatal("newObjectManagerWithScheme: expected non-nil object manager")
+			}
+			if mgrConn.Connector == nil {
+				t.Fatal("newObjectManagerWithScheme: expected non-nil connector")
 			}
 		})
 	}

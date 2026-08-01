@@ -999,6 +999,66 @@ func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T)
 	}
 }
 
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey seeds
+// BOTH the CR's own object (matching the full (name, view, nameserver)
+// tuple) AND a sibling sharing only the loose (name, view) tuple, to
+// prove nsRecordExistsByNaturalKey's server-side filtered search
+// resolves the own object correctly even when an ambiguous sibling is
+// also present — not just when each is seeded alone.
+func TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	siblingRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1527,6 +1587,63 @@ func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing
 	}
 	if obs.ResourceExists {
 		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	siblingRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the Observe()-side companion of
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
 	}
 }
 
