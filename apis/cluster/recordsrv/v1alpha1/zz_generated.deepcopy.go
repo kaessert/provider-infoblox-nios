@@ -99,7 +99,7 @@ func (in *SRVRecordAwsRte53RecordInfo) DeepCopyInto(out *SRVRecordAwsRte53Record
 	}
 	if in.Weight != nil {
 		in, out := &in.Weight, &out.Weight
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 }
@@ -236,7 +236,7 @@ func (in *SRVRecordMsAdUserData) DeepCopyInto(out *SRVRecordMsAdUserData) {
 	*out = *in
 	if in.ActiveUsersCount != nil {
 		in, out := &in.ActiveUsersCount, &out.ActiveUsersCount
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 }
@@ -266,17 +266,17 @@ func (in *SRVRecordObservation) DeepCopyInto(out *SRVRecordObservation) {
 	}
 	if in.Priority != nil {
 		in, out := &in.Priority, &out.Priority
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Weight != nil {
 		in, out := &in.Weight, &out.Weight
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Port != nil {
 		in, out := &in.Port, &out.Port
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Comment != nil {
@@ -408,17 +408,17 @@ func (in *SRVRecordParameters) DeepCopyInto(out *SRVRecordParameters) {
 	}
 	if in.Priority != nil {
 		in, out := &in.Priority, &out.Priority
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Weight != nil {
 		in, out := &in.Weight, &out.Weight
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Port != nil {
 		in, out := &in.Port, &out.Port
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Comment != nil {

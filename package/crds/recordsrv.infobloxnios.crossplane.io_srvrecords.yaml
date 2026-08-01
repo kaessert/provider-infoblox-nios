@@ -94,12 +94,12 @@ spec:
                   port:
                     description: TCP/UDP port (0-65535) on the target host. Changing
                       this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                   priority:
                     description: Priority of the record (0-65535) — lower values are
                       preferred. Changing this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                   target:
                     description: Target host in FQDN format. Changing this changes
@@ -130,7 +130,7 @@ spec:
                   weight:
                     description: Relative weight (0-65535) for records with the same
                       priority. Changing this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                 required:
                 - name
@@ -283,7 +283,7 @@ spec:
                         description: Value that determines the portion of traffic
                           for this record in weighted routing. The range is from 0
                           to 255.
-                        format: int64
+                        format: int32
                         type: integer
                     type: object
                   cloudInfo:
@@ -388,7 +388,7 @@ spec:
                     properties:
                       activeUsersCount:
                         description: The number of active users.
-                        format: int64
+                        format: int32
                         type: integer
                     type: object
                   name:
@@ -398,12 +398,12 @@ spec:
                   port:
                     description: TCP/UDP port (0-65535) on the target host. Changing
                       this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                   priority:
                     description: Priority of the record (0-65535) — lower values are
                       preferred. Changing this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                   reclaimable:
                     description: Whether the record is reclaimable (DNS discovery
@@ -445,7 +445,7 @@ spec:
                   weight:
                     description: Relative weight (0-65535) for records with the same
                       priority. Changing this changes the record's _ref.
-                    format: int64
+                    format: int32
                     type: integer
                   zone:
                     description: Zone in which the record resides, e.g. "zone.com".

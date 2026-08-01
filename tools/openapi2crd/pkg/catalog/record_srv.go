@@ -36,6 +36,17 @@ package catalog
 // No cross-resource references: SRVRecord is not listed as a reference
 // source in the blueprint's cross-resource reference map, and no other
 // cataloged resource references it either.
+//
+// Numeric type audit: `priority`, `weight`, and `port` mirror the SDK's
+// `*uint32` fields (32-bit unsigned integer format per the WAPI docs, range
+// 0-65535) and use goTypeUint32. The nested `awsRte53RecordInfo.weight`
+// (SDK: `Awsrte53recordinfo.Weight uint32`, range 0-255) and
+// `msAdUserData.activeUsersCount` (SDK: `MsserverAduserData.ActiveUsersCount
+// uint32`) are likewise uint32. The two remaining goTypeInt64 fields,
+// `creationTime` and `lastQueried`, are deliberately left as int64: the SDK
+// types both as `*UnixTime`, a wrapper around `time.Time` that
+// (un)marshals as a signed Unix epoch-seconds integer, not a 32-bit
+// unsigned quantity — int64 is the correct mapping.
 func srvRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "SRVRecord",
@@ -63,7 +74,7 @@ func srvRecord() ResourceDescriptor {
 			{
 				Name:        "Priority",
 				JSONName:    "priority",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Required:    true,
 				Description: "Priority of the record (0-65535) — lower values are preferred. Changing this changes the record's _ref.",
@@ -71,7 +82,7 @@ func srvRecord() ResourceDescriptor {
 			{
 				Name:        "Weight",
 				JSONName:    "weight",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Required:    true,
 				Description: "Relative weight (0-65535) for records with the same priority. Changing this changes the record's _ref.",
@@ -79,7 +90,7 @@ func srvRecord() ResourceDescriptor {
 			{
 				Name:        "Port",
 				JSONName:    "port",
-				GoType:      goTypeInt64,
+				GoType:      goTypeUint32,
 				Scope:       FieldScopeBoth,
 				Required:    true,
 				Description: "TCP/UDP port (0-65535) on the target host. Changing this changes the record's _ref.",
@@ -246,7 +257,7 @@ func srvRecord() ResourceDescriptor {
 					{Name: "Region", JSONName: "region", GoType: goTypeString, Description: "Amazon EC2 region where this resource record resides for latency routing."},
 					{Name: "SetIdentifier", JSONName: "setIdentifier", GoType: goTypeString, Description: "An identifier that differentiates records with the same DNS name and type for weighted, latency, geolocation, and failover routing."},
 					{Name: "Type", JSONName: "type", GoType: goTypeString, Description: "Type of Amazon Route 53 resource record."},
-					{Name: "Weight", JSONName: "weight", GoType: goTypeInt64, Description: "Value that determines the portion of traffic for this record in weighted routing. The range is from 0 to 255."},
+					{Name: "Weight", JSONName: "weight", GoType: goTypeUint32, Description: "Value that determines the portion of traffic for this record in weighted routing. The range is from 0 to 255."},
 				},
 			},
 			{
@@ -276,7 +287,7 @@ func srvRecord() ResourceDescriptor {
 				TypeName:    "SRVRecordMsAdUserData",
 				Description: "carries Microsoft Active Directory user information for an MS-managed SRVRecord (mirrors the SDK's MsserverAduserData struct).",
 				Fields: []FieldDef{
-					{Name: "ActiveUsersCount", JSONName: "activeUsersCount", GoType: goTypeInt64, Description: "The number of active users."},
+					{Name: "ActiveUsersCount", JSONName: "activeUsersCount", GoType: goTypeUint32, Description: "The number of active users."},
 				},
 			},
 		},

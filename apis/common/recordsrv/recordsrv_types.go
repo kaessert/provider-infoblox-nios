@@ -33,7 +33,7 @@ type SRVRecordAwsRte53RecordInfo struct {
 	// Type of Amazon Route 53 resource record.
 	Type *string `json:"type,omitempty"`
 	// Value that determines the portion of traffic for this record in weighted routing. The range is from 0 to 255.
-	Weight *int64 `json:"weight,omitempty"`
+	Weight *uint32 `json:"weight,omitempty"`
 }
 
 // SRVRecordCloudInfo carries Cloud API delegation/ownership information for a cloud-managed SRVRecord (mirrors the SDK's GridCloudapiInfo struct).
@@ -69,7 +69,7 @@ type SRVRecordCloudInfoDelegatedMember struct {
 // SRVRecordMsAdUserData carries Microsoft Active Directory user information for an MS-managed SRVRecord (mirrors the SDK's MsserverAduserData struct).
 type SRVRecordMsAdUserData struct {
 	// The number of active users.
-	ActiveUsersCount *int64 `json:"activeUsersCount,omitempty"`
+	ActiveUsersCount *uint32 `json:"activeUsersCount,omitempty"`
 }
 
 // SRVRecordParameters are the configurable fields of a SRVRecord.
@@ -82,13 +82,13 @@ type SRVRecordParameters struct {
 	Target *string `json:"target"`
 	// Priority of the record (0-65535) — lower values are preferred. Changing this changes the record's _ref.
 	// +kubebuilder:validation:Required
-	Priority *int64 `json:"priority"`
+	Priority *uint32 `json:"priority"`
 	// Relative weight (0-65535) for records with the same priority. Changing this changes the record's _ref.
 	// +kubebuilder:validation:Required
-	Weight *int64 `json:"weight"`
+	Weight *uint32 `json:"weight"`
 	// TCP/UDP port (0-65535) on the target host. Changing this changes the record's _ref.
 	// +kubebuilder:validation:Required
-	Port *int64 `json:"port"`
+	Port *uint32 `json:"port"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
 	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
@@ -122,11 +122,11 @@ type SRVRecordObservation struct {
 	// Target host in FQDN format. Changing this changes the record's _ref.
 	Target *string `json:"target,omitempty"` // atProvider
 	// Priority of the record (0-65535) — lower values are preferred. Changing this changes the record's _ref.
-	Priority *int64 `json:"priority,omitempty"` // atProvider
+	Priority *uint32 `json:"priority,omitempty"` // atProvider
 	// Relative weight (0-65535) for records with the same priority. Changing this changes the record's _ref.
-	Weight *int64 `json:"weight,omitempty"` // atProvider
+	Weight *uint32 `json:"weight,omitempty"` // atProvider
 	// TCP/UDP port (0-65535) on the target host. Changing this changes the record's _ref.
-	Port *int64 `json:"port,omitempty"` // atProvider
+	Port *uint32 `json:"port,omitempty"` // atProvider
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
