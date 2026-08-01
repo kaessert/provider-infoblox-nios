@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -76,6 +77,33 @@ func (r *Runner) ClearConditions() error {
 		"--type=merge", "-p", `{"status":{"conditions":[]}}`)
 	if err != nil {
 		return fmt.Errorf("clearing conditions: %w", err)
+	}
+	return nil
+}
+
+// updateTesterNudgeAnnotation is patched onto the resource's metadata by
+// NudgeReconcile to force an immediate reconcile. It is deliberately not
+// under the crossplane.io/ prefix reserved for the runtime's own
+// annotations.
+const updateTesterNudgeAnnotation = "update-tester.crossplane.io/nudge"
+
+// NudgeReconcile patches a private metadata annotation with a unique value
+// to force an immediate controller reconcile.
+//
+// A pure status-subresource patch (ClearConditions) is not sufficient for
+// this: most generated controllers register their watch with
+// resource.DesiredStateChanged(), which only reacts to an annotation,
+// label, or generation (i.e. spec) change — a status-only write is
+// filtered out and never reaches the reconciler. Changing a metadata
+// annotation, by contrast, satisfies that predicate and enqueues a
+// reconcile through the same path a real spec edit would, without
+// touching spec.forProvider (so it cannot itself trigger another
+// Update()).
+func (r *Runner) NudgeReconcile() error {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
+		updateTesterNudgeAnnotation, strconv.FormatInt(time.Now().UnixNano(), 10))
+	if _, err := r.run("patch", r.resourceName, "--type=merge", "-p", patch); err != nil {
+		return fmt.Errorf("nudging reconcile: %w", err)
 	}
 	return nil
 }
@@ -312,7 +340,39 @@ type TestResult struct {
 	Duration time.Duration
 	Error    error
 	SideFx   []FieldChange
+	// UpdateEvidenced records whether the aggregated count of
+	// UpdatedExternalResource/CannotUpdateExternalResource events for this
+	// resource increased between the pre-patch baseline and the post-patch
+	// check. This is a wall-clock-independent proof that the reconciler's
+	// Update() path actually executed — see NotEvidenced for what it means
+	// when this is false but the field value still matched.
+	UpdateEvidenced bool
+	// NotEvidenced marks a test whose observed value matched the target
+	// (Passed would otherwise be true) but for which no update event was
+	// ever recorded. Convergence timing alone cannot tell "updated
+	// promptly, event observed late" apart from "value happened to already
+	// match, Update() never ran" — the event count is the deterministic
+	// signal, so a match without it is downgraded from PASS to this
+	// distinct failure rather than left indistinguishable from a genuine
+	// pass.
+	NotEvidenced bool
+	// SlowObserve marks a PASSing, evidenced field whose total duration met
+	// or exceeded slowObserveThreshold. The runner already forces a second,
+	// independent reconcile after Update() so status.atProvider is refreshed
+	// by a fresh Observe rather than depending on the provider's background
+	// poll tick — so this should be rare. When it does happen, it reflects
+	// a genuine backend propagation delay rather than an ambiguous result:
+	// UpdateEvidenced is already true, so the slow duration is reported as
+	// a labelled variant of PASS, not a reason to doubt the verdict.
+	SlowObserve bool
 }
+
+// slowObserveThreshold is the duration above which a passing, evidenced
+// field test is annotated SlowObserve instead of being reported as a plain,
+// fast PASS. Chosen as half of the provider's default 60s poll interval —
+// comfortably above the couple of seconds a forced reconcile normally takes,
+// while still well under a full poll cycle.
+const slowObserveThreshold = 30 * time.Second
 
 // RunTests executes all update tests from the manifest and returns results.
 func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
@@ -337,7 +397,7 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 		}
 
 		var result TestResult
-		result, snapshot = r.runFieldTest(t, snapshot)
+		result, snapshot = r.runFieldTest(t, snapshot, m.Kind, m.Name)
 		results = append(results, result)
 	}
 
@@ -345,11 +405,15 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 }
 
 // runFieldTest executes a single (non-skipped) update test: it patches the
-// field, waits for the controller to reconcile, polls status.atProvider for
-// the expected value, and runs the differential assertion against the prior
-// snapshot. It returns the test result and the snapshot to use for the next
-// test (unchanged from the input snapshot if the test aborted early).
-func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte) {
+// field, waits for the controller to reconcile, forces a second independent
+// reconcile so status.atProvider reflects a fresh Observe rather than a
+// stale one, polls status.atProvider for the expected value, checks for
+// positive event evidence that Update() actually ran, and runs the
+// differential assertion against the prior snapshot. kind and name identify
+// the resource for the event-evidence lookup. It returns the test result and
+// the snapshot to use for the next test (unchanged from the input snapshot
+// if the test aborted early).
+func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte, kind, name string) (TestResult, []byte) {
 	start := time.Now()
 	result := TestResult{Field: t.Field}
 
@@ -382,27 +446,15 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte
 		return result, snapshot
 	}
 
-	// Patch FIRST — changes spec.forProvider, increments generation.
-	if err := r.Patch(t.Field, t.Value); err != nil {
-		result.Error = err
-		result.Duration = time.Since(start)
-		return result, snapshot
-	}
+	// Evidence baseline: count update-related events BEFORE patching, so a
+	// later delta proves whether Update() executed — a signal that does not
+	// depend on wall-clock convergence timing. A failure here does not abort
+	// the field test (the value-based assertions below are still useful);
+	// it only disables the evidence check for this field. See
+	// countUpdateEvents for the zero-guard on aggregated event counts.
+	eventsBefore, eventsBeforeErr := r.countUpdateEvents(kind, name)
 
-	// Clear status conditions AFTER patching. This forces WaitReady
-	// to block until the controller reconciles. The controller will
-	// see the new spec (from the patch above) when it re-establishes
-	// the conditions. Doing it in this order eliminates a race where
-	// the controller could restore Ready with the OLD spec if we
-	// cleared before patching.
-	if err := r.ClearConditions(); err != nil {
-		result.Error = err
-		result.Duration = time.Since(start)
-		return result, snapshot
-	}
-
-	// Wait for Ready — blocks until controller reconciles with new spec
-	if err := r.WaitReady(); err != nil {
+	if err := r.applyPatchAndReconcile(t); err != nil {
 		result.Error = err
 		result.Duration = time.Since(start)
 		return result, snapshot
@@ -417,6 +469,17 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte
 	result.Actual = actual
 	result.Passed = jsonEqual(expectedVal, actual)
 	result.Duration = time.Since(start)
+
+	// Evidence check: did the aggregated update-event count actually grow?
+	// A failure to count (e.g. RBAC denies listing events) leaves checked
+	// false without downgrading the result — the evidence check could not
+	// run either way, which is different from having run and come back
+	// empty.
+	r.applyEvidenceCheck(&result, kind, name, t.Field, eventsBefore, eventsBeforeErr)
+
+	if result.Passed && result.Duration >= slowObserveThreshold {
+		result.SlowObserve = true
+	}
 
 	// Differential assertion
 	newSnapshot, err := r.Snapshot()
@@ -439,6 +502,102 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte
 	result.SideFx = changes
 
 	return result, newSnapshot
+}
+
+// applyPatchAndReconcile patches the target field, then drives the
+// controller through two independent reconciles. The first is the reconcile
+// in which Update() actually runs — but its own Observe() ran BEFORE
+// Update(), so status.atProvider is still stale when it completes. The
+// second is forced purely to obtain a fresh Observe of the now-updated
+// external resource, so atProvider does not depend on the provider's
+// background poll tick to refresh (which can be a full poll interval away).
+// The second reconcile is triggered by NudgeReconcile rather than a repeat
+// of ClearConditions: most generated controllers watch with
+// resource.DesiredStateChanged(), which reacts only to an annotation,
+// label, or generation (spec) change, so a status-only patch on its own
+// would be filtered out and never reach the reconciler — leaving the
+// "second reconcile" waiting on the same background poll tick this is
+// meant to avoid.
+func (r *Runner) applyPatchAndReconcile(t UpdateTest) error {
+	if err := r.Patch(t.Field, t.Value); err != nil {
+		return err
+	}
+	if err := r.reconcileOnce(); err != nil {
+		return err
+	}
+	return r.nudgeAndReconcile()
+}
+
+// reconcileOnce clears status conditions and waits for Ready, so the caller
+// can block on the NEXT reconcile's outcome rather than the stale
+// conditions already present. Clearing conditions does not by itself
+// trigger that next reconcile — see NudgeReconcile and
+// applyPatchAndReconcile for what does.
+func (r *Runner) reconcileOnce() error {
+	if err := r.ClearConditions(); err != nil {
+		return err
+	}
+	return r.WaitReady()
+}
+
+// nudgeAndReconcile clears status conditions BEFORE issuing the nudge, the
+// reverse order from reconcileOnce. NudgeReconcile's annotation patch can
+// trigger a reconcile that completes (Observe + status write) within
+// milliseconds — often faster than this process can issue its own next
+// kubectl call. Clearing conditions after the nudge would then have a real
+// chance of wiping the fresh Ready condition the nudge just produced,
+// forcing WaitReady to fall back on the provider's background poll tick —
+// exactly the failure mode this second reconcile exists to avoid. Clearing
+// first guarantees the clear has already landed before anything can set a
+// new condition, so nothing after it can re-clear a fresh result.
+func (r *Runner) nudgeAndReconcile() error {
+	if err := r.ClearConditions(); err != nil {
+		return err
+	}
+	if err := r.NudgeReconcile(); err != nil {
+		return err
+	}
+	return r.WaitReady()
+}
+
+// applyEvidenceCheck runs the event-based update-evidence check and updates
+// result in place: it always sets UpdateEvidenced, downgrades a value-match
+// PASS to NotEvidenced when the aggregated event count never grew (a value
+// match without an event is not proof Update() ran — see evidenceOutcome),
+// and records a counting error without overwriting one already present.
+func (r *Runner) applyEvidenceCheck(result *TestResult, kind, name, field string, eventsBefore int, eventsBeforeErr error) {
+	checked, evidenced, err := r.evidenceOutcome(kind, name, eventsBefore, eventsBeforeErr)
+	result.UpdateEvidenced = evidenced
+	if err != nil && result.Error == nil {
+		result.Error = err
+	}
+	if !checked || !result.Passed || evidenced {
+		return
+	}
+	result.Passed = false
+	result.NotEvidenced = true
+	if result.Error == nil {
+		result.Error = fmt.Errorf("update not evidenced: no %s/%s event recorded for %s",
+			eventReasonUpdated, eventReasonCannotUpdate, field)
+	}
+}
+
+// evidenceOutcome counts update-related events for (kind, name) and reports
+// whether the aggregated count grew relative to eventsBefore — proof that
+// Update() executed, independent of wall-clock convergence timing. checked
+// is false when the count could not be established (the pre-patch baseline
+// errored, or the post-patch recount errored); in that case evidenced is
+// meaningless and err explains what went wrong, but the caller should not
+// treat the absence of a count as absence of an update.
+func (r *Runner) evidenceOutcome(kind, name string, eventsBefore int, eventsBeforeErr error) (checked, evidenced bool, err error) {
+	if eventsBeforeErr != nil {
+		return false, false, fmt.Errorf("counting update events before patch: %w", eventsBeforeErr)
+	}
+	eventsAfter, afterErr := r.countUpdateEvents(kind, name)
+	if afterErr != nil {
+		return false, false, fmt.Errorf("counting update events after patch: %w", afterErr)
+	}
+	return true, eventsAfter > eventsBefore, nil
 }
 
 // pollField polls status.atProvider for the given field until it matches

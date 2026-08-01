@@ -3,6 +3,29 @@
 // post-create convergence checks against a live cluster to validate the
 // Update() reconciler path.
 //
+// Update-path proof: each `run` field test forces a second, independent
+// reconcile after the one that calls Update(), so status.atProvider is
+// refreshed by a genuine post-update Observe instead of depending on the
+// provider's background poll tick. The second reconcile is triggered by
+// patching a private metadata annotation (NudgeReconcile) rather than by
+// repeating the status-conditions clear used to drive the first one: most
+// generated controllers watch with resource.DesiredStateChanged(), which
+// only reacts to an annotation, label, or generation (spec) change, so a
+// status-only patch alone would be filtered out and never reach the
+// reconciler. It also counts the aggregated UpdatedExternalResource /
+// CannotUpdateExternalResource events for the resource before and after the
+// patch — a field whose value matches the target but whose event count
+// never grew is reported as NOT-EVIDENCED, not PASS, because a value match
+// without an event is not proof Update() ran. A field that still takes
+// poll-interval-scale time to converge despite all of this (result.Duration
+// >= slowObserveThreshold) is annotated "slow-observe" rather than left
+// looking like an ordinary fast PASS — this should only happen when the
+// backend itself is slow to propagate the change, since the forced second
+// reconcile removes the timing race that used to produce it. If a
+// slow-observe result appears alongside a low update-event count, treat it
+// as a real signal and check the controller logs for repeated Update calls
+// rather than assuming it is a benign propagation delay.
+//
 // Usage:
 //
 //	update-tester run <manifest.yaml> [--timeout 120]
@@ -102,11 +125,11 @@ func cmdRun(args []string) error {
 		return err
 	}
 
-	passed, failed, noop := printResults(results)
+	passed, failed, noop, notEvidenced := printResults(results)
 
 	total := passed + failed
-	fmt.Printf("%s: %d/%d tested, %d/%d skipped, %d no-op\n",
-		verdict(failed == 0), passed, total, skipped, len(m.Tests), noop)
+	fmt.Printf("%s: %d/%d tested, %d/%d skipped, %d no-op, %d not-evidenced\n",
+		verdict(failed == 0), passed, total, skipped, len(m.Tests), noop, notEvidenced)
 
 	if failed > 0 {
 		os.Exit(1)
@@ -115,10 +138,13 @@ func cmdRun(args []string) error {
 }
 
 // printResults prints one line per test result (plus any side effects) and
-// returns the passed/failed counts, plus the no-op count (a subset of
-// failed, reported separately so a stale test value is easy to spot in the
-// summary line without being confused with a genuine PASS or SKIP).
-func printResults(results []TestResult) (passed, failed, noop int) {
+// returns the passed/failed counts, plus the no-op and not-evidenced counts
+// (both subsets of failed, reported separately so each distinct failure mode
+// is easy to spot in the summary line without being confused with a genuine
+// PASS or SKIP). A PASS whose field converged at or above slowObserveThreshold
+// is annotated "slow-observe" inline — it is still a PASS backed by positive
+// update-event evidence, not a reason for a reviewer to suspect the result.
+func printResults(results []TestResult) (passed, failed, noop, notEvidenced int) {
 	var hasSideFx bool
 	for _, r := range results {
 		switch {
@@ -129,9 +155,17 @@ func printResults(results []TestResult) (passed, failed, noop int) {
 			fmt.Printf("  ⦸ %s: NO-OP (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
 			failed++
 			noop++
+		case r.NotEvidenced:
+			fmt.Printf("  ⚡ %s: NOT-EVIDENCED (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
+			failed++
+			notEvidenced++
 		case r.Error != nil:
 			fmt.Printf("  ✗ %s: ERROR (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
 			failed++
+		case r.Passed && r.SlowObserve:
+			fmt.Printf("  ✓ %s: %q → %q (%s, slow-observe)\n",
+				r.Field, r.Expected, r.Actual, fmtDuration(r.Duration))
+			passed++
 		case r.Passed:
 			fmt.Printf("  ✓ %s: %q → %q (%s)\n",
 				r.Field, r.Expected, r.Actual, fmtDuration(r.Duration))
@@ -152,7 +186,7 @@ func printResults(results []TestResult) (passed, failed, noop int) {
 		fmt.Println("  Differential: all non-target fields stable ✓")
 		fmt.Println()
 	}
-	return passed, failed, noop
+	return passed, failed, noop, notEvidenced
 }
 
 // printSideEffects prints the fields that changed unexpectedly alongside a
