@@ -38,6 +38,15 @@
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
+//
+// DTCPool is wired to the UID-in-EA object-identity ladder (see the
+// recorda/ARecord controller, the pilot resource, and the
+// internal/clients/identity package doc for the full rationale). It
+// resolves through a package-local newEmptyDtcPool constructor instead
+// of the SDK's own ibclient.NewEmptyDtcPool — see that function's doc for
+// why: NewEmptyDtcPool's default return-fields list includes
+// auto_consolidated_monitors, which 400s on this deployment's WAPI
+// schema (see the package doc above).
 package dtcpool
 
 import (
@@ -59,28 +68,37 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcpool/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcpool/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveDTCPool      = "cannot observe DTCPool"
-	errCreateDTCPool       = "cannot create DTCPool"
-	errUpdateDTCPool       = "cannot update DTCPool"
-	errDeleteDTCPool       = "cannot delete DTCPool"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveDTCPool            = "cannot observe DTCPool"
+	errCreateDTCPool             = "cannot create DTCPool"
+	errUpdateDTCPool             = "cannot update DTCPool"
+	errDeleteDTCPool             = "cannot delete DTCPool"
+	errEmptyUID                  = "cannot stamp DTCPool identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// See recorda's doc for why this fallback only matters to unit tests.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -670,7 +688,7 @@ func collectionFieldsUpToDate(servers []serverLink, monitors []poolMonitor, lbDy
 	if !dynRatioEqual(lbDynamicRatioAlternate, dynRatioFromSDK(rec.LbDynamicRatioAlternate)) {
 		return false
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -798,7 +816,7 @@ func lateInitExtAttrs(field *map[string]string, observed ibclient.EA) bool {
 	if len(*field) != 0 {
 		return false
 	}
-	fromRec := extAttrsFromEA(observed)
+	fromRec := extAttrsFromEA(identity.Strip(observed))
 	if len(fromRec) == 0 {
 		return false
 	}
@@ -937,9 +955,17 @@ func buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment *string, s
 
 // createDtcPool issues the WAPI create call via the low-level IBConnector
 // — see the package doc comment for why the ObjectManager wrapper cannot
-// be used as-is for this resource's servers/monitors fields.
-func createDtcPool(conn ibclient.IBConnector, name, lbPreferredMethod, lbAlternateMethod, comment *string, servers []serverLink, availability *string, quorum *uint32, lbPreferredTopology *string, lbDynamicRatioPreferred *dynRatio, lbAlternateTopology *string, lbDynamicRatioAlternate *dynRatio, monitors []poolMonitor, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.DtcPool, error) {
+// be used as-is for this resource's servers/monitors fields. Stamps the
+// owning managed resource's uid into the object's extensible attributes
+// in the same request that creates it (identity.Stamp) — there is no
+// follow-up call, so there is no window in which the object exists
+// without its identity stamp.
+func createDtcPool(conn ibclient.IBConnector, name, lbPreferredMethod, lbAlternateMethod, comment *string, servers []serverLink, availability *string, quorum *uint32, lbPreferredTopology *string, lbDynamicRatioPreferred *dynRatio, lbAlternateTopology *string, lbDynamicRatioAlternate *dynRatio, monitors []poolMonitor, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.DtcPool, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	pool := buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment, servers, availability, quorum, lbPreferredTopology, lbDynamicRatioPreferred, lbAlternateTopology, lbDynamicRatioAlternate, monitors, disable, ttl, useTTL, extAttrs)
+	pool.Ea = identity.Stamp(pool.Ea, uid)
 	ref, err := conn.CreateObject(pool)
 	if err != nil {
 		return nil, err
@@ -951,8 +977,14 @@ func createDtcPool(conn ibclient.IBConnector, name, lbPreferredMethod, lbAlterna
 // updateDtcPool issues the WAPI update call. All fields are mutable —
 // there are no known immutable fields for DTCPool — so every field is
 // echoed on every update (this API uses PUT full-replace semantics).
-func updateDtcPool(conn ibclient.IBConnector, ref string, name, lbPreferredMethod, lbAlternateMethod, comment *string, servers []serverLink, availability *string, quorum *uint32, lbPreferredTopology *string, lbDynamicRatioPreferred *dynRatio, lbAlternateTopology *string, lbDynamicRatioAlternate *dynRatio, monitors []poolMonitor, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.DtcPool, error) {
+// Every call re-asserts the identity stamp since a WAPI PUT carrying
+// extattrs replaces the whole map rather than merging it.
+func updateDtcPool(conn ibclient.IBConnector, ref string, name, lbPreferredMethod, lbAlternateMethod, comment *string, servers []serverLink, availability *string, quorum *uint32, lbPreferredTopology *string, lbDynamicRatioPreferred *dynRatio, lbAlternateTopology *string, lbDynamicRatioAlternate *dynRatio, monitors []poolMonitor, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.DtcPool, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	pool := buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment, servers, availability, quorum, lbPreferredTopology, lbDynamicRatioPreferred, lbAlternateTopology, lbDynamicRatioAlternate, monitors, disable, ttl, useTTL, extAttrs)
+	pool.Ea = identity.Stamp(pool.Ea, uid)
 	pool.Ref = ref
 	refRes, err := conn.UpdateObject(pool, ref)
 	if err != nil {
@@ -978,13 +1010,26 @@ var dtcPoolReturnFields = []string{
 	"extattrs", "health", "lb_alternate_method", "lb_alternate_topology", "lb_dynamic_ratio_alternate", "lb_preferred_topology", "quorum", "ttl", "use_ttl", "availability",
 }
 
+// newEmptyDtcPool constructs a fresh, empty *ibclient.DtcPool with the
+// trimmed return-fields list (dtcPoolReturnFields) instead of the SDK's
+// own NewEmptyDtcPool, which unconditionally requests
+// auto_consolidated_monitors and 400s on this deployment's WAPI schema
+// (see the package doc comment). Used as the newEmpty constructor for
+// identity.Resolve — every GET the identity ladder issues (the ref
+// fetch, and the identity-EA search) inherits this trimmed field list,
+// exactly like getDtcPoolByRef.
+func newEmptyDtcPool() *ibclient.DtcPool {
+	pool := &ibclient.DtcPool{}
+	pool.SetReturnFields(append(pool.ReturnFields(), dtcPoolReturnFields...))
+	return pool
+}
+
 // getDtcPoolByRef issues the WAPI GET call for the DTCPool identified by
 // ref via the low-level IBConnector — see dtcPoolReturnFields and the
 // package doc comment for why the ObjectManager's GetDtcPoolByRef
 // convenience method cannot be used as-is for this deployment.
 func getDtcPoolByRef(conn ibclient.IBConnector, ref string) (*ibclient.DtcPool, error) {
-	pool := &ibclient.DtcPool{}
-	pool.SetReturnFields(append(pool.ReturnFields(), dtcPoolReturnFields...))
+	pool := newEmptyDtcPool()
 	err := conn.GetObject(pool, ref, ibclient.NewQueryParams(false, nil), &pool)
 	return pool, err
 }
@@ -995,56 +1040,125 @@ func deleteDtcPool(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// dtcPoolExistsByNaturalKey reports whether a live DTCPool still exists
-// under the CR's own (name) identity — the same field WAPI uses to
-// compute the _ref. Used by Delete() when the stored _ref 404s: a hit
-// here means the _ref is merely stale, not that the object is gone. This
-// cannot use the ObjectManager's GetDtcPool(name) convenience method —
-// like GetDtcPoolByRef, it builds its request object via NewEmptyDtcPool,
-// which unconditionally requests `auto_consolidated_monitors` and 400s on
-// this deployment's WAPI schema (see the package doc comment and
-// dtcPoolReturnFields) — so this issues the same trimmed-return-fields
-// search through the low-level IBConnector instead.
-func dtcPoolExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
-	if strOrEmpty(name) == "" {
-		return false, nil
-	}
-	var res []ibclient.DtcPool
-	pool := &ibclient.DtcPool{}
-	pool.SetReturnFields(append(pool.ReturnFields(), dtcPoolReturnFields...))
-	err := conn.GetObject(pool, "", ibclient.NewQueryParams(false, map[string]string{"name": strOrEmpty(name)}), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteDtcPoolResolving404 issues the WAPI delete and, on a 404 against
-// the stored _ref, resolves the object's natural key before concluding it
-// is gone. A 404 on a derived handle is evidence the handle rotated, not
-// evidence the object was removed: if the natural-key search still finds
-// a live object, deleting is refused because ownership of that object
-// cannot be verified from the search alone (see the staleref package doc
-// for the full rationale).
-func deleteDtcPoolResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name *string) error {
-	delErr := deleteDtcPool(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. See recorda's ensureIdentityPrerequisite for the full
+// rationale.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteDTCPool)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := dtcPoolExistsByNaturalKey(conn, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteDTCPool)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveDtcPoolIdentity resolves the DTCPool identified by ref/uid
+// through the shared UID-in-EA ladder.
+func resolveDtcPoolIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.DtcPool, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.DtcPool](ctx, conn, newEmptyDtcPool, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// DTCPool through the identity ladder during Observe.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.DtcPool
+	obs          observedDTCPool
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeDtcPool runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeDtcPool(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, disable **bool, availability **string, quorum, ttl **uint32, useTTL **bool, extAttrs *map[string]string, lbAlternateMethod, lbPreferredTopology, lbAlternateTopology **string, lbDynamicRatioPreferred, lbDynamicRatioAlternate **dynRatio) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveDtcPoolIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromDtcPool(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, disable, availability, quorum, ttl, useTTL, extAttrs, lbAlternateMethod, lbPreferredTopology, lbAlternateTopology, lbDynamicRatioPreferred, lbDynamicRatioAlternate, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteDtcPoolIdentity issues the WAPI delete for the DTCPool this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity doc for the full ownership-verification rules.
+func deleteDtcPoolIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveDtcPoolIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteDTCPool)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteDtcPool(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteDTCPool)
+	default:
+		return errors.New("identity: unresolved DTCPool outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
