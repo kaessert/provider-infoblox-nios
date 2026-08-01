@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
@@ -101,81 +102,84 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr.Manager, conn: objMgr.Connector, endpoint: creds.Host}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.SRVRecord].
 type namespacedExternal struct {
-	kube   k8sclient.Client
-	objMgr ibclient.IBObjectManager
+	kube     k8sclient.Client
+	objMgr   ibclient.IBObjectManager
+	conn     ibclient.IBConnector
+	prober   *identity.Prober
+	endpoint string
 }
 
-// Observe fetches the SRVRecord from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the SRVRecord through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, refChanged, err := fetchSRVRecord(e.objMgr, externalID, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.Target, cr.Spec.ForProvider.Port)
+	res, err := observeSRVRecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
+		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveSRVRecord)
 	}
-	if rec == nil {
+	if !res.exists {
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
-	// The stored _ref 404d and fetchSRVRecord re-located the record by
-	// its natural key (view/name/target/port) instead — see
-	// clusterExternal.Observe for the full rationale.
-	if refChanged && rec.Ref != "" {
-		meta.SetExternalName(cr, rec.Ref)
-		externalID = rec.Ref
-	}
 
-	o := observeFromRecordSRV(externalID, rec)
 	cr.Status.AtProvider = namespacedv1alpha1.SRVRecordObservation{
-		Name:     o.Name,
-		Target:   o.Target,
-		Priority: o.Priority,
-		Weight:   o.Weight,
-		Port:     o.Port,
-		Comment:  o.Comment,
-		TTL:      o.TTL,
-		UseTTL:   o.UseTTL,
-		ExtAttrs: o.ExtAttrs,
-		View:     o.View,
-		Ref:      o.Ref,
-		Zone:     o.Zone,
+		Name:     res.obs.Name,
+		Target:   res.obs.Target,
+		Priority: res.obs.Priority,
+		Weight:   res.obs.Weight,
+		Port:     res.obs.Port,
+		Comment:  res.obs.Comment,
+		TTL:      res.obs.TTL,
+		UseTTL:   res.obs.UseTTL,
+		ExtAttrs: res.obs.ExtAttrs,
+		View:     res.obs.View,
+		Ref:      res.obs.Ref,
+		Zone:     res.obs.Zone,
 	}
-	// Explicit assignment (rather than folding ID into the struct literal
-	// above) keeps the server-assigned identifier's provenance obvious at
-	// the call site — it always mirrors the external name used to fetch
-	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new SRVRecord and records the server-assigned _ref
-// as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalCreation, error) {
+// Create provisions a new SRVRecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createSRVRecord(e.objMgr, strOrEmpty(p.View), p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createSRVRecord(e.objMgr, strOrEmpty(p.View), p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateSRVRecord)
 	}
@@ -188,12 +192,13 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.SR
 // sent — see updateSRVRecord. Because name/target/priority/weight/port
 // are all _ref-mutating, the external-name annotation is refreshed
 // whenever the WAPI response returns a different _ref than the one used
-// to issue the request (UNSTABLE _ref).
+// to issue the request (UNSTABLE _ref). Every call re-asserts the
+// identity stamp.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateSRVRecord(e.objMgr, externalID, p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := updateSRVRecord(e.objMgr, externalID, p.Name, p.Target, p.Comment, p.Priority, p.Weight, p.Port, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateSRVRecord)
 	}
@@ -209,15 +214,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the SRVRecord. A 404 on the stored _ref is not treated
-// as already-deleted by itself — see deleteSRVRecordResolving404 —
-// because the _ref is a derived handle that rotates whenever an identity
-// field changes, and a stale handle 404s exactly like a genuinely
-// deleted object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalDelete, error) {
+// Delete removes the SRVRecord, resolving through the shared identity
+// ladder first.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.SRVRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteSRVRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.Target, p.Port); err != nil {
+	if err := deleteSRVRecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
