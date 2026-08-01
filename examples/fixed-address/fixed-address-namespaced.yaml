@@ -28,7 +28,7 @@ metadata:
       - field: name
         value: "updated-fixed-address-ns"
       - field: matchClient
-        value: "MAC_ADDRESS"
+        skip: "this example sets a real, non-zero mac so Create lands in matchClient=MAC_ADDRESS (the all-zero mac is a Grid trap that silently produces matchClient=RESERVED instead — see fixed-address.yaml's mac field doc); live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
       - field: disable
         value: true
       - field: useOptions
@@ -42,13 +42,13 @@ metadata:
       - field: network
         skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv4addr"
       - field: agentCircuitId
-        skip: "only relevant when matchClient=CIRCUIT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=CIRCUIT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: agentRemoteId
-        skip: "only relevant when matchClient=REMOTE_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=REMOTE_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: dhcpClientIdentifier
-        skip: "only relevant when matchClient=CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant when matchClient=CLIENT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: clientIdentifierPrependZero
-        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID; not exercised by this example's MAC_ADDRESS test"
+        skip: "only relevant alongside dhcpClientIdentifier/CLIENT_ID, a mode this example never enters (see the matchClient skip rationale above)"
       - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: options
@@ -56,7 +56,7 @@ metadata:
 spec:
   forProvider:
     ipv4addr: 10.0.0.51
-    mac: "00:00:00:00:00:00"
+    mac: "00:00:00:00:0a:02"
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

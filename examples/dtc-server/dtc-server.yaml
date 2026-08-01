@@ -31,9 +31,14 @@ metadata:
     # no known immutable fields (all Create parameters are also accepted
     # by Update). useSniHostname is tested before sniHostname (same
     # use-flag-then-value ordering as the DNS record TTL fields — see
-    # record-cname.yaml). name is also mutable, but renaming a DTC Server
-    # may change its WAPI _ref; that rotation is already exercised by
-    # controller unit tests, so it is skipped here. monitors is a list
+    # record-cname.yaml). autoCreateHostRecord targets false rather than
+    # true: a live scratch-object check against the Grid showed a freshly
+    # created DTC Server already returns auto_create_host_record=true (a
+    # Grid-level default), so a true target never actually exercised
+    # Update() — false is the value that genuinely differs. name is also
+    # mutable, but renaming a DTC Server may change its WAPI _ref; that
+    # rotation is already exercised by controller unit tests, so it is
+    # skipped here. monitors is a list
     # field, not a scalar update-test target. extattrs is an optional map
     # field skipped for low update-test value.
     crossplane.io/update-test: |
@@ -44,7 +49,7 @@ metadata:
       - field: disable
         value: true
       - field: autoCreateHostRecord
-        value: true
+        value: false
       - field: useSniHostname
         value: true
       - field: sniHostname
