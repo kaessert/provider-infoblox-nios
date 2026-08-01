@@ -19,8 +19,8 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-fixedaddress.infobloxnios.m.crossplane.io"
@@ -107,13 +107,28 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		objMgr:   objMgr.Manager,
+		conn:     objMgr.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.FixedAddress].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveFixedAddressIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
 // namespacedToFields converts a namespacedv1alpha1.FixedAddressParameters
@@ -208,37 +223,25 @@ func namespacedCloudInfoFromShared(ci *sharedCloudInfo) *namespacedv1alpha1.Fixe
 	return out
 }
 
-// Observe fetches the FixedAddress from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the FixedAddress through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalObservation, error) {
+	f := namespacedToFields(cr.Spec.ForProvider)
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	fa, err := e.objMgr.GetFixedAddressByRef(externalID)
+	res, err := observeFixedAddress(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), f.isIPv6())
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := fixedAddressExistsByNaturalKey(e.objMgr, namespacedToFields(cr.Spec.ForProvider))
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveFixedAddress)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveFixedAddress)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	fa := res.fa
 
-	o := observeFromFixedAddress(externalID, fa)
+	o := res.obs
 	cr.Status.AtProvider = namespacedv1alpha1.FixedAddressObservation{
 		IPv4Addr:                    o.IPv4Addr,
 		IPv6Addr:                    o.IPv6Addr,
@@ -267,27 +270,43 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.F
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	f := namespacedToFields(*p)
+	f = namespacedToFields(*p)
 	lateInit := lateInitialize(&f, fa)
 	namespacedApplyFields(p, f)
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+		lateInit = true
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(f, fa) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(f, fa),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
 // Create provisions a new FixedAddress via AllocateIP (NON-STANDARD — no
-// CreateFixedAddress method exists) and records the server-assigned _ref
-// as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalCreation, error) {
+// CreateFixedAddress method exists), stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	f := namespacedToFields(cr.Spec.ForProvider)
-	fa, err := createFixedAddress(e.objMgr, f)
+	fa, err := createFixedAddress(e.objMgr, f, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateFixedAddress)
 	}
@@ -299,12 +318,13 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Fi
 // Update patches the mutable FixedAddress fields. Because ipv4addr is
 // _ref-mutating (UNSTABLE external name, ADR-IN-0004), the external-name
 // annotation is refreshed whenever the WAPI response returns a different
-// _ref than the one used to issue the request.
+// _ref than the one used to issue the request. Every call re-asserts the
+// identity stamp.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
 	f := namespacedToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
-	fa, err := updateFixedAddress(e.objMgr, externalID, f, cr.Status.AtProvider.MatchClient)
+	fa, err := updateFixedAddress(e.objMgr, externalID, f, cr.Status.AtProvider.MatchClient, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateFixedAddress)
 	}
@@ -317,14 +337,12 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the FixedAddress. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteFixedAddressResolving404 — because the _ref is a derived handle
-// that rotates whenever an identity field changes, and a stale handle
-// 404s exactly like a genuinely deleted object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalDelete, error) {
+// Delete removes the FixedAddress, resolving through the shared identity
+// ladder first.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalDelete, error) {
+	f := namespacedToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
-	if err := deleteFixedAddressResolving404(e.objMgr, externalID, namespacedToFields(cr.Spec.ForProvider)); err != nil {
+	if err := deleteFixedAddressIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID()), f.isIPv6()); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
