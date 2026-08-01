@@ -1123,6 +1123,44 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	}
 }
 
+// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// Observe()-side half of the same defect: crossplane-runtime's managed
+// reconciler calls Observe() before Delete() on the deletion path, and if
+// Observe() reports ResourceExists:false the reconciler never calls
+// Delete() at all — it just clears the finalizer, orphaning the Grid
+// object. A 404 against the stored _ref must not be silently treated as
+// "does not exist" when a natural-key search finds a live object under
+// the CR's own identity fields.
+func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv6Addr: stringPtr("2001:db8::1"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterAAAARecord("my-aaaarecord", "record:aaaa/stale-ref:host.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1510,6 +1548,39 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
+// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordAAAA{
+		Name:     stringPtr("host.example.com"),
+		View:     "default",
+		Ipv6Addr: stringPtr("2001:db8::1"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedAAAARecord("default", "my-aaaarecord", "record:aaaa/stale-ref:host.example.com/default", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
 	}
 }
 

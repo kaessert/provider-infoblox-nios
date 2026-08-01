@@ -21,6 +21,7 @@ import (
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-zonedelegated.infobloxnios.crossplane.io"
@@ -132,6 +133,17 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.ZoneDel
 	rec, err := e.objMgr.GetZoneDelegatedByRef(externalID)
 	if err != nil {
 		if isNotFound(err) {
+			// The stored external-name is a derived handle: it rotates
+			// whenever an identity-composing field changes, so a 404 here
+			// is not proof the object is gone (see the staleref package
+			// doc). Resolve the natural key before concluding that.
+			found, searchErr := zoneDelegatedExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Fqdn)
+			if searchErr != nil {
+				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneDelegated)
+			}
+			if found {
+				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
+			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneDelegated)

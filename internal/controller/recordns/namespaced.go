@@ -20,6 +20,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-recordns.infobloxnios.m.crossplane.io"
@@ -175,6 +176,17 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 	rec, err := e.objMgr.GetNSRecordByRef(externalID)
 	if err != nil {
 		if isNotFound(err) {
+			// The stored external-name is a derived handle: it rotates
+			// whenever an identity-composing field changes, so a 404 here
+			// is not proof the object is gone (see the staleref package
+			// doc). Resolve the natural key before concluding that.
+			found, searchErr := nsRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View)
+			if searchErr != nil {
+				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNSRecord)
+			}
+			if found {
+				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
+			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveNSRecord)
@@ -250,8 +262,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the NSRecord. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the NSRecord. A 404 on the stored _ref is not treated
+// as already-deleted by itself — see deleteNSRecordResolving404 — because
+// the _ref is a derived handle that rotates whenever an identity field
+// changes, and a stale handle 404s exactly like a genuinely deleted
+// object.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
