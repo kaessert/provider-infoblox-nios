@@ -523,7 +523,11 @@ type zoneAuthFields struct {
 	// zone inherits the Grid's SOA timer settings and the appliance
 	// echoes back the Grid's values instead of what was submitted — see
 	// isUpToDate and lateInitializeScalars for how the five SOA fields
-	// are gated on it.
+	// are gated on it. The wire builders (buildZoneAuthForCreate/
+	// buildZoneAuthForUpdate) never submit this field's literal value
+	// as-is — see effectiveUseGridZoneTimer, which forces it on whenever
+	// any of the five gated fields is set, so a user setting one of them
+	// without also setting this flag is never silently ineffective.
 	UseGridZoneTimer    *bool
 	NsGroup             *string
 	ExtAttrs            map[string]string
@@ -557,6 +561,39 @@ func fieldsFromZoneAuth(rec *ibclient.ZoneAuth) zoneAuthFields {
 	}
 }
 
+// anySOATimerFieldSet reports whether any of the five use_grid_zone_timer
+// -gated SOA fields is set on f. WAPI only honors soa_default_ttl,
+// soa_expire, soa_negative_ttl, soa_refresh, and soa_retry when
+// use_grid_zone_timer is on — a zone with the flag off inherits the
+// Grid's timer values and ignores whatever was submitted for these five
+// fields. Setting any one of them therefore only has an effect once the
+// flag is (or is forced) on.
+func anySOATimerFieldSet(f zoneAuthFields) bool {
+	return f.SoaDefaultTTL != nil ||
+		f.SoaExpire != nil ||
+		f.SoaNegativeTTL != nil ||
+		f.SoaRefresh != nil ||
+		f.SoaRetry != nil
+}
+
+// effectiveUseGridZoneTimer resolves the use_grid_zone_timer value that
+// will actually be submitted to WAPI for f: forced on whenever any of the
+// five gated SOA fields is set (regardless of what f.UseGridZoneTimer
+// itself says — explicit false or unset), otherwise f.UseGridZoneTimer
+// unchanged. buildZoneAuthForCreate/buildZoneAuthForUpdate use this to
+// build the wire payload; isUpToDate and lateInitializeScalars use it too
+// so their gating always matches what was (or will be) sent on the wire —
+// comparing against the raw, unforced field would otherwise detect
+// permanent drift (or silently ignore real drift) the moment a user set a
+// soa_* field without also setting use_grid_zone_timer: true.
+func effectiveUseGridZoneTimer(f zoneAuthFields) *bool {
+	if anySOATimerFieldSet(f) {
+		t := true
+		return &t
+	}
+	return f.UseGridZoneTimer
+}
+
 // isUpToDate compares the desired ZoneAuth fields against the observed
 // ones. FQDN, View, and ZoneFormat are immutable (WAPI rejects a PUT that
 // changes any of them — see the package doc comment and the blueprint's
@@ -574,26 +611,32 @@ func isUpToDate(desired, observed zoneAuthFields) bool {
 	// SOA timer fields — compare it first and unconditionally, so a
 	// true -> false (or false -> true) transition on the flag itself is
 	// always detected as drift regardless of what the SOA fields say.
-	if boolOrFalse(desired.UseGridZoneTimer) != boolOrFalse(observed.UseGridZoneTimer) {
+	// desiredUseGridZoneTimer is the *effective* value (see
+	// effectiveUseGridZoneTimer): once any soa_* field is set, the wire
+	// builders force the flag on, so comparing against the raw,
+	// unforced field would either loop forever (if desired explicitly
+	// says false) or mask real drift (if desired never sets the flag).
+	desiredUseGridZoneTimer := effectiveUseGridZoneTimer(desired)
+	if boolOrFalse(desiredUseGridZoneTimer) != boolOrFalse(observed.UseGridZoneTimer) {
 		return false
 	}
 	// When the flag is off, the zone inherits the Grid's timer settings
 	// and the appliance echoes back the Grid's values rather than what
 	// was submitted — the two sides are unrelated quantities, so only
 	// compare the SOA fields when the flag is (or will become) on.
-	if !gatedUint32Equal(desired.UseGridZoneTimer, desired.SoaDefaultTTL, observed.SoaDefaultTTL) {
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaDefaultTTL, observed.SoaDefaultTTL) {
 		return false
 	}
-	if !gatedUint32Equal(desired.UseGridZoneTimer, desired.SoaExpire, observed.SoaExpire) {
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaExpire, observed.SoaExpire) {
 		return false
 	}
-	if !gatedUint32Equal(desired.UseGridZoneTimer, desired.SoaNegativeTTL, observed.SoaNegativeTTL) {
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaNegativeTTL, observed.SoaNegativeTTL) {
 		return false
 	}
-	if !gatedUint32Equal(desired.UseGridZoneTimer, desired.SoaRefresh, observed.SoaRefresh) {
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRefresh, observed.SoaRefresh) {
 		return false
 	}
-	if !gatedUint32Equal(desired.UseGridZoneTimer, desired.SoaRetry, observed.SoaRetry) {
+	if !gatedUint32Equal(desiredUseGridZoneTimer, desired.SoaRetry, observed.SoaRetry) {
 		return false
 	}
 	if strOrEmpty(desired.NsGroup) != strOrEmpty(observed.NsGroup) {
@@ -650,11 +693,21 @@ func lateInitializeScalars(desired, observed zoneAuthFields) (zoneAuthFields, bo
 	// spec while the flag is off would silently claim a setting the
 	// zone does not actually have in effect.
 	changed = lateInitPtr(&desired.UseGridZoneTimer, observed.UseGridZoneTimer) || changed
-	changed = gatedLateInitPtr(desired.UseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaDefaultTTL, observed.SoaDefaultTTL) || changed
-	changed = gatedLateInitPtr(desired.UseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaExpire, observed.SoaExpire) || changed
-	changed = gatedLateInitPtr(desired.UseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaNegativeTTL, observed.SoaNegativeTTL) || changed
-	changed = gatedLateInitPtr(desired.UseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRefresh, observed.SoaRefresh) || changed
-	changed = gatedLateInitPtr(desired.UseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRetry, observed.SoaRetry) || changed
+	// effectiveDesiredUseGridZoneTimer is captured once, before the
+	// gated back-fills below run, using the same wire-forcing semantics
+	// as effectiveUseGridZoneTimer/the wire builders: if the caller has
+	// already set any of the five gated SOA fields, the flag is treated
+	// as on regardless of its own literal value (nil or explicit
+	// false), matching what buildZoneAuthForCreate/buildZoneAuthForUpdate
+	// will actually submit. gatedLateInitPtr still falls back to the
+	// observed flag when neither the flag nor any SOA field is set on
+	// desired (see effectiveUseFlag).
+	effectiveDesiredUseGridZoneTimer := effectiveUseGridZoneTimer(desired)
+	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaDefaultTTL, observed.SoaDefaultTTL) || changed
+	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaExpire, observed.SoaExpire) || changed
+	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaNegativeTTL, observed.SoaNegativeTTL) || changed
+	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRefresh, observed.SoaRefresh) || changed
+	changed = gatedLateInitPtr(effectiveDesiredUseGridZoneTimer, observed.UseGridZoneTimer, &desired.SoaRetry, observed.SoaRetry) || changed
 	changed = lateInitStringPtr(&desired.NsGroup, observed.NsGroup) || changed
 	if len(desired.ExtAttrs) == 0 && len(observed.ExtAttrs) > 0 {
 		desired.ExtAttrs = observed.ExtAttrs
@@ -767,6 +820,14 @@ func newZoneAuthForGet() *ibclient.ZoneAuth {
 // Update, Create includes the identity fields (fqdn, view, zone_format) —
 // they are immutable only in the sense that they cannot be changed by a
 // later PUT, not that they are absent from the initial POST.
+//
+// UseGridZoneTimer is sent via effectiveUseGridZoneTimer rather than
+// f.UseGridZoneTimer directly: if any of the five soa_* fields is set, the
+// flag is forced on regardless of what the caller wrote (or left unset)
+// for it. WAPI silently ignores soa_default_ttl/soa_expire/
+// soa_negative_ttl/soa_refresh/soa_retry while use_grid_zone_timer is off
+// — a zone would otherwise inherit the Grid's timer values with no error
+// and no drift signal, even though the user explicitly configured them.
 func buildZoneAuthForCreate(f zoneAuthFields) *ibclient.ZoneAuth {
 	z := &ibclient.ZoneAuth{
 		Fqdn:                f.FQDN,
@@ -779,7 +840,7 @@ func buildZoneAuthForCreate(f zoneAuthFields) *ibclient.ZoneAuth {
 		SoaNegativeTtl:      f.SoaNegativeTTL,
 		SoaRefresh:          f.SoaRefresh,
 		SoaRetry:            f.SoaRetry,
-		UseGridZoneTimer:    f.UseGridZoneTimer,
+		UseGridZoneTimer:    effectiveUseGridZoneTimer(f),
 		NsGroup:             f.NsGroup,
 		Ea:                  buildEA(f.ExtAttrs),
 		GridPrimary:         memberServerValuesToSDK(f.GridPrimary),
@@ -796,6 +857,9 @@ func buildZoneAuthForCreate(f zoneAuthFields) *ibclient.ZoneAuth {
 // level (view — "Cannot move zones between views") — so this builder
 // intentionally leaves them at their Go zero value, which the SDK's
 // `omitempty` tags then exclude from the marshaled JSON body entirely.
+//
+// UseGridZoneTimer uses effectiveUseGridZoneTimer for the same reason as
+// buildZoneAuthForCreate — see its doc comment.
 func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 	z := &ibclient.ZoneAuth{
 		Comment:             f.Comment,
@@ -805,7 +869,7 @@ func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 		SoaNegativeTtl:      f.SoaNegativeTTL,
 		SoaRefresh:          f.SoaRefresh,
 		SoaRetry:            f.SoaRetry,
-		UseGridZoneTimer:    f.UseGridZoneTimer,
+		UseGridZoneTimer:    effectiveUseGridZoneTimer(f),
 		NsGroup:             f.NsGroup,
 		Ea:                  buildEA(f.ExtAttrs),
 		GridPrimary:         memberServerValuesToSDK(f.GridPrimary),

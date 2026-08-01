@@ -343,12 +343,34 @@ func gridSoaDefaults(useGridZoneTimer *bool) zoneAuthFields {
 	}
 }
 
-// TestIsUpToDateIgnoresSoaMismatchWhenUseGridZoneTimerOff proves every
-// soa_* mismatch is ignored while use_grid_zone_timer is off on both
-// sides, using realistic non-zero Grid defaults on the observed side —
-// this must fail against a naive unconditional uint32OrZero(desired) ==
-// uint32OrZero(observed) comparison.
-func TestIsUpToDateIgnoresSoaMismatchWhenUseGridZoneTimerOff(t *testing.T) {
+// TestIsUpToDateIgnoresSoaMismatchWhenNoSoaFieldsSetAndFlagOff proves
+// every soa_* mismatch is ignored while use_grid_zone_timer is off and
+// desired sets none of the five soa_* fields (nothing for
+// effectiveUseGridZoneTimer to force on) — using realistic non-zero Grid
+// defaults on the observed side. This must fail against a naive
+// unconditional uint32OrZero(desired) == uint32OrZero(observed)
+// comparison.
+func TestIsUpToDateIgnoresSoaMismatchWhenNoSoaFieldsSetAndFlagOff(t *testing.T) {
+	desired := zoneAuthFields{
+		UseGridZoneTimer: boolPtr(false),
+	}
+	observed := gridSoaDefaults(boolPtr(false))
+
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true (use_grid_zone_timer off, no soa_* fields set, nothing to force on), got false")
+	}
+}
+
+// TestIsUpToDateDetectsSoaMismatchEvenWhenUseGridZoneTimerFlagFalse is
+// the fix under test: a user who sets a soa_* field while leaving
+// use_grid_zone_timer unset or explicitly false must still see real
+// drift, because effectiveUseGridZoneTimer forces the flag on for the
+// wire the moment any soa_* field is set — WAPI actually applies (and
+// echoes back) the submitted values in that case rather than silently
+// keeping the zone on the Grid's inherited timer. Before this fix,
+// isUpToDate compared the raw (never-forced) flag and treated this as
+// "off, ignore" — silently dropping the user's spec value forever.
+func TestIsUpToDateDetectsSoaMismatchEvenWhenUseGridZoneTimerFlagFalse(t *testing.T) {
 	desired := zoneAuthFields{
 		SoaDefaultTTL:    uint32Ptr(3600),
 		SoaExpire:        uint32Ptr(1209600),
@@ -359,8 +381,8 @@ func TestIsUpToDateIgnoresSoaMismatchWhenUseGridZoneTimerOff(t *testing.T) {
 	}
 	observed := gridSoaDefaults(boolPtr(false))
 
-	if !isUpToDate(desired, observed) {
-		t.Error("isUpToDate: want true (use_grid_zone_timer off, soa_* fields are Grid-inherited), got false")
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (soa_* fields set forces the effective flag on, and observed still shows the Grid-inherited values/flag-off), got true")
 	}
 }
 
@@ -513,8 +535,16 @@ func TestIsUpToDateFieldMismatches(t *testing.T) {
 			mutate: func(f zoneAuthFields) zoneAuthFields { f.SoaRetry = uint32Ptr(1); return f },
 		},
 		"UseGridZoneTimer": {
-			reason: "UseGridZoneTimer mismatch must be detected even though every SOA field is unchanged.",
-			mutate: func(f zoneAuthFields) zoneAuthFields { f.UseGridZoneTimer = boolPtr(false); return f },
+			reason: "UseGridZoneTimer mismatch must be detected on a pure flag-only transition. The soa_* fields are also cleared here: once any of them is set, effectiveUseGridZoneTimer forces the effective flag on regardless of this field's literal value, so leaving them set would no longer isolate a flag-only transition.",
+			mutate: func(f zoneAuthFields) zoneAuthFields {
+				f.UseGridZoneTimer = boolPtr(false)
+				f.SoaDefaultTTL = nil
+				f.SoaExpire = nil
+				f.SoaNegativeTTL = nil
+				f.SoaRefresh = nil
+				f.SoaRetry = nil
+				return f
+			},
 		},
 		"NsGroup": {
 			reason: "NsGroup mismatch must be detected.",
