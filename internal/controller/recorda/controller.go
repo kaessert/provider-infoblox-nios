@@ -68,23 +68,6 @@ const (
 	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
 
-// identitySearchFailureMarker is the substring internal/clients/identity's
-// Resolve wraps a failed identity-EA search with (its unexported
-// errSearchByUID constant: "identity: cannot search for the object by
-// its stamped identity extensible attribute"). observeARecord and
-// deleteARecordIdentity match on it to fire the reactive prerequisite
-// probe (see those functions) only when resolveARecordIdentity's failure
-// actually came from the search step — never from a ref-GET failure
-// (wrapped with a different message) or one of the ladder's own typed
-// refusals (identity.HandleReuseError, identity.AmbiguousMatchError,
-// returned unwrapped), both of which are unrelated to whether the
-// identity extensible attribute definition exists. This textual
-// coupling mirrors the same-package precedent of matching WAPI error
-// text for classification (see isNotFound's errStatusRe above) since
-// identity.Resolve does not export a typed way to distinguish its
-// failure stages.
-const identitySearchFailureMarker = "cannot search for the object by its stamped identity extensible attribute"
-
 // unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
 // used when an ExternalClient is built without a resolved Grid endpoint.
 // Production code always goes through Connect(), which resolves the
@@ -717,7 +700,7 @@ type observeResult struct {
 // prober/endpoint are the caller's identity-prerequisite-probe cache
 // handle (see ensureIdentityPrerequisite) — used only reactively, and
 // only when the failure is identifiably from the identity-EA search step
-// (identitySearchFailureMarker). See the "Identity resolution" doc above
+// (identity.IsSearchFailure). See the "Identity resolution" doc above
 // this function for why the guard does not run unconditionally, and why
 // it must not fire on every resolution error indiscriminately: doing so
 // would call the probe against servers/scenarios that were never set up
@@ -731,7 +714,7 @@ func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *iden
 
 	rec, outcome, err := resolveARecordIdentity(ctx, conn, ref, uid)
 	if err != nil {
-		if strings.Contains(err.Error(), identitySearchFailureMarker) {
+		if identity.IsSearchFailure(err) {
 			// The identity-EA search itself failed — this is the one
 			// failure mode the missing-EA-definition 400 described above
 			// produces. Probing here, only for this specific cause,
@@ -786,7 +769,7 @@ func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *iden
 // prober/endpoint are the caller's identity-prerequisite-probe cache
 // handle, used the same reactive way observeARecord uses them: only when
 // resolveARecordIdentity's own failure is identifiably from the
-// identity-EA search step (identitySearchFailureMarker), so a delete
+// identity-EA search step (identity.IsSearchFailure), so a delete
 // whose reference still resolves — or whose failure is unrelated to the
 // search — never pays for the extra round-trip or risks poisoning the
 // shared probe cache with an unrelated verdict. A
@@ -796,7 +779,7 @@ func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *iden
 func deleteARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
 	obj, outcome, err := resolveARecordIdentity(ctx, conn, ref, uid)
 	if err != nil {
-		if strings.Contains(err.Error(), identitySearchFailureMarker) {
+		if identity.IsSearchFailure(err) {
 			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
 				return prereqErr
 			}
