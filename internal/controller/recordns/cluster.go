@@ -73,18 +73,22 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.NSRe
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: mgrConn.Manager, conn: mgrConn.Connector}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.NSRecord].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector nsRecordExistsByNaturalKey
+	// searches against directly — it needs visibility into the match
+	// count that objMgr's typed getters hide. See that helper's doc.
+	conn ibclient.IBConnector
 }
 
 // clusterAddressesToShared converts the cluster-scoped NSRecordAddress
@@ -160,7 +164,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.NSRecor
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := nsRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View)
+			found, searchErr := nsRecordExistsByNaturalKey(e.conn, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNSRecord)
 			}
@@ -253,7 +257,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NSReco
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View); err != nil {
+	if err := deleteNSRecordResolving404(e.objMgr, e.conn, externalID, p.Name, p.View, p.Nameserver); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

@@ -33,6 +33,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -240,14 +241,26 @@ func (m *mockWapiServer) handler() http.Handler {
 		q := r.URL.Query()
 		name := q.Get("name")
 		view := q.Get("view")
+		nameserver := q.Get("nameserver")
 
 		m.mu.Lock()
-		var matches []ibclient.RecordNS
+		// Initialized (not nil-declared): a real WAPI search that
+		// matches nothing answers with a literal JSON "[]", never
+		// "null". A nil Go slice marshals to "null", which never
+		// exercises the not-found path the SDK's connector applies to a
+		// literal "[]" body — matching that encoding exactly is what
+		// makes the genuine-absence tests below actually prove
+		// something instead of passing vacuously against a mock the
+		// real API would never produce.
+		matches := []ibclient.RecordNS{}
 		for _, rec := range m.records {
 			if name != "" && rec.Name != name {
 				continue
 			}
 			if view != "" && rec.View != view {
+				continue
+			}
+			if nameserver != "" && (rec.Nameserver == nil || *rec.Nameserver != nameserver) {
 				continue
 			}
 			matches = append(matches, *rec)
@@ -352,16 +365,18 @@ func fixedStatusHandler(status int) http.Handler {
 	})
 }
 
-// newTestObjectManager builds an ibclient.IBObjectManager pointed at the
-// given httptest.Server via plain HTTP (no TLS needed — the WapiRequestBuilder
-// only switches to HTTPS when hostCfg.Scheme != "http").
-func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectManager {
+// newTestObjectManager builds an identity.ManagerAndConnector pointed at
+// the given httptest.Server via plain HTTP (no TLS needed — the
+// WapiRequestBuilder only switches to HTTPS when hostCfg.Scheme !=
+// "http"). Callers that only need the high-level ObjectManager can use
+// .Manager; nsRecordExistsByNaturalKey additionally needs .Connector.
+func newTestObjectManager(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	objMgr, err := newObjectManagerWithScheme(&nioCredentials{
+	mgrConn, err := newObjectManagerWithScheme(&nioCredentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
@@ -369,7 +384,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectM
 	if err != nil {
 		t.Fatalf("cannot build test object manager: %v", err)
 	}
-	return objMgr
+	return mgrConn
 }
 
 // ── cluster: Observe ────────────────────────────────────────────────────
@@ -387,7 +402,8 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Creator:    "SYSTEM",
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -414,12 +430,20 @@ func TestClusterObserveSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterObserveNotFound is the Observe-side genuine-absence proof:
+// a 404 against the stored _ref and a natural-key search that matches
+// nothing (mock has zero records) must resolve as gone, not as an
+// error — this only exercises the mock server's true empty-search
+// response path (a literal JSON "[]") because the mock's initialized,
+// never-nil match slice mirrors what a real empty WAPI search actually
+// returns.
 func TestClusterObserveNotFound(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/does-not-exist:delegated.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -440,7 +464,8 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())      // simulate NameAsExternalName initializer
 
@@ -457,7 +482,8 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/test1:delegated.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -469,7 +495,8 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/test1:delegated.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -489,7 +516,8 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordNS{})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -559,7 +587,8 @@ func TestClusterObserveWithCloudInfo(t *testing.T) {
 		},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 
 	if _, err := e.Observe(context.Background(), cr); err != nil {
@@ -613,7 +642,8 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -634,7 +664,8 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "")
 
 	_, err := e.Create(context.Background(), cr)
@@ -661,7 +692,8 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	// Mutate the immutable name/view fields in spec — this must NOT
 	// affect ResourceUpToDate, since both are excluded from isUpToDate
@@ -692,7 +724,8 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	cr.Spec.ForProvider.Nameserver = stringPtr("ns2.example.com")
 
@@ -720,7 +753,8 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -759,7 +793,8 @@ func TestClusterUpdateRefChangesUpdatesExternalName(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	cr.Spec.ForProvider.Nameserver = stringPtr("ns2.example.com")
 
@@ -783,7 +818,8 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/test1:delegated.example.com/default")
 
 	_, err := e.Update(context.Background(), cr)
@@ -804,7 +840,8 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -824,7 +861,8 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/does-not-exist:delegated.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -843,9 +881,10 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -866,13 +905,18 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 
 // TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
 // companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
+// search that finds nothing, means the object really is gone. This is
+// the genuine-absence proof for Delete(): the mock's search endpoint
+// returns a literal JSON "[]" for zero matches — the same not-found
+// path a real WAPI search actually triggers — so this exercises the
+// mutation this ticket fixes rather than passing vacuously.
 func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -887,7 +931,8 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/test1:delegated.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -912,9 +957,10 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -930,6 +976,132 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces the
+// live-Grid defect this ticket fixes: WAPI accepts two record:ns objects
+// sharing (name, view) with different nameserver values, so a sibling
+// under the loose tuple must not wedge deletion of an MR whose own
+// object was genuinely deleted out-of-band. Before the fix,
+// nsRecordExistsByNaturalKey searched on (name, view) only and found the
+// sibling, incorrectly refusing the delete forever.
+func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	// The sibling shares (name, view) with the CR but carries a
+	// different nameserver — same loose tuple the old helper searched
+	// on, but not the same WAPI identity.
+	siblingRef := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey seeds
+// BOTH the CR's own object (matching the full (name, view, nameserver)
+// tuple) AND a sibling sharing only the loose (name, view) tuple, to
+// prove nsRecordExistsByNaturalKey's server-side filtered search
+// resolves the own object correctly even when an ambiguous sibling is
+// also present — not just when each is seeded alone.
+func TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	siblingRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is the
+// Observe()-side companion of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
 	}
 }
 
@@ -1127,7 +1299,8 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1142,12 +1315,16 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	}
 }
 
+// TestNamespacedObserveNotFound is the namespaced counterpart of
+// TestClusterObserveNotFound — see that test's doc for why the mock's
+// initialized (never-nil) match slice matters here.
 func TestNamespacedObserveNotFound(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/does-not-exist:delegated.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1163,7 +1340,8 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1180,7 +1358,8 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/test1:delegated.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1192,7 +1371,8 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/test1:delegated.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1207,7 +1387,8 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1227,7 +1408,8 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1254,7 +1436,8 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Nameserver = stringPtr("ns2.example.com")
 
@@ -1276,7 +1459,8 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/test1:delegated.example.com/default", "ProviderConfig")
 
 	_, err := e.Update(context.Background(), cr)
@@ -1295,7 +1479,8 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1308,7 +1493,8 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/does-not-exist:delegated.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1323,7 +1509,8 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/test1:delegated.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1343,9 +1530,10 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1372,7 +1560,8 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1388,9 +1577,10 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default"})
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1406,6 +1596,122 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	siblingRef := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+
+	m.mu.Lock()
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !siblingStillExists {
+		t.Error("Delete: the sibling record must survive untouched — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey is the
+// namespaced-scope counterpart of
+// TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey.
+func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		View:       "default",
+		Nameserver: stringPtr("ns2.example.com"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: want nil error when only a sibling with a different nameserver matches the loose (name, view) tuple, got: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("Observe: want ResourceExists=false when the stale ref 404s and only an unrelated sibling matches the loose tuple")
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	siblingRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, ownStillExists := m.records[ownRef]
+	_, siblingStillExists := m.records[siblingRef]
+	m.mu.Unlock()
+	if !ownStillExists {
+		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+	if !siblingStillExists {
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+	}
+}
+
+// TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
+// the Observe()-side companion of
+// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
+func TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
 	}
 }
 
@@ -1791,12 +2097,15 @@ func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
 		t.Run(name, func(t *testing.T) {
 			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
-			objMgr, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
+			mgrConn, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
 			if err != nil {
 				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
 			}
-			if objMgr == nil {
+			if mgrConn.Manager == nil {
 				t.Fatal("newObjectManagerWithScheme: expected non-nil object manager")
+			}
+			if mgrConn.Connector == nil {
+				t.Fatal("newObjectManagerWithScheme: expected non-nil connector")
 			}
 		})
 	}
@@ -1819,11 +2128,11 @@ func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
 	creds := &nioCredentials{Host: u.Hostname(), Username: "test-user", Password: "test-pass"}
 
 	t.Run("VerifyEnabledRejectsSelfSignedCert", func(t *testing.T) {
-		objMgr, err := newObjectManagerWithScheme(creds, true, "https", u.Port())
+		mgrConn, err := newObjectManagerWithScheme(creds, true, "https", u.Port())
 		if err != nil {
 			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
 		}
-		if _, err := objMgr.GetNSRecordByRef("record:ns/does-not-exist"); err == nil {
+		if _, err := mgrConn.Manager.GetNSRecordByRef("record:ns/does-not-exist"); err == nil {
 			t.Fatal("GetNSRecordByRef: expected a TLS certificate verification error with sslVerify=true against a self-signed cert, got nil")
 		} else if lower := strings.ToLower(err.Error()); !strings.Contains(lower, "certificate") && !strings.Contains(lower, "x509") {
 			t.Errorf("GetNSRecordByRef: expected a TLS certificate verification error, got: %v", err)
@@ -1831,11 +2140,11 @@ func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
 	})
 
 	t.Run("VerifyDisabledAcceptsSelfSignedCert", func(t *testing.T) {
-		objMgr, err := newObjectManagerWithScheme(creds, false, "https", u.Port())
+		mgrConn, err := newObjectManagerWithScheme(creds, false, "https", u.Port())
 		if err != nil {
 			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
 		}
-		_, err = objMgr.GetNSRecordByRef("record:ns/does-not-exist")
+		_, err = mgrConn.Manager.GetNSRecordByRef("record:ns/does-not-exist")
 		if err == nil {
 			t.Fatal("GetNSRecordByRef: expected a not-found error for a nonexistent record, got nil")
 		}

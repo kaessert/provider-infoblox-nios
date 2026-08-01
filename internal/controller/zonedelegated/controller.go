@@ -566,27 +566,33 @@ func deleteZoneDelegated(objMgr ibclient.IBObjectManager, ref string) error {
 }
 
 // zoneDelegatedExistsByNaturalKey reports whether a live ZoneDelegated
-// still exists under the CR's own fqdn — the same field WAPI uses to
-// compute the _ref. Used by Delete() when the stored _ref 404s: a hit
-// here means the _ref is merely stale, not that the object is gone.
-// GetZoneDelegated does not surface a not-found condition as an error —
-// per its own implementation it returns (nil, nil) both when fqdn is
-// empty and when the search finds no match — so absence is detected by
-// checking the returned pointer rather than by classifying an error. When
-// fqdn is empty there is no way to re-discover the object, so the search
-// is skipped (found=false) rather than treated as an error.
-func zoneDelegatedExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn *string) (bool, error) {
-	if strOrEmpty(fqdn) == "" {
+// still exists under the CR's own (fqdn, view) identity — the same tuple
+// WAPI uses to compute the _ref (the zone_delegated _ref encodes the
+// view, e.g. zone_delegated/...:example.com/Internal). Used by Delete()
+// when the stored _ref 404s: a hit here means the _ref is merely stale,
+// not that the object is gone. GetZoneDelegated only accepts fqdn and
+// truncates to the first match, which is not safe once a same-fqdn zone
+// can live in another view — so this uses GetZoneDelegatedByFilters (a
+// list call) with both fields as server-side query filters instead. Both
+// fields are required non-empty; when either is missing there is no way
+// to re-discover the object, so the search is skipped (found=false)
+// rather than treated as an error.
+func zoneDelegatedExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn, view *string) (bool, error) {
+	if strOrEmpty(fqdn) == "" || strOrEmpty(view) == "" {
 		return false, nil
 	}
-	rec, err := objMgr.GetZoneDelegated(strOrEmpty(fqdn))
+	sf := map[string]string{
+		"fqdn": strOrEmpty(fqdn),
+		"view": strOrEmpty(view),
+	}
+	res, err := objMgr.GetZoneDelegatedByFilters(ibclient.NewQueryParams(false, sf))
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	return rec != nil, nil
+	return len(res) > 0, nil
 }
 
 // deleteZoneDelegatedResolving404 issues the WAPI delete and, on a 404
@@ -596,7 +602,7 @@ func zoneDelegatedExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn *stri
 // still finds a live zone, deleting is refused because ownership of that
 // zone cannot be verified from the search alone (see the staleref package
 // doc for the full rationale).
-func deleteZoneDelegatedResolving404(objMgr ibclient.IBObjectManager, ref string, fqdn *string) error {
+func deleteZoneDelegatedResolving404(objMgr ibclient.IBObjectManager, ref string, fqdn, view *string) error {
 	delErr := deleteZoneDelegated(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -604,7 +610,7 @@ func deleteZoneDelegatedResolving404(objMgr ibclient.IBObjectManager, ref string
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteZoneDelegated)
 	}
-	found, searchErr := zoneDelegatedExistsByNaturalKey(objMgr, fqdn)
+	found, searchErr := zoneDelegatedExistsByNaturalKey(objMgr, fqdn, view)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteZoneDelegated)
 	}
