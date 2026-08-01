@@ -18,8 +18,8 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-dtcserver.infobloxnios.m.crossplane.io"
@@ -101,46 +101,42 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, clients: clients}, nil
+	return &namespacedExternal{kube: c.kube, clients: clients, endpoint: creds.Host}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.DTCServer].
 type namespacedExternal struct {
 	kube    k8sclient.Client
 	clients *dtcServerClients
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
-// Observe fetches the DTCServer from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the DTCServer through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
+	monitors := monitorsFromNamespaced(p.Monitors)
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.clients.objMgr.GetDtcServerByRef(externalID)
+	res, err := observeDtcServer(ctx, e.clients.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.Disable, &p.AutoCreateHostRecord, &p.UseSniHostname, &p.SniHostname, &monitors, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := dtcServerExistsByNaturalKey(e.clients.objMgr, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.Host)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveDTCServer)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveDTCServer)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromDtcServer(externalID, rec)
+	rec := res.rec
+	o := res.obs
 	cr.Status.AtProvider = namespacedv1alpha1.DTCServerObservation{
 		Name:                 o.Name,
 		Host:                 o.Host,
@@ -160,29 +156,42 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.D
 	cr.Status.AtProvider.Monitors = monitorPairsToNamespaced(o.Monitors)
 	cr.Status.AtProvider.Health = healthToNamespaced(o.Health)
 
-	p := &cr.Spec.ForProvider
-	monitors := monitorsFromNamespaced(p.Monitors)
-	lateInit := lateInitialize(&p.Comment, &p.Disable, &p.AutoCreateHostRecord, &p.UseSniHostname, &p.SniHostname, &monitors, &p.ExtAttrs, rec)
-	if lateInit {
+	if res.lateInit {
 		p.Monitors = monitorPairsToNamespaced(monitors)
+	}
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
 	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.Host, p.Comment, p.Disable, p.AutoCreateHostRecord, p.UseSniHostname, p.SniHostname, monitors, p.ExtAttrs, rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.Host, p.Comment, p.Disable, p.AutoCreateHostRecord, p.UseSniHostname, p.SniHostname, monitors, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new DTCServer and records the server-assigned _ref
-// as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalCreation, error) {
+// Create provisions a new DTCServer, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createDtcServer(e.clients.conn, p.Name, p.Host, p.Comment, p.AutoCreateHostRecord, p.Disable, monitorsFromNamespaced(p.Monitors), p.SniHostname, p.UseSniHostname, p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.clients.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createDtcServer(e.clients.conn, p.Name, p.Host, p.Comment, p.AutoCreateHostRecord, p.Disable, monitorsFromNamespaced(p.Monitors), p.SniHostname, p.UseSniHostname, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateDTCServer)
 	}
@@ -192,12 +201,14 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.DT
 }
 
 // Update replaces the mutable DTCServer fields. There are no known
-// immutable fields for DTCServer, so every field is echoed.
+// immutable fields for DTCServer, so every field is echoed. Every call
+// re-asserts the identity stamp since a WAPI PUT carrying extattrs
+// replaces the whole map rather than merging it.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateDtcServer(e.clients.conn, externalID, p.Name, p.Host, p.Comment, p.AutoCreateHostRecord, p.Disable, monitorsFromNamespaced(p.Monitors), p.SniHostname, p.UseSniHostname, p.ExtAttrs)
+	rec, err := updateDtcServer(e.clients.conn, externalID, p.Name, p.Host, p.Comment, p.AutoCreateHostRecord, p.Disable, monitorsFromNamespaced(p.Monitors), p.SniHostname, p.UseSniHostname, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateDTCServer)
 	}
@@ -212,15 +223,13 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the DTCServer. A 404 on the stored _ref is not treated
-// as already-deleted by itself — see deleteDtcServerResolving404 —
-// because the _ref is a derived handle that rotates whenever an identity
-// field changes, and a stale handle 404s exactly like a genuinely
-// deleted object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalDelete, error) {
+// Delete removes the DTCServer, resolving through the shared identity
+// ladder first — see deleteDtcServerIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteDtcServerResolving404(e.clients.objMgr, externalID, p.Name, p.Host); err != nil {
+	if err := deleteDtcServerIdentity(ctx, e.clients.conn, e.clients.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
