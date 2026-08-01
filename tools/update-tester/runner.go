@@ -19,6 +19,11 @@ type Runner struct {
 	resourceName string // cached: e.g. "arecord.recorda.infobloxnios.crossplane.io/example-arecord"
 	namespace    string
 	timeout      string
+
+	// execFunc, when set, overrides the kubectl invocation used by exec().
+	// Tests inject a fake here to simulate kubectl output without a live
+	// cluster; production code leaves it nil and exec() shells out for real.
+	execFunc func(args []string) (string, error)
 }
 
 // NewRunner creates a Runner for the given manifest file.
@@ -134,17 +139,46 @@ func (r *Runner) ReadField(field string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return stringifyFieldValue(val, field)
+}
+
+// readCurrentValue returns a field's value as it stands BEFORE a patch is
+// applied, for no-op detection. It prefers spec.forProvider — the value the
+// upcoming merge patch would overwrite, which is what determines whether the
+// patch actually changes anything the controller can react to. If the field
+// is absent from spec (e.g. it is only ever populated from the live backend),
+// it falls back to the resource's live observed state (status.atProvider).
+func (r *Runner) readCurrentValue(field string) (string, error) {
+	obj, err := r.GetObject()
+	if err != nil {
+		return "", fmt.Errorf("reading resource for no-op check on %s: %w", field, err)
+	}
+
+	val, err := navigateSpecForProvider(obj, field)
+	if err == nil && val != nil {
+		return stringifyFieldValue(val, field)
+	}
+
+	// Fall back to the live observed state.
+	atVal, atErr := navigateAtProvider(obj, field)
+	if atErr != nil {
+		return "", atErr
+	}
+	return stringifyFieldValue(atVal, field)
+}
+
+// stringifyFieldValue converts a decoded-JSON value into the string
+// representation used throughout this package for comparisons: strings are
+// returned unquoted (consistent with kubectl jsonpath behaviour and how YAML
+// annotation values are represented), everything else (numbers, booleans,
+// maps, arrays, and nil) is returned as canonical JSON.
+func stringifyFieldValue(val interface{}, field string) (string, error) {
 	if val == nil {
 		return "", nil
 	}
-
-	// For strings, return unquoted (consistent with kubectl jsonpath behaviour
-	// and how YAML annotation values are represented).
 	if s, ok := val.(string); ok {
 		return s, nil
 	}
-
-	// For numbers (float64 from JSON), booleans, maps, and arrays: return JSON.
 	b, err := json.Marshal(val)
 	if err != nil {
 		return "", fmt.Errorf("marshalling field %s for comparison: %w", field, err)
@@ -152,30 +186,49 @@ func (r *Runner) ReadField(field string) (string, error) {
 	return string(b), nil
 }
 
+// jsonKeyAtProvider is the status subfield holding the last-observed backend
+// state. jsonKeyStatus is the top-level status field. Both are constants
+// (rather than repeated literals) because they are referenced from this
+// file, converge.go, and their tests.
+const (
+	jsonKeyStatus     = "status"
+	jsonKeyAtProvider = "atProvider"
+)
+
 // navigateAtProvider navigates a resource JSON object to
 // status.atProvider.<dot-separated-field> and returns the value found there.
 // Returns nil, nil when any intermediate segment is missing.
 func navigateAtProvider(obj map[string]interface{}, field string) (interface{}, error) {
-	status, ok := obj["status"]
-	if !ok {
-		return nil, nil
-	}
-	statusMap, ok := status.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("status is not a JSON object")
-	}
-	atProvider, ok := statusMap["atProvider"]
-	if !ok {
-		return nil, nil
-	}
-	atProviderMap, ok := atProvider.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("status.atProvider is not a JSON object")
+	return navigateJSONPath(obj, []string{jsonKeyStatus, jsonKeyAtProvider}, field)
+}
+
+// navigateSpecForProvider navigates a resource JSON object to
+// spec.forProvider.<dot-separated-field> and returns the value found there.
+// Returns nil, nil when any intermediate segment is missing.
+func navigateSpecForProvider(obj map[string]interface{}, field string) (interface{}, error) {
+	return navigateJSONPath(obj, []string{"spec", "forProvider"}, field)
+}
+
+// navigateJSONPath descends obj through each key in container (e.g.
+// ["status", "atProvider"]), then further descends through the
+// dot-separated field path under that container. Returns nil, nil when any
+// segment — container or field — is missing, and an error if a
+// non-terminal segment resolves to something other than a JSON object.
+func navigateJSONPath(obj map[string]interface{}, container []string, field string) (interface{}, error) {
+	var curr interface{} = obj
+	for _, key := range container {
+		m, ok := curr.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("%s is not a JSON object", strings.Join(container, "."))
+		}
+		v, exists := m[key]
+		if !exists {
+			return nil, nil
+		}
+		curr = v
 	}
 
-	parts := strings.Split(field, ".")
-	var curr interface{} = atProviderMap
-	for _, part := range parts {
+	for _, part := range strings.Split(field, ".") {
 		m, ok := curr.(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("cannot navigate to %q: parent is not a JSON object", part)
@@ -244,9 +297,15 @@ func formatExpected(val interface{}) string {
 
 // TestResult holds the outcome of a single field update test.
 type TestResult struct {
-	Field    string
-	Skipped  bool
-	SkipMsg  string
+	Field string
+	// Skipped marks a test that was never attempted because the manifest
+	// annotation explicitly opted it out (see SkipMsg for the reason).
+	Skipped bool
+	SkipMsg string
+	// NoOp marks a test whose pre-patch value already equalled the target
+	// value: the patch below could not have exercised the Update() path, so
+	// this is reported as a distinct failure rather than a false PASS.
+	NoOp     bool
 	Passed   bool
 	Expected string
 	Actual   string
@@ -294,6 +353,35 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte
 	start := time.Now()
 	result := TestResult{Field: t.Field}
 
+	// Determine expected value for comparison and display.
+	// Use JSON equality (jsonEqual) to handle complex types (maps, arrays)
+	// where fmt.Sprintf("%v") produces Go-format strings (map[key:val])
+	// that don't match the JSON returned by kubectl.
+	expectedVal := t.Value
+	if t.Expect != nil {
+		expectedVal = t.Expect
+	}
+	expected := formatExpected(expectedVal)
+
+	// No-op detection: read the field's current value BEFORE patching. A
+	// merge patch that repeats the value already in spec.forProvider makes
+	// no change for the API server to persist, so metadata.generation never
+	// bumps and the controller's Update() path is never invoked. Left
+	// undetected, the poll below would simply re-observe the value that was
+	// already there and report a false PASS — indistinguishable from a
+	// controller with no Update() implementation at all. Report this as a
+	// failure instead, distinct from both PASS and SKIP, so the stale test
+	// value gets fixed.
+	if before, err := r.readCurrentValue(t.Field); err == nil && jsonEqual(t.Value, before) {
+		result.NoOp = true
+		result.Expected = expected
+		result.Actual = before
+		result.Error = fmt.Errorf("no-op: %s already equals %s — patch cannot exercise the update path",
+			t.Field, formatExpected(t.Value))
+		result.Duration = time.Since(start)
+		return result, snapshot
+	}
+
 	// Patch FIRST — changes spec.forProvider, increments generation.
 	if err := r.Patch(t.Field, t.Value); err != nil {
 		result.Error = err
@@ -319,16 +407,6 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte) (TestResult, []byte
 		result.Duration = time.Since(start)
 		return result, snapshot
 	}
-
-	// Determine expected value for comparison and display.
-	// Use JSON equality (jsonEqual) to handle complex types (maps, arrays)
-	// where fmt.Sprintf("%v") produces Go-format strings (map[key:val])
-	// that don't match the JSON returned by kubectl.
-	expectedVal := t.Value
-	if t.Expect != nil {
-		expectedVal = t.Expect
-	}
-	expected := formatExpected(expectedVal)
 
 	actual, err := r.pollField(t.Field, expectedVal, start)
 	if err != nil {
@@ -413,8 +491,12 @@ func (r *Runner) runRaw(args ...string) (string, error) {
 	return r.exec(args...)
 }
 
-// exec runs the configured kubectl binary with args and returns stdout.
+// exec runs the configured kubectl binary with args and returns stdout. If
+// execFunc is set (tests only), it is used instead of shelling out.
 func (r *Runner) exec(args ...string) (string, error) {
+	if r.execFunc != nil {
+		return r.execFunc(args)
+	}
 	// #nosec G204 -- r.kubectl is a controlled config value (default
 	// "kubectl", overridable only via the KUBECTL env var), not
 	// attacker-controlled input.

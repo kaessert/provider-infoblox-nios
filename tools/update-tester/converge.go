@@ -291,7 +291,7 @@ func extractGeneration(obj map[string]interface{}) (int64, error) {
 // absent, empty, or none of its entries carry observedGeneration (e.g. the
 // resource has not been reconciled yet).
 func extractObservedGeneration(obj map[string]interface{}) (min int64, found bool) {
-	status, ok := obj["status"].(map[string]interface{})
+	status, ok := obj[jsonKeyStatus].(map[string]interface{})
 	if !ok {
 		return 0, false
 	}
