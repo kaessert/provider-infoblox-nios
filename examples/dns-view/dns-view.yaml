@@ -53,7 +53,11 @@ metadata:
     # when blacklistAction is REDIRECT, blacklistRedirectAddresses;
     # dns64Enabled needs dns64Groups) are skipped, while their override
     # ("use") flags are still exercised since flipping the override alone is
-    # a valid, harmless state. filterAaaa and rootNameServerType are
+    # a valid, harmless state. Confirmed live against a scratch Grid object:
+    # enableFixedRrsetOrderFqdns, enableMatchRecursiveOnly, and the dnssec*
+    # enable flags accept true with their companion lists/keys left empty —
+    # no business-rule dependency, so they stay value-tested.
+    # filterAaaa and rootNameServerType are
     # Grid-specific string enumerations not enforced by the CRD schema, so
     # no safe value can be assumed without a live Grid to validate
     # against — skipped. ddnsPrincipalGroup references a pre-existing Grid
@@ -177,9 +181,9 @@ metadata:
       - field: nxdomainRedirect
         skip: "requires nxdomainRedirectAddresses (skipped below) to be non-empty per WAPI business rules"
       - field: enableBlacklist
-        skip: "requires blacklistRulesets (skipped below) to be non-empty per WAPI business rules, and additionally blacklistRedirectAddresses when blacklistAction is REDIRECT; blacklistAction/blacklistLogQuery/blacklistRedirectTtl remain update-tested since they are settable while the blacklist itself is disabled"
+        skip: "requires blacklistRulesets (skipped below, a reference to a pre-existing Grid Ruleset object) to be non-empty per WAPI business rules, and additionally blacklistRedirectAddresses (also skipped below) when blacklistAction is REDIRECT; blacklistAction/blacklistLogQuery/blacklistRedirectTtl remain update-tested since they are settable while the blacklist itself is disabled"
       - field: dns64Enabled
-        skip: "requires dns64Groups (skipped below) to be non-empty per WAPI business rules (\"DNS64 cannot be enabled unless at least one synthesis group is configured\"); the useDns64 override flag is still exercised"
+        skip: "requires the dns64Groups list (skipped below) to be non-empty per WAPI business rules (\"DNS64 cannot be enabled unless at least one synthesis group is configured\"); the useDns64 override flag is still exercised"
       - field: blacklistRedirectAddresses
         skip: "list field, not a scalar update-test target"
       - field: blacklistRulesets

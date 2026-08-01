@@ -17,6 +17,37 @@
 # Direct invocation for debugging:
 #   MANIFEST=/path/to/manifest.yaml test/hooks/run-update-tester.sh
 #   (When $MANIFEST is set directly it overrides the $0-derived path.)
+#
+# ── Enable-flag / companion-list trap ──────────────────────────────────
+# When authoring a crossplane.io/update-test annotation, watch for boolean
+# "enable"-style fields (e.g. enableBlacklist, dns64Enabled — as opposed to
+# the paired "use<X>" override flags, which are always safe to flip alone)
+# that turn on a feature backed by a list/struct field. Some of these
+# enable flags carry a hidden backend business rule requiring the
+# companion list to already be non-empty — setting the flag true against
+# a minimal example (whose companion list is empty and therefore skipped
+# elsewhere in the same annotation) gets rejected by the API, and because
+# per-field tests apply as cumulative patches, that single rejection can
+# leave the resource in a state where every later field in the same test
+# run also fails to reconcile. This does not show up as a fast, readable
+# error — it wedges the whole per-field run for anyone who happens to
+# trigger that resource's E2E next.
+#
+# The doc comment on the Go struct field is NOT a reliable signal either
+# way: fields with a real hidden requirement and fields without one can
+# both read "Determines if X is enabled or not" with no mention of the
+# dependency. When a resource has this enable-flag/companion-list shape,
+# reason from the target API's own docs first. If the field is still
+# ambiguous, run a quick, isolated probe against a scratch object (create
+# → PUT the candidate field → observe the response → delete) rather than
+# relying on a full E2E cycle to surface the answer — and always clean the
+# scratch object up afterward. If the probe (or the API docs) confirms the
+# enable flag requires non-empty companion data that the example doesn't
+# provide, skip the enable flag with a reason naming the companion field,
+# and keep the paired "use" override flag value-tested (flipping the
+# override alone is always a valid, harmless state). See
+# examples/dns-view/dns-view.yaml for a worked example of this pattern.
+# ─────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
