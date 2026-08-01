@@ -1106,7 +1106,7 @@ func TestAllContainsZoneAuth(t *testing.T) {
 }
 
 // TestZoneAuthFieldCounts pins the request/response/both field counts for
-// ZoneAuth (request=0, response=1, both=17) — a regression guard against a
+// ZoneAuth (request=0, response=1, both=18) — a regression guard against a
 // catalog authoring bug. Every ForProvider field is Scope=Both except the
 // server-assigned `ref`, which is response-only (never settable by the
 // controller).
@@ -1134,8 +1134,8 @@ func TestZoneAuthFieldCounts(t *testing.T) {
 	if resp != 1 {
 		t.Errorf("response-scope field count = %d, want 1", resp)
 	}
-	if both != 17 {
-		t.Errorf("both-scope field count = %d, want 17", both)
+	if both != 18 {
+		t.Errorf("both-scope field count = %d, want 18", both)
 	}
 }
 

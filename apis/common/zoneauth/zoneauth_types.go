@@ -95,6 +95,8 @@ type ZoneAuthParameters struct {
 	// External (non-Grid) secondary servers for this zone.
 	// +optional
 	ExternalSecondaries []ExternalServer `json:"externalSecondaries"`
+	// Whether the zone uses an external primary server (externalPrimaries) instead of a Grid primary (gridPrimary). When false, the zone is grid-primary-served and externalPrimaries has no effect.
+	UseExternalPrimary *bool `json:"useExternalPrimary,omitempty"`
 }
 
 // ZoneAuthObservation holds the observed state of a ZoneAuth.
@@ -150,6 +152,8 @@ type ZoneAuthObservation struct {
 	// External (non-Grid) secondary servers for this zone.
 	// +optional
 	ExternalSecondaries []ExternalServer `json:"externalSecondaries"` // atProvider
+	// Whether the zone uses an external primary server (externalPrimaries) instead of a Grid primary (gridPrimary). When false, the zone is grid-primary-served and externalPrimaries has no effect.
+	UseExternalPrimary *bool `json:"useExternalPrimary,omitempty"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification. Stable across the resource's lifetime — every field it embeds (fqdn, view, zoneFormat) is immutable.
 	Ref *string `json:"ref,omitempty"` // atProvider
 }

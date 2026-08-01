@@ -345,6 +345,12 @@ spec:
                       retrying the primary server after a failed connection.
                     format: int32
                     type: integer
+                  useExternalPrimary:
+                    description: Whether the zone uses an external primary server
+                      (externalPrimaries) instead of a Grid primary (gridPrimary).
+                      When false, the zone is grid-primary-served and externalPrimaries
+                      has no effect.
+                    type: boolean
                   useGridZoneTimer:
                     description: Whether the zone uses the Grid's SOA timer settings
                       (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry)
@@ -746,6 +752,12 @@ spec:
                       retrying the primary server after a failed connection.
                     format: int32
                     type: integer
+                  useExternalPrimary:
+                    description: Whether the zone uses an external primary server
+                      (externalPrimaries) instead of a Grid primary (gridPrimary).
+                      When false, the zone is grid-primary-served and externalPrimaries
+                      has no effect.
+                    type: boolean
                   useGridZoneTimer:
                     description: Whether the zone uses the Grid's SOA timer settings
                       (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry)

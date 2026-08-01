@@ -271,6 +271,11 @@ func (in *ZoneAuthObservation) DeepCopyInto(out *ZoneAuthObservation) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.UseExternalPrimary != nil {
+		in, out := &in.UseExternalPrimary, &out.UseExternalPrimary
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(string)
@@ -385,6 +390,11 @@ func (in *ZoneAuthParameters) DeepCopyInto(out *ZoneAuthParameters) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.UseExternalPrimary != nil {
+		in, out := &in.UseExternalPrimary, &out.UseExternalPrimary
+		*out = new(bool)
+		**out = **in
 	}
 }
 

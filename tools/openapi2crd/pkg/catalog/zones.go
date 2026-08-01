@@ -166,6 +166,13 @@ func zoneAuth() ResourceDescriptor {
 				Description: "External (non-Grid) secondary servers for this zone.",
 			},
 			{
+				Name:        "UseExternalPrimary",
+				JSONName:    "useExternalPrimary",
+				GoType:      goTypeBool,
+				Scope:       FieldScopeBoth,
+				Description: "Whether the zone uses an external primary server (externalPrimaries) instead of a Grid primary (gridPrimary). When false, the zone is grid-primary-served and externalPrimaries has no effect.",
+			},
+			{
 				Name:        "Ref",
 				JSONName:    "ref",
 				GoType:      goTypeString,
