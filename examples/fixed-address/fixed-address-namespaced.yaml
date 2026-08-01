@@ -28,7 +28,7 @@ metadata:
       - field: name
         value: "updated-fixed-address-ns"
       - field: matchClient
-        skip: "mac is required at Create time whenever match_client is unset, so match_client always starts (and stays, absent a real transition) at MAC_ADDRESS; live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
+        skip: "this example sets a real, non-zero mac so Create lands in matchClient=MAC_ADDRESS (the all-zero mac is a Grid trap that silently produces matchClient=RESERVED instead — see fixed-address.yaml's mac field doc); live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
       - field: disable
         value: true
       - field: useOptions
@@ -56,7 +56,7 @@ metadata:
 spec:
   forProvider:
     ipv4addr: 10.0.0.51
-    mac: "00:00:00:00:00:00"
+    mac: "00:00:00:00:0a:02"
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

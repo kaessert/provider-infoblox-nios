@@ -28,16 +28,31 @@
 #
 # Optional but notable fields:
 #   mac:         match key used only in MAC_ADDRESS matchClient mode (the
-#                default when matchClient is left unset). WAPI requires it
-#                whenever matchClient is omitted — Create fails with "MAC
-#                address is required when match_client is undefined"
-#                otherwise (live-verified on the Grid). Setting matchClient
-#                explicitly to any other mode (RESERVED, CLIENT_ID,
-#                CIRCUIT_ID, REMOTE_ID) makes mac optional at Create time,
-#                but changing matchClient away from MAC_ADDRESS on an
-#                existing object clears whatever mac value it already
-#                holds — see the crossplane.io/update-test annotation
-#                below for why matchClient itself is not update-tested.
+#                default when matchClient is left unset AND mac is a real,
+#                non-zero address — see the trap below). WAPI requires mac
+#                whenever both matchClient and mac are omitted — Create
+#                fails with "MAC address is required when match_client is
+#                undefined" (live-verified on the Grid). Setting
+#                matchClient explicitly to any other mode (RESERVED,
+#                CLIENT_ID, CIRCUIT_ID, REMOTE_ID) makes mac optional at
+#                Create time, but changing matchClient away from
+#                MAC_ADDRESS on an existing object clears whatever mac
+#                value it already holds — see the crossplane.io/
+#                update-test annotation below for why matchClient itself
+#                is not update-tested.
+#
+#                Zero-MAC trap (live-verified on the Grid, WAPI 2.12): the
+#                all-zero address "00:00:00:00:00:00" is NOT treated as a
+#                literal MAC_ADDRESS match key — WAPI silently classifies
+#                a fixed address created with that value as
+#                matchClient=RESERVED instead, and RESERVED then silently
+#                ignores every subsequent mac PUT (200 response, no
+#                change, no error) with no re-entry path back to
+#                MAC_ADDRESS short of also sending an explicit
+#                matchClient=MAC_ADDRESS. This example therefore sets mac
+#                to a real, non-zero placeholder address so Create lands
+#                in MAC_ADDRESS mode and the mac field stays genuinely
+#                update-testable.
 #   networkView: defaults to "default" when unset.
 #
 # No immutable fields are known for this resource — every Create parameter
@@ -68,23 +83,21 @@ metadata:
     # post-create here. network only applies to dynamic CIDR allocation,
     # which this example does not use (it sets a literal ipv4addr).
     #
-    # matchClient is skipped rather than value-tested: the mac field is
-    # required at Create time whenever match_client is left unset (WAPI
-    # rejects Create otherwise), so match_client always starts at
-    # MAC_ADDRESS and this field's current spec value is always
-    # MAC_ADDRESS too (late-initialized from the Grid's Create response —
-    # see the FixedAddress controller's lateInitializeIdentityMeta).
-    # Live-verified on the Grid (WAPI 2.12): every non-MAC_ADDRESS value
-    # (RESERVED, CLIENT_ID, CIRCUIT_ID) clears the mac field as a side
-    # effect of the mode switch — the field disappears from a GET that
-    # explicitly requests it, the same destructive side effect already
-    # documented for RESERVED. Since mac is independently exercised as
-    # its own update-test target above (in the same cumulative per-field
-    # run), any real matchClient transition would clobber that field's
-    # value out from under it. There is no matchClient value that both
-    # differs from MAC_ADDRESS and leaves mac untouched, so the field is
-    # skipped here rather than either breaking the mac coverage or
-    # accepting a known, unavoidable side effect on every run.
+    # matchClient is skipped rather than value-tested: this example sets a
+    # real, non-zero mac (see the zero-MAC trap in the field doc above),
+    # so Create lands in matchClient=MAC_ADDRESS and that value is
+    # late-initialized into spec (see the FixedAddress controller's
+    # lateInitializeIdentityMeta). Live-verified on the Grid (WAPI 2.12):
+    # every non-MAC_ADDRESS value (RESERVED, CLIENT_ID, CIRCUIT_ID)
+    # clears the mac field as a side effect of the mode switch — the
+    # field disappears from a GET that explicitly requests it. Since mac
+    # is independently exercised as its own update-test target above (in
+    # the same cumulative per-field run), any real matchClient transition
+    # would clobber that field's value out from under it. There is no
+    # matchClient value that both differs from MAC_ADDRESS and leaves mac
+    # untouched, so the field is skipped here rather than either breaking
+    # the mac coverage or accepting a known, unavoidable side effect on
+    # every run.
     # agentCircuitId/agentRemoteId/dhcpClientIdentifier/
     # clientIdentifierPrependZero are only relevant to the CIRCUIT_ID/
     # REMOTE_ID/CLIENT_ID matchClient modes, which are never entered by
@@ -98,7 +111,7 @@ metadata:
       - field: name
         value: "updated-fixed-address"
       - field: matchClient
-        skip: "mac is required at Create time whenever match_client is unset, so match_client always starts (and stays, absent a real transition) at MAC_ADDRESS; live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
+        skip: "this example sets a real, non-zero mac so Create lands in matchClient=MAC_ADDRESS (the all-zero mac is a Grid trap that silently produces matchClient=RESERVED instead — see the mac field doc above); live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
       - field: disable
         value: true
       - field: useOptions
@@ -126,7 +139,7 @@ metadata:
 spec:
   forProvider:
     ipv4addr: 10.0.0.50
-    mac: "00:00:00:00:00:00"
+    mac: "00:00:00:00:0a:01"
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:
