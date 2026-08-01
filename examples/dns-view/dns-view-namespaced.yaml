@@ -68,7 +68,7 @@ metadata:
       - field: dnssecExpiredSignaturesEnabled
         value: true
       - field: dnssecValidationEnabled
-        value: true
+        value: false
       - field: useFixedRrsetOrderFqdns
         value: true
       - field: enableFixedRrsetOrderFqdns
