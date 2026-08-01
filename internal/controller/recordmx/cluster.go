@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordmx/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
@@ -77,80 +78,82 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.MXRe
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr.Manager, conn: objMgr.Connector, endpoint: creds.Host}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.MXRecord].
 type clusterExternal struct {
-	kube   k8sclient.Client
-	objMgr ibclient.IBObjectManager
+	kube     k8sclient.Client
+	objMgr   ibclient.IBObjectManager
+	conn     ibclient.IBConnector
+	prober   *identity.Prober
+	endpoint string
 }
 
-// Observe fetches the MXRecord from the WAPI by its _ref external name and
-// compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
-
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetMXRecordByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
+// Observe resolves the MXRecord through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
-	rec, refChanged, err := fetchMXRecord(e.objMgr, externalID, p.View, p.Name, p.MailExchanger, p.Preference)
+
+	res, err := observeMXRecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
+		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveMXRecord)
 	}
-	if rec == nil {
+	if !res.exists {
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
-	if refChanged && rec.Ref != "" {
-		meta.SetExternalName(cr, rec.Ref)
-		externalID = rec.Ref
-	}
 
-	o := observeFromRecordMX(externalID, rec)
 	cr.Status.AtProvider = clusterv1alpha1.MXRecordObservation{
-		Name:          o.Name,
-		MailExchanger: o.MailExchanger,
-		Preference:    o.Preference,
-		Comment:       o.Comment,
-		TTL:           o.TTL,
-		UseTTL:        o.UseTTL,
-		ExtAttrs:      o.ExtAttrs,
-		View:          o.View,
-		Ref:           o.Ref,
-		Zone:          o.Zone,
+		Name:          res.obs.Name,
+		MailExchanger: res.obs.MailExchanger,
+		Preference:    res.obs.Preference,
+		Comment:       res.obs.Comment,
+		TTL:           res.obs.TTL,
+		UseTTL:        res.obs.UseTTL,
+		ExtAttrs:      res.obs.ExtAttrs,
+		View:          res.obs.View,
+		Ref:           res.obs.Ref,
+		Zone:          res.obs.Zone,
 	}
-	// Explicit assignment (rather than folding ID into the struct literal
-	// above) keeps the server-assigned identifier's provenance obvious at
-	// the call site — it always mirrors the external name used to fetch
-	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.MailExchanger, p.Preference, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.MailExchanger, p.Preference, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new MXRecord and records the server-assigned _ref
-// as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalCreation, error) {
+// Create provisions a new MXRecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createMXRecord(e.objMgr, p.View, p.Name, p.MailExchanger, p.Preference, p.TTL, p.UseTTL, p.Comment, p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createMXRecord(e.objMgr, p.View, p.Name, p.MailExchanger, p.Preference, p.TTL, p.UseTTL, p.Comment, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateMXRecord)
 	}
@@ -161,12 +164,12 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.MXRecord
 
 // Update patches the mutable MXRecord fields. View is echoed back
 // unchanged (see updateMXRecord's doc comment) — it is never treated as
-// an update target.
+// an update target. Every call re-asserts the identity stamp.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateMXRecord(e.objMgr, externalID, p.View, p.Name, p.MailExchanger, p.Preference, p.TTL, p.UseTTL, p.Comment, p.ExtAttrs)
+	rec, err := updateMXRecord(e.objMgr, externalID, p.View, p.Name, p.MailExchanger, p.Preference, p.TTL, p.UseTTL, p.Comment, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateMXRecord)
 	}
@@ -182,15 +185,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.MXReco
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the MXRecord. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteMXRecordResolving404 — because the
-// _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalDelete, error) {
+// Delete removes the MXRecord, resolving through the shared identity
+// ladder first.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.MXRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteMXRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.MailExchanger, p.Preference); err != nil {
+	if err := deleteMXRecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
