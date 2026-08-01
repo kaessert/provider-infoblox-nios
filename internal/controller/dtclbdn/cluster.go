@@ -19,8 +19,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtclbdn/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-dtclbdn.infobloxnios.crossplane.io"
@@ -79,50 +79,41 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.DTCL
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, clients: clients}, nil
+	return &clusterExternal{kube: c.kube, clients: clients, endpoint: creds.Host}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.DTCLBDN].
 type clusterExternal struct {
 	kube    k8sclient.Client
 	clients *dtcLbdnClients
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
-// Observe fetches the DTCLBDN from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the DTCLBDN through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling getDtcLbdnByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := getDtcLbdnByRef(e.clients.conn, externalID)
+	res, err := observeDtcLbdn(ctx, e.clients.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Priority, &p.Persistence, &p.Topology, &p.TTL, &p.UseTTL, &p.Comment, &p.Disable, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := dtcLbdnExistsByNaturalKey(e.clients.conn, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveDTCLBDN)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveDTCLBDN)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromDtcLbdn(externalID, rec)
+	rec := res.rec
+	o := res.obs
 	cr.Status.AtProvider = clusterv1alpha1.DTCLBDNObservation{
 		Name:        o.Name,
 		LBMethod:    o.LBMethod,
@@ -147,26 +138,40 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCLBDN
 	cr.Status.AtProvider.Pools = poolsToCluster(o.Pools)
 	cr.Status.AtProvider.Health = healthToCluster(o.Health)
 
-	p := &cr.Spec.ForProvider
 	pools := poolsFromCluster(p.Pools)
-	lateInit := lateInitialize(&p.Priority, &p.Persistence, &p.Topology, &p.TTL, &p.UseTTL, &p.Comment, &p.Disable, &p.ExtAttrs, rec)
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.LBMethod, p.Patterns, pools, p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.LBMethod, p.Patterns, pools, p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new DTCLBDN and records the server-assigned _ref
-// as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalCreation, error) {
+// Create provisions a new DTCLBDN, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createDtcLbdn(e.clients.conn, p.Name, p.LBMethod, p.Patterns, poolsFromCluster(p.Pools), p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.clients.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createDtcLbdn(e.clients.conn, p.Name, p.LBMethod, p.Patterns, poolsFromCluster(p.Pools), p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateDTCLBDN)
 	}
@@ -177,12 +182,14 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DTCLBDN)
 
 // Update replaces the mutable DTCLBDN fields. There are no known
 // immutable fields for DTCLBDN, so every field is echoed (this API uses
-// PUT full-replace semantics).
+// PUT full-replace semantics). Every call re-asserts the identity stamp
+// since a WAPI PUT carrying extattrs replaces the whole map rather than
+// merging it.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateDtcLbdn(e.clients.conn, externalID, p.Name, p.LBMethod, p.Patterns, poolsFromCluster(p.Pools), p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs)
+	rec, err := updateDtcLbdn(e.clients.conn, externalID, p.Name, p.LBMethod, p.Patterns, poolsFromCluster(p.Pools), p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateDTCLBDN)
 	}
@@ -198,15 +205,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCLBD
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the DTCLBDN. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteDtcLbdnResolving404 — because the
-// _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalDelete, error) {
+// Delete removes the DTCLBDN, resolving through the shared identity
+// ladder first — see deleteDtcLbdnIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteDtcLbdnResolving404(e.clients.objMgr, e.clients.conn, externalID, p.Name); err != nil {
+	if err := deleteDtcLbdnIdentity(ctx, e.clients.conn, e.clients.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

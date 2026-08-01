@@ -61,28 +61,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtclbdn/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtclbdn/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveDTCLBDN      = "cannot observe DTCLBDN"
-	errCreateDTCLBDN       = "cannot create DTCLBDN"
-	errUpdateDTCLBDN       = "cannot update DTCLBDN"
-	errDeleteDTCLBDN       = "cannot delete DTCLBDN"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveDTCLBDN            = "cannot observe DTCLBDN"
+	errCreateDTCLBDN             = "cannot create DTCLBDN"
+	errUpdateDTCLBDN             = "cannot update DTCLBDN"
+	errDeleteDTCLBDN             = "cannot delete DTCLBDN"
+	errEmptyUID                  = "cannot stamp DTCLBDN identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -539,7 +547,7 @@ func collectionFieldsUpToDate(patterns []string, pools []poolLink, authZones []s
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (priority,
@@ -610,7 +618,7 @@ func lateInitExtAttrs(field *map[string]string, observed ibclient.EA) bool {
 	if len(*field) != 0 {
 		return false
 	}
-	fromRec := extAttrsFromEA(observed)
+	fromRec := extAttrsFromEA(identity.Strip(observed))
 	if len(fromRec) == 0 {
 		return false
 	}
@@ -722,8 +730,14 @@ func buildDtcLbdn(name, lbMethod *string, patterns []string, pools []poolLink, a
 // createDtcLbdn issues the WAPI create call via the low-level IBConnector
 // — see the package doc comment for why the ObjectManager wrapper cannot
 // be used as-is for this resource's pools/authZones/topology fields.
-func createDtcLbdn(conn ibclient.IBConnector, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string) (*ibclient.DtcLbdn, error) {
+// Stamps the owning managed resource's uid into the object's extensible
+// attributes in the same request that creates it (identity.Stamp).
+func createDtcLbdn(conn ibclient.IBConnector, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string, uid string) (*ibclient.DtcLbdn, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	lbdn := buildDtcLbdn(name, lbMethod, patterns, pools, authZones, types, priority, persistence, topology, ttl, useTTL, comment, disable, extAttrs)
+	lbdn.Ea = identity.Stamp(lbdn.Ea, uid)
 	ref, err := conn.CreateObject(lbdn)
 	if err != nil {
 		return nil, err
@@ -735,8 +749,14 @@ func createDtcLbdn(conn ibclient.IBConnector, name, lbMethod *string, patterns [
 // updateDtcLbdn issues the WAPI update call. All fields are mutable —
 // there are no known immutable fields for DTCLBDN — so every field is
 // echoed on every update (this API uses PUT full-replace semantics).
-func updateDtcLbdn(conn ibclient.IBConnector, ref string, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string) (*ibclient.DtcLbdn, error) {
+// Every call re-asserts the identity stamp since a WAPI PUT carrying
+// extattrs replaces the whole map rather than merging it.
+func updateDtcLbdn(conn ibclient.IBConnector, ref string, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string, uid string) (*ibclient.DtcLbdn, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	lbdn := buildDtcLbdn(name, lbMethod, patterns, pools, authZones, types, priority, persistence, topology, ttl, useTTL, comment, disable, extAttrs)
+	lbdn.Ea = identity.Stamp(lbdn.Ea, uid)
 	lbdn.Ref = ref
 	refRes, err := conn.UpdateObject(lbdn, ref)
 	if err != nil {
@@ -750,58 +770,6 @@ func updateDtcLbdn(conn ibclient.IBConnector, ref string, name, lbMethod *string
 func deleteDtcLbdn(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteDtcLbdn(ref)
 	return err
-}
-
-// dtcLbdnExistsByNaturalKey reports whether a live DTCLBDN still exists
-// under the CR's own (name) identity — the same field WAPI uses to
-// compute the _ref. Used by Delete() when the stored _ref 404s: a hit
-// here means the _ref is merely stale, not that the object is gone. This
-// cannot use the ObjectManager's GetDtcLbdn(name) convenience method —
-// like GetDtcLbdnByRef, it builds its request object via NewEmptyDtcLbdn,
-// which unconditionally requests `auto_consolidated_monitors` and 400s on
-// this deployment's WAPI schema (see the package doc comment and
-// dtcLbdnReturnFields) — so this issues the same trimmed-return-fields
-// search through the low-level IBConnector instead.
-func dtcLbdnExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
-	if strOrEmpty(name) == "" {
-		return false, nil
-	}
-	var res []ibclient.DtcLbdn
-	lbdn := &ibclient.DtcLbdn{}
-	lbdn.SetReturnFields(append(lbdn.ReturnFields(), dtcLbdnReturnFields...))
-	err := conn.GetObject(lbdn, "", ibclient.NewQueryParams(false, map[string]string{"name": strOrEmpty(name)}), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
-
-// deleteDtcLbdnResolving404 issues the WAPI delete and, on a 404 against
-// the stored _ref, resolves the object's natural key before concluding it
-// is gone. A 404 on a derived handle is evidence the handle rotated, not
-// evidence the object was removed: if the natural-key search still finds
-// a live object, deleting is refused because ownership of that object
-// cannot be verified from the search alone (see the staleref package doc
-// for the full rationale).
-func deleteDtcLbdnResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name *string) error {
-	delErr := deleteDtcLbdn(objMgr, ref)
-	if delErr == nil {
-		return nil
-	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteDTCLBDN)
-	}
-	found, searchErr := dtcLbdnExistsByNaturalKey(conn, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteDTCLBDN)
-	}
-	if found {
-		return staleref.RefusalError()
-	}
-	return nil
 }
 
 // dtcLbdnReturnFields lists every DtcLbdn field this package reads on
@@ -819,6 +787,20 @@ var dtcLbdnReturnFields = []string{
 	"extattrs", "disable", "auth_zones", "lb_method", "patterns", "persistence", "pools", "priority", "topology", "types", "health", "ttl", "use_ttl",
 }
 
+// newEmptyDtcLbdn constructs a fresh, empty *ibclient.DtcLbdn with the
+// trimmed return-fields list (dtcLbdnReturnFields) instead of the SDK's
+// own NewEmptyDtcLbdn, which unconditionally requests
+// auto_consolidated_monitors and 400s on this deployment's WAPI schema
+// (see the package doc comment). Used as the newEmpty constructor for
+// identity.Resolve — every GET the identity ladder issues (the ref
+// fetch, and the identity-EA search) inherits this trimmed field list,
+// exactly like getDtcLbdnByRef.
+func newEmptyDtcLbdn() *ibclient.DtcLbdn {
+	lbdn := &ibclient.DtcLbdn{}
+	lbdn.SetReturnFields(append(lbdn.ReturnFields(), dtcLbdnReturnFields...))
+	return lbdn
+}
+
 // getDtcLbdnByRef issues the WAPI GET call for the DTCLBDN identified by
 // ref via the low-level IBConnector — see dtcLbdnReturnFields and the
 // package doc comment for why the ObjectManager's GetDtcLbdnByRef
@@ -828,6 +810,127 @@ func getDtcLbdnByRef(conn ibclient.IBConnector, ref string) (*ibclient.DtcLbdn, 
 	lbdn.SetReturnFields(append(lbdn.ReturnFields(), dtcLbdnReturnFields...))
 	err := conn.GetObject(lbdn, ref, ibclient.NewQueryParams(false, nil), &lbdn)
 	return lbdn, err
+}
+
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. See recorda's ensureIdentityPrerequisite for the full
+// rationale.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
+	}
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
+	}
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
+	}
+	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveDtcLbdnIdentity resolves the DTCLBDN identified by ref/uid
+// through the shared UID-in-EA ladder.
+func resolveDtcLbdnIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.DtcLbdn, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.DtcLbdn](ctx, conn, newEmptyDtcLbdn, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// DTCLBDN through the identity ladder during Observe.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.DtcLbdn
+	obs          observedDTCLBDN
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeDtcLbdn runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeDtcLbdn(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, priority, persistence **uint32, topology **string, ttl **uint32, useTTL **bool, comment **string, disable **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveDtcLbdnIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromDtcLbdn(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(priority, persistence, topology, ttl, useTTL, comment, disable, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteDtcLbdnIdentity issues the WAPI delete for the DTCLBDN this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity doc for the full ownership-verification rules.
+func deleteDtcLbdnIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveDtcLbdnIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteDTCLBDN)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteDtcLbdn(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteDTCLBDN)
+	default:
+		return errors.New("identity: unresolved DTCLBDN outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
