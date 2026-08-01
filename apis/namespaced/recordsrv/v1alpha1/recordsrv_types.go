@@ -101,6 +101,7 @@ type SRVRecordParameters struct {
 	UseTTL *bool `json:"useTtl,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k != 'Crossplane Internal ID')",message="the 'Crossplane Internal ID' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs"
 	ExtAttrs map[string]string `json:"extAttrs"`
 	// DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Confirmed absent from the UpdateSRVRecord SDK method signature.
 	// +kubebuilder:validation:Required

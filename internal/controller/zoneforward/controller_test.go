@@ -398,7 +398,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	cr.Spec.ForProvider.ForwardersOnly = boolPtr(true)
 	cr.Spec.ForProvider.NsGroup = stringPtr("dns-group")
 	cr.Spec.ForProvider.ExternalNsGroup = stringPtr("ext-group")
-	cr.Spec.ForProvider.Extattrs = map[string]string{"env": "prod"}
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -523,8 +523,8 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	if ap.ForwardingServers != nil {
 		t.Errorf("AtProvider.ForwardingServers = %v, want nil", ap.ForwardingServers)
 	}
-	if ap.Extattrs != nil {
-		t.Errorf("AtProvider.Extattrs = %v, want nil", ap.Extattrs)
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
 	}
 }
 
@@ -1020,8 +1020,8 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 	if ap.ForwardingServers != nil {
 		t.Errorf("AtProvider.ForwardingServers = %v, want nil", ap.ForwardingServers)
 	}
-	if ap.Extattrs != nil {
-		t.Errorf("AtProvider.Extattrs = %v, want nil", ap.Extattrs)
+	if ap.ExtAttrs != nil {
+		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
 	}
 }
 

@@ -53,7 +53,7 @@ metadata:
         skip: "references DTCServer resources, intentionally omitted from this standalone example"
       - field: monitors
         skip: "list field of health monitors, not a scalar update-test target"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

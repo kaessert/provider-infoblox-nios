@@ -24,7 +24,7 @@
 # may not exist in a minimal test, and this example is meant to stand alone.
 #
 # Optional mutable fields: pools, authZones, types, priority, persistence,
-# topology, ttl, useTtl, comment, disable, extattrs — see the DTCLBDN CRD
+# topology, ttl, useTtl, comment, disable, extAttrs — see the DTCLBDN CRD
 # schema for the full list.
 apiVersion: dtclbdn.infobloxnios.crossplane.io/v1alpha1
 kind: DTCLBDN
@@ -50,7 +50,7 @@ metadata:
     # pools/authZones/authZonesRefs reference other managed resources and
     # are intentionally omitted from this standalone example (see the
     # field doc above). topology is only meaningful when lbMethod=TOPOLOGY,
-    # not used by this example's RATIO method. extattrs is an optional
+    # not used by this example's RATIO method. extAttrs is an optional
     # map field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
@@ -81,7 +81,7 @@ metadata:
         skip: "references ZoneAuth resources, intentionally omitted from this standalone example"
       - field: topology
         skip: "only meaningful when lbMethod=TOPOLOGY; not used by this example's RATIO method"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

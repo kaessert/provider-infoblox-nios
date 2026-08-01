@@ -80,6 +80,7 @@ type FixedAddressParameters struct {
 	Comment *string `json:"comment,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k != 'Crossplane Internal ID')",message="the 'Crossplane Internal ID' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs"
 	ExtAttrs map[string]string `json:"extAttrs"`
 	// Whether the fixed address is disabled.
 	Disable *bool `json:"disable,omitempty"`

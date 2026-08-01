@@ -109,11 +109,12 @@ func zoneForward() ResourceDescriptor {
 				Description: "Per-Grid-member forwarding server overrides for this zone.",
 			},
 			{
-				Name:        "Extattrs",
-				JSONName:    "extattrs",
-				GoType:      goTypeStringMap,
-				Scope:       FieldScopeBoth,
-				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+				Name:                   "ExtAttrs",
+				JSONName:               "extAttrs",
+				GoType:                 goTypeStringMap,
+				Scope:                  FieldScopeBoth,
+				Description:            "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+				ForProviderValidations: reservedEAKeyValidations(),
 			},
 			{
 				Name:        "Ref",

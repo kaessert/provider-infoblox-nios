@@ -82,7 +82,7 @@ spec:
                     description: Determines whether the zone is disabled. When false,
                       the zone is enabled.
                     type: boolean
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata
@@ -91,6 +91,11 @@ spec:
                       CRD representation (the controller translates to/from the SDK''s
                       EA map[string]interface{} type).'
                     type: object
+                    x-kubernetes-validations:
+                    - message: the 'Crossplane Internal ID' extensible attribute is
+                        reserved for the provider's identity stamp and cannot be set
+                        in spec.forProvider.extAttrs
+                      rule: self.all(k, k != 'Crossplane Internal ID')
                   externalNsGroup:
                     description: A forward stub server name server group name.
                     type: string
@@ -286,7 +291,7 @@ spec:
                     description: Determines whether the zone is disabled. When false,
                       the zone is enabled.
                     type: boolean
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata
@@ -362,6 +367,9 @@ spec:
                       creation — confirmed absent from the UpdateZoneForward SDK method
                       signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: fqdn is immutable after creation
+                      rule: self == oldSelf
                   id:
                     description: |-
                       Server-assigned external identifier for this resource, set by Observe()
@@ -383,11 +391,17 @@ spec:
                       rejects a view change at the data level with "Cannot move zones
                       between views".
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zoneFormat:
                     description: Determines the format of this zone (e.g. FORWARD,
                       IPV4, IPV6). Fixed at creation — confirmed absent from the UpdateZoneForward
                       SDK method signature.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zoneFormat is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

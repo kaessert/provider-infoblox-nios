@@ -40,7 +40,7 @@ metadata:
         skip: "renaming a DTC Server may change its WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: monitors
         skip: "list field of IP/FQDN and monitor pairs, not a scalar update-test target"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

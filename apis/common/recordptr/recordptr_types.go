@@ -302,6 +302,7 @@ type PTRRecordParameters struct {
 	UseTTL *bool `json:"useTtl,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k != 'Crossplane Internal ID')",message="the 'Crossplane Internal ID' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs"
 	ExtAttrs map[string]string `json:"extAttrs"`
 	// CIDR of the network from which to allocate the next available IP address (WAPI func:nextavailableip). Create-time-only — ignored on Update. Mutually exclusive with the static ipv4Addr/ipv6Addr field. When set, networkView is also required.
 	Cidr *string `json:"cidr,omitempty"`

@@ -224,7 +224,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 		NsGroup:           o.NsGroup,
 		ExternalNsGroup:   o.ExternalNsGroup,
 		ForwardingServers: namespacedForwardingServersFromSDK(nullableForwardingServersSlice(rec.ForwardingServers)),
-		Extattrs:          o.ExtAttrs,
+		ExtAttrs:          o.ExtAttrs,
 		Ref:               o.Ref,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
@@ -234,7 +234,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.Extattrs, &p.View, &p.ZoneFormat, rec)
+	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.ExtAttrs, &p.View, &p.ZoneFormat, rec)
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
@@ -247,7 +247,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 			namespacedForwardingServersToSDK(p.ForwardingServers),
 			p.Comment, p.NsGroup, p.ExternalNsGroup,
 			p.Disable, p.ForwardersOnly,
-			p.Extattrs,
+			p.ExtAttrs,
 			rec,
 		),
 		ResourceLateInitialized: lateInit,
@@ -258,7 +258,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 // _ref as the external name.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneForward)
 	}
@@ -273,7 +273,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.Extattrs)
+	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneForward)
 	}

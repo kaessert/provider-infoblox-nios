@@ -35,7 +35,7 @@ metadata:
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-forward.sh
     # comment, disable, and forwardersOnly are the mutable scalars
     # exercised here. forwardTo/forwardingServers are list fields and
-    # extattrs is a map field, none are safe scalar update-test targets.
+    # extAttrs is a map field, none are safe scalar update-test targets.
     # nsGroup/externalNsGroup reference a pre-existing Grid stub-server
     # name server group not created by this standalone example.
     crossplane.io/update-test: |
@@ -53,7 +53,7 @@ metadata:
         skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
       - field: externalNsGroup
         skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

@@ -82,7 +82,7 @@ spec:
                   comment:
                     description: Comment for the range template.
                     type: string
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata
@@ -91,6 +91,11 @@ spec:
                       CRD representation (the controller translates to/from the SDK''s
                       EA map[string]interface{} type).'
                     type: object
+                    x-kubernetes-validations:
+                    - message: the 'Crossplane Internal ID' extensible attribute is
+                        reserved for the provider's identity stamp and cannot be set
+                        in spec.forProvider.extAttrs
+                      rule: self.all(k, k != 'Crossplane Internal ID')
                   failoverAssociation:
                     description: Failover association name.
                     type: string
@@ -270,7 +275,7 @@ spec:
                   comment:
                     description: Comment for the range template.
                     type: string
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata
