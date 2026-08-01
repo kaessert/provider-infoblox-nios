@@ -1808,6 +1808,82 @@ func TestClusterObserveForeignIdentityNeverProbesPrerequisite(t *testing.T) {
 	}
 }
 
+// TestClusterObserveRefGetFailureNeverProbesPrerequisite proves the
+// guard's precision on the other resolution-failure branch: a non-404
+// error fetching the stored reference itself (a ref-GET failure) is
+// handled entirely inside resolveByRef and never falls through to the
+// identity-EA search at all — so it must never be classified as a
+// search failure and must never call the prerequisite probe.
+func TestClusterObserveRefGetFailureNeverProbesPrerequisite(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-observe-ref-get-failure",
+	}
+	cr := newClusterARecord("my-arecord", "record:a/test1:host.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error for a 500 on the ref-GET, got nil")
+	}
+	if identity.IsSearchFailure(err) {
+		t.Fatalf("Observe: error = %v, want it NOT classified as identity.IsSearchFailure — a ref-GET failure never reaches the search step", err)
+	}
+	var prereq *identity.PrerequisiteError
+	if cperrors.As(err, &prereq) {
+		t.Fatalf("Observe: error = %v, want it NOT to be a *identity.PrerequisiteError — the prerequisite guard must not fire on a ref-GET failure", err)
+	}
+}
+
+// TestClusterObserveAmbiguousMatchNeverProbesPrerequisite proves the
+// guard's precision on the ladder's other typed refusal: an
+// AmbiguousMatchError comes from a search that succeeded (it found more
+// than one match), not one that failed, so it must never be classified
+// as a search failure and must never call the prerequisite probe.
+func TestClusterObserveAmbiguousMatchNeverProbesPrerequisite(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	m.seed(&ibclient.RecordA{Name: stringPtr("host-a.example.com"), Ipv4Addr: stringPtr("10.0.0.1"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
+	m.seed(&ibclient.RecordA{Name: stringPtr("host-b.example.com"), Ipv4Addr: stringPtr("10.0.0.2"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-observe-ambiguous",
+	}
+	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when the identity-EA search matches more than one object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Fatalf("Observe: error = %v, want it to still be a *identity.AmbiguousMatchError, not intercepted by the prerequisite guard", err)
+	}
+	if identity.IsSearchFailure(err) {
+		t.Fatalf("Observe: error = %v, want it NOT classified as identity.IsSearchFailure — the search succeeded (found matches), it just found too many", err)
+	}
+
+	m.mu.Lock()
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if eaDefSearchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
 // TestClusterDeleteSurfacesPrerequisiteErrorFromIdentitySearch is the
 // Delete-side counterpart of
 // TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch — Delete

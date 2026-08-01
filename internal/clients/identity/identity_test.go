@@ -481,6 +481,79 @@ func TestResolveSearchNonNotFoundErrorPropagates(t *testing.T) {
 	}
 }
 
+// ── search-step failure classification ───────────────────────────────
+//
+// These tests pin the mechanism callers (e.g. recorda's reactive
+// prerequisite probe) rely on to distinguish "the identity-EA search
+// itself failed" from every other Resolve failure, without matching on
+// error text. Mutation check: reverting the &SearchFailedError{...}
+// construction in Resolve back to a plain errors.Wrap makes
+// TestResolveSearchFailureIsClassifiedAsSearchFailure fail (IsSearchFailure
+// returns false) — recorded in the ticket history for IN-IDENT-CLASSIFY.
+
+func TestResolveSearchFailureIsClassifiedAsSearchFailure(t *testing.T) {
+	boom := errors.New("WAPI request error: 400('AdmConProtoError: Unknown extensible attribute')")
+	conn := &fakeConnector{searchErr: boom}
+
+	_, _, err := Resolve[*ibclient.RecordA](context.Background(), conn, newEmptyRecordA, "", testUID)
+	if err == nil {
+		t.Fatal("Resolve returned nil error, want the wrapped search failure")
+	}
+	if !IsSearchFailure(err) {
+		t.Fatalf("IsSearchFailure(%v) = false, want true for a failure from the search step", err)
+	}
+	if !strings.Contains(err.Error(), boom.Error()) {
+		t.Fatalf("err.Error() = %q, want it to still contain the underlying message %q — classification must not alter operator-facing text", err.Error(), boom.Error())
+	}
+}
+
+func TestResolveGetByRefFailureIsNotSearchFailure(t *testing.T) {
+	const ref = "record:a/abc:host.example.com/default"
+	boom := errors.New("WAPI request error: 500('internal server error')")
+	conn := &fakeConnector{byRefErr: map[string]error{ref: boom}}
+
+	_, _, err := Resolve[*ibclient.RecordA](context.Background(), conn, newEmptyRecordA, ref, testUID)
+	if err == nil {
+		t.Fatal("Resolve returned nil error, want the wrapped 500")
+	}
+	if IsSearchFailure(err) {
+		t.Fatalf("IsSearchFailure(%v) = true, want false for a ref-GET failure", err)
+	}
+}
+
+func TestHandleReuseErrorIsNotSearchFailure(t *testing.T) {
+	err := &HandleReuseError{ObjectType: "record:a", Ref: "record:a/abc:x", WantUID: "want-uid", GotUID: "got-uid"}
+	if IsSearchFailure(err) {
+		t.Fatalf("IsSearchFailure(%v) = true, want false for a HandleReuseError", err)
+	}
+}
+
+func TestAmbiguousMatchErrorIsNotSearchFailure(t *testing.T) {
+	err := &AmbiguousMatchError{ObjectType: "record:a", UID: testUID, Count: 3}
+	if IsSearchFailure(err) {
+		t.Fatalf("IsSearchFailure(%v) = true, want false for an AmbiguousMatchError", err)
+	}
+}
+
+// TestSearchFailedErrorSurvivesWrap proves the classification survives a
+// second layer of wrapping — exactly what recorda's Observe/Delete apply
+// (delete-time/observe-time context via errors.Wrap) before returning
+// the error to the reconciler.
+func TestSearchFailedErrorSurvivesWrap(t *testing.T) {
+	boom := errors.New("WAPI request error: 400('AdmConProtoError: Unknown extensible attribute')")
+	conn := &fakeConnector{searchErr: boom}
+
+	_, _, err := Resolve[*ibclient.RecordA](context.Background(), conn, newEmptyRecordA, "", testUID)
+	if err == nil {
+		t.Fatal("Resolve returned nil error, want the wrapped search failure")
+	}
+
+	wrapped := fmt.Errorf("cannot delete ARecord: %w", err)
+	if !IsSearchFailure(wrapped) {
+		t.Fatalf("IsSearchFailure(%v) = false, want true — classification must survive an additional wrap", wrapped)
+	}
+}
+
 // ── error message content ────────────────────────────────────────────
 
 func TestHandleReuseErrorMessageNamesCauseAndOptions(t *testing.T) {

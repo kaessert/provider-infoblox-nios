@@ -1,6 +1,10 @@
 package identity
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+)
 
 // HandleReuseError is returned when a stored reference resolves to an
 // object whose identity extensible attribute holds a UID different from
@@ -58,4 +62,46 @@ func (e *AmbiguousMatchError) Error() string {
 			"object except the one this managed resource should own",
 		e.ObjectType, e.Count, EAKey, e.UID, EAKey, e.UID,
 	)
+}
+
+// SearchFailedError marks that a Resolve failure originated in the
+// identity-EA search step — the request that filters by "*EAKey=<uid>" —
+// as opposed to a ref-GET failure (a different wrap, never given this
+// type) or one of the ladder's own typed refusals (HandleReuseError,
+// AmbiguousMatchError, both returned unwrapped and never given this type
+// either). This is the one failure mode a missing identity extensible
+// attribute definition produces: WAPI answers the filtered search with
+// an "Unknown extensible attribute" error, not an empty result set.
+//
+// SearchFailedError wraps the underlying error unchanged — Error()
+// simply delegates — so it never alters the operator-facing message
+// text; it exists purely so callers can classify the failure stage
+// structurally instead of matching on that text. It implements Unwrap so
+// errors.Is/errors.As/errors.Unwrap keep working through it, including
+// through any further wrapping a caller applies afterward (e.g. Observe
+// or Delete adding their own context via errors.Wrap) — the marker
+// survives being wrapped again because a wrap is itself just another
+// link with an Unwrap method pointing back through this one.
+//
+// Callers that only need the boolean classification should prefer
+// IsSearchFailure over matching this type directly with errors.As.
+type SearchFailedError struct {
+	err error
+}
+
+// Error returns the wrapped error's message, unchanged.
+func (e *SearchFailedError) Error() string { return e.err.Error() }
+
+// Unwrap exposes the wrapped error so errors.Is/errors.As/errors.Unwrap
+// continue traversing past this marker type.
+func (e *SearchFailedError) Unwrap() error { return e.err }
+
+// IsSearchFailure reports whether err — or any error in its chain,
+// including through wraps a caller applied afterward — is a
+// SearchFailedError: a Resolve failure that came from the identity-EA
+// search step specifically, distinct from a ref-GET failure and from
+// both typed refusals (HandleReuseError, AmbiguousMatchError).
+func IsSearchFailure(err error) bool {
+	var searchFailed *SearchFailedError
+	return errors.As(err, &searchFailed)
 }

@@ -198,7 +198,12 @@ func Resolve[T ibclient.IBObject](ctx context.Context, conn ibclient.IBConnector
 
 	matches, err := searchByUID(conn, newEmpty, uid)
 	if err != nil {
-		return zero, OutcomeNotFound, errors.Wrap(err, errSearchByUID)
+		// Wrapped in SearchFailedError so callers can classify this as
+		// specifically a search-step failure via errors.As or
+		// IsSearchFailure — see that type's doc for why. The message
+		// text is unchanged: SearchFailedError.Error() delegates to the
+		// wrapped error's Error() rather than adding its own prefix.
+		return zero, OutcomeNotFound, &SearchFailedError{err: errors.Wrap(err, errSearchByUID)}
 	}
 
 	switch len(matches) {
