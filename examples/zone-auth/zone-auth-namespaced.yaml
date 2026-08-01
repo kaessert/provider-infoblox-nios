@@ -10,6 +10,9 @@
 # Distinct identity: the fqdn below differs from zone-auth.yaml's so both
 # examples can be applied to the same NIOS Grid Manager at once without
 # colliding on the same (view, fqdn) WAPI identity.
+#
+# gridPrimary + useGridZoneTimer: see zone-auth.yaml for why both are
+# required for the soa_* fields to round-trip through WAPI at all.
 apiVersion: zoneauth.infobloxnios.m.crossplane.io/v1alpha1
 kind: ZoneAuth
 metadata:
@@ -28,32 +31,42 @@ metadata:
       - field: disable
         value: true
       - field: soaDefaultTtl
-        value: 3600
+        value: 7200
       - field: soaExpire
-        value: 2419200
+        value: 1209600
       - field: soaNegativeTtl
-        value: 900
+        value: 300
       - field: soaRefresh
-        value: 10800
+        value: 21600
       - field: soaRetry
-        value: 3600
+        value: 7200
+      - field: useGridZoneTimer
+        skip: "set once at create time to enable the SOA timer overrides above; toggling it mid-run would revert the zone to Grid-inherited timers and destabilize the soa_* tests running in the same pass"
       - field: nsGroup
-        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
-      - field: gridPrimary
-        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
-      - field: gridSecondaries
-        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
-      - field: externalPrimaries
-        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
-      - field: externalSecondaries
-        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+        skip: "no NsGroup object pre-provisioned on this E2E Grid Manager"
       - field: extAttrs
-        skip: "optional map field, low update-test value"
+        skip: "map field — not a scalar update target"
+      - field: gridPrimary
+        skip: "now set at create time (see spec.forProvider.gridPrimary) so WAPI returns the soa_*/useGridZoneTimer fields under test above; collection field describing Grid topology, not exercised via per-field diff testing"
+      - field: gridSecondaries
+        skip: "collection field — this E2E Grid Manager has only one member, so no secondary is available"
+      - field: externalPrimaries
+        skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
+      - field: externalSecondaries
+        skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
 spec:
   forProvider:
     fqdn: example-ns.com
     view: default
     comment: Managed by Crossplane (namespaced)
+    useGridZoneTimer: true
+    soaDefaultTtl: 3600
+    soaExpire: 2419200
+    soaNegativeTtl: 900
+    soaRefresh: 10800
+    soaRetry: 3600
+    gridPrimary:
+      - name: infoblox.localdomain
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default

@@ -28,10 +28,23 @@
 # between views", zoneFormat with "Field is not allowed for update").
 #
 # Optional mutable fields: comment, disable, soaDefaultTtl, soaExpire,
-# soaNegativeTtl, soaRefresh, soaRetry, nsGroup, extAttrs, gridPrimary,
-# gridSecondaries, externalPrimaries, externalSecondaries. WAPI supports
-# PUT for these fields, so the zone is updated in place rather than
+# soaNegativeTtl, soaRefresh, soaRetry, useGridZoneTimer, nsGroup, extAttrs,
+# gridPrimary, gridSecondaries, externalPrimaries, externalSecondaries. WAPI
+# supports PUT for these fields, so the zone is updated in place rather than
 # replaced.
+#
+# gridPrimary + useGridZoneTimer: the appliance only returns
+# soaDefaultTtl/soaExpire/soaNegativeTtl/soaRefresh/soaRetry/
+# useGridZoneTimer for a zone that has at least one grid primary — a zone
+# with an empty gridPrimary list omits all six fields from every WAPI GET
+# response, even when they are explicitly requested via _return_fields, and
+# a PUT that sets them is silently accepted but never reflected back. This
+# example therefore sets a real Grid member as gridPrimary and enables
+# useGridZoneTimer so the SOA fields round-trip and status.atProvider
+# mirrors them. "infoblox.localdomain" is this E2E Grid Manager's only
+# member — if a different Grid is ever used, update test/setup.sh to
+# resolve the member name dynamically (e.g. from a WAPI GET against the
+# member object) instead of hardcoding it here.
 #
 # uptest.upbound.io/update-parameter is intentionally omitted — it has
 # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). The
@@ -62,31 +75,41 @@ metadata:
       - field: disable
         value: true
       - field: soaDefaultTtl
-        value: 3600
+        value: 7200
       - field: soaExpire
-        value: 2419200
+        value: 1209600
       - field: soaNegativeTtl
-        value: 900
+        value: 300
       - field: soaRefresh
-        value: 10800
+        value: 21600
       - field: soaRetry
-        value: 3600
+        value: 7200
+      - field: useGridZoneTimer
+        skip: "set once at create time to enable the SOA timer overrides above; toggling it mid-run would revert the zone to Grid-inherited timers and destabilize the soa_* tests running in the same pass"
       - field: nsGroup
-        skip: "references a pre-existing Grid delegation name server group not created by this standalone example"
-      - field: gridPrimary
-        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
-      - field: gridSecondaries
-        skip: "requires real Grid member names and a structural primary/secondary type change, not modeled by this example"
-      - field: externalPrimaries
-        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
-      - field: externalSecondaries
-        skip: "requires real external-server names/addresses and a structural primary/secondary type change, not modeled by this example"
+        skip: "no NsGroup object pre-provisioned on this E2E Grid Manager"
       - field: extAttrs
-        skip: "optional map field, low update-test value"
+        skip: "map field — not a scalar update target"
+      - field: gridPrimary
+        skip: "now set at create time (see spec.forProvider.gridPrimary) so WAPI returns the soa_*/useGridZoneTimer fields under test above; collection field describing Grid topology, not exercised via per-field diff testing"
+      - field: gridSecondaries
+        skip: "collection field — this E2E Grid Manager has only one member, so no secondary is available"
+      - field: externalPrimaries
+        skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
+      - field: externalSecondaries
+        skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
 spec:
   forProvider:
     fqdn: zoneauth-example.com
     view: default
     comment: Managed by Crossplane
+    useGridZoneTimer: true
+    soaDefaultTtl: 3600
+    soaExpire: 2419200
+    soaNegativeTtl: 900
+    soaRefresh: 10800
+    soaRetry: 3600
+    gridPrimary:
+      - name: infoblox.localdomain
   providerConfigRef:
     name: default

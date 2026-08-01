@@ -245,6 +245,7 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.SoaNegativeTtl = incoming.SoaNegativeTtl
 		existing.SoaRefresh = incoming.SoaRefresh
 		existing.SoaRetry = incoming.SoaRetry
+		existing.UseGridZoneTimer = incoming.UseGridZoneTimer
 		existing.NsGroup = incoming.NsGroup
 		existing.Ea = incoming.Ea
 		existing.GridPrimary = incoming.GridPrimary
@@ -660,6 +661,156 @@ func TestClusterUpdateNestedFields(t *testing.T) {
 	}
 	if len(rec.ExternalSecondaries) != 1 || rec.ExternalSecondaries[0].Address != "10.0.0.5" {
 		t.Errorf("Update: ExternalSecondaries = %+v, want one 10.0.0.5 entry", rec.ExternalSecondaries)
+	}
+}
+
+// ── cluster: use_grid_zone_timer forced on when any soa_* field is set ──
+//
+// WAPI silently ignores soa_default_ttl/soa_expire/soa_negative_ttl/
+// soa_refresh/soa_retry while use_grid_zone_timer is off — a zone with
+// the flag off inherits the Grid's timer values and never reflects what
+// was submitted, with no error and no drift signal. buildZoneAuthForCreate/
+// buildZoneAuthForUpdate force the flag on whenever any of the five is
+// set (see effectiveUseGridZoneTimer), regardless of what — if anything —
+// the spec itself says for useGridZoneTimer.
+
+func TestClusterCreateForcesUseGridZoneTimerWhenSoaFieldSet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
+	// useGridZoneTimer intentionally left unset.
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec := m.records[ref]
+	m.mu.Unlock()
+	if rec.UseGridZoneTimer == nil || !*rec.UseGridZoneTimer {
+		t.Errorf("Create: UseGridZoneTimer = %v, want true (forced on because soaRefresh is set)", rec.UseGridZoneTimer)
+	}
+	if rec.SoaRefresh == nil || *rec.SoaRefresh != 21600 {
+		t.Errorf("Create: SoaRefresh = %v, want 21600", rec.SoaRefresh)
+	}
+}
+
+func TestClusterUpdateForcesUseGridZoneTimerWhenSoaFieldSet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn:             "example.com",
+		View:             stringPtr("default"),
+		UseGridZoneTimer: boolPtr(false),
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", ref)
+	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
+	// useGridZoneTimer intentionally left unset in spec.
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	body := m.lastUpdateBody
+	rec := m.records[ref]
+	m.mu.Unlock()
+
+	var sent map[string]interface{}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("cannot unmarshal PUT body: %v", err)
+	}
+	if v, ok := sent["use_grid_zone_timer"]; !ok || v != true {
+		t.Errorf("Update: PUT body use_grid_zone_timer = %v (present=%v), want true", v, ok)
+	}
+	if rec.UseGridZoneTimer == nil || !*rec.UseGridZoneTimer {
+		t.Errorf("Update: stored UseGridZoneTimer = %v, want true (forced on)", rec.UseGridZoneTimer)
+	}
+}
+
+// TestObserveConvergesAfterSoaSetWithoutExplicitFlag proves the fix does
+// not introduce a new infinite reconcile loop: Create forces
+// use_grid_zone_timer on (because soaRefresh is set), late-init then
+// back-fills the flag into spec on the next Observe (spec never set it),
+// and every subsequent Observe reports ResourceUpToDate=true — the effective
+// flag semantics used by isUpToDate/lateInitializeScalars stay consistent
+// with what the wire builders actually sent.
+func TestObserveConvergesAfterSoaSetWithoutExplicitFlag(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !obs.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true after Create forces use_grid_zone_timer on, got false")
+	}
+	if !obs.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true (useGridZoneTimer back-filled from observed), got false")
+	}
+	if cr.Spec.ForProvider.UseGridZoneTimer == nil || !*cr.Spec.ForProvider.UseGridZoneTimer {
+		t.Errorf("Observe: spec.forProvider.useGridZoneTimer = %v, want true (back-filled)", cr.Spec.ForProvider.UseGridZoneTimer)
+	}
+
+	// A second Observe (the following reconcile) must stay stable.
+	obs2, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe (2nd): unexpected error: %v", err)
+	}
+	if !obs2.ResourceUpToDate {
+		t.Error("Observe (2nd): want ResourceUpToDate=true (stable, no loop), got false")
+	}
+}
+
+// TestObserveNoInfiniteLoopWhenUseGridZoneTimerExplicitlyFalseWithSoaSet
+// is the risk scenario called out during the fix's design: the user
+// explicitly sets useGridZoneTimer: false in spec (so late-init's
+// unconditional back-fill never touches it) while also setting a soa_*
+// field. Without gating isUpToDate/lateInitializeScalars on the same
+// effective flag the wire builders use, this would loop forever (desired
+// stuck reading false, observed always reporting true because Create/
+// Update always force it on the wire).
+func TestObserveNoInfiniteLoopWhenUseGridZoneTimerExplicitlyFalseWithSoaSet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
+	cr.Spec.ForProvider.UseGridZoneTimer = boolPtr(false)
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		obs, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe iteration %d: unexpected error: %v", i, err)
+		}
+		if !obs.ResourceUpToDate {
+			t.Fatalf("Observe iteration %d: want ResourceUpToDate=true even though spec explicitly sets useGridZoneTimer=false (soaRefresh being set forces the effective flag on), got false — this would be an infinite reconcile loop", i)
+		}
 	}
 }
 
@@ -1116,10 +1267,11 @@ func TestIsUpToDateGridPrimaryMismatch(t *testing.T) {
 func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 	desired := zoneAuthFields{}
 	observed := zoneAuthFields{
-		Comment:       stringPtr("server comment"),
-		Disable:       boolPtr(false),
-		SoaDefaultTTL: uint32Ptr(28800),
-		NsGroup:       stringPtr("default-nsgroup"),
+		Comment:          stringPtr("server comment"),
+		Disable:          boolPtr(false),
+		SoaDefaultTTL:    uint32Ptr(28800),
+		UseGridZoneTimer: boolPtr(true),
+		NsGroup:          stringPtr("default-nsgroup"),
 	}
 
 	updated, changed := lateInitializeFields(desired, observed)
@@ -1128,6 +1280,9 @@ func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 	}
 	if updated.Comment == nil || *updated.Comment != "server comment" {
 		t.Errorf("lateInitializeFields: Comment = %v, want 'server comment'", updated.Comment)
+	}
+	if updated.UseGridZoneTimer == nil || !*updated.UseGridZoneTimer {
+		t.Errorf("lateInitializeFields: UseGridZoneTimer = %v, want true", updated.UseGridZoneTimer)
 	}
 	if updated.SoaDefaultTTL == nil || *updated.SoaDefaultTTL != 28800 {
 		t.Errorf("lateInitializeFields: SoaDefaultTTL = %v, want 28800", updated.SoaDefaultTTL)

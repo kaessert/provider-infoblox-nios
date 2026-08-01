@@ -122,6 +122,7 @@ func namespacedFieldsFromSpec(p *namespacedv1alpha1.ZoneAuthParameters) zoneAuth
 		SoaNegativeTTL:      p.SoaNegativeTTL,
 		SoaRefresh:          p.SoaRefresh,
 		SoaRetry:            p.SoaRetry,
+		UseGridZoneTimer:    p.UseGridZoneTimer,
 		NsGroup:             p.NsGroup,
 		ExtAttrs:            p.ExtAttrs,
 		GridPrimary:         namespacedMemberServerValues(p.GridPrimary),
@@ -238,6 +239,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	cr.Status.AtProvider.SoaNegativeTTL = observed.SoaNegativeTTL
 	cr.Status.AtProvider.SoaRefresh = observed.SoaRefresh
 	cr.Status.AtProvider.SoaRetry = observed.SoaRetry
+	cr.Status.AtProvider.UseGridZoneTimer = observed.UseGridZoneTimer
 	cr.Status.AtProvider.NsGroup = observed.NsGroup
 	cr.Status.AtProvider.ExtAttrs = observed.ExtAttrs
 	cr.Status.AtProvider.GridPrimary = namespacedMemberServersFromValues(observed.GridPrimary)
@@ -257,6 +259,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 		p.SoaNegativeTTL = updated.SoaNegativeTTL
 		p.SoaRefresh = updated.SoaRefresh
 		p.SoaRetry = updated.SoaRetry
+		p.UseGridZoneTimer = updated.UseGridZoneTimer
 		p.NsGroup = updated.NsGroup
 		p.ExtAttrs = updated.ExtAttrs
 		p.GridPrimary = namespacedMemberServersFromValues(updated.GridPrimary)

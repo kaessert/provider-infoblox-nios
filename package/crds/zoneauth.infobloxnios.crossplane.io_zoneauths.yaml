@@ -345,6 +345,12 @@ spec:
                       retrying the primary server after a failed connection.
                     format: int32
                     type: integer
+                  useGridZoneTimer:
+                    description: Whether the zone uses the Grid's SOA timer settings
+                      (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry)
+                      or its own. When false, the zone inherits the Grid's timer values
+                      regardless of what is set on this resource.
+                    type: boolean
                   view:
                     description: DNS view in which the zone resides, e.g. "external".
                       Defaults to the Grid's default view if unset at creation. Immutable
@@ -740,6 +746,12 @@ spec:
                       retrying the primary server after a failed connection.
                     format: int32
                     type: integer
+                  useGridZoneTimer:
+                    description: Whether the zone uses the Grid's SOA timer settings
+                      (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry)
+                      or its own. When false, the zone inherits the Grid's timer values
+                      regardless of what is set on this resource.
+                    type: boolean
                   view:
                     description: DNS view in which the zone resides, e.g. "external".
                       Defaults to the Grid's default view if unset at creation. Immutable

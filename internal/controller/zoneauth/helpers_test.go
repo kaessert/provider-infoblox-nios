@@ -265,6 +265,216 @@ func TestMemberServerValuesEqualIgnoresNestedTsigKeyNameWhenFlagOff(t *testing.T
 	}
 }
 
+// TestMemberServerValuesEqualIgnoresPreferredPrimariesWhenFlagOff proves
+// EnablePreferredPrimaries gates the PreferredPrimaries comparison the
+// same way UseTsigKeyName gates TsigKeyName above — the SDK documents
+// EnablePreferredPrimaries as "whether the preferred_primaries field
+// values of this member are used", i.e. a use flag in all but name.
+func TestMemberServerValuesEqualIgnoresPreferredPrimariesWhenFlagOff(t *testing.T) {
+	a := []memberServerValue{{
+		Name:                     "member1.example.com",
+		EnablePreferredPrimaries: false,
+		PreferredPrimaries:       []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com"}},
+	}}
+	b := []memberServerValue{{
+		Name:                     "member1.example.com",
+		EnablePreferredPrimaries: false,
+		PreferredPrimaries:       []externalServerValue{{Address: "10.0.0.2", Name: "ns2.example.com"}},
+	}}
+	if !memberServerValuesEqual(a, b) {
+		t.Error("memberServerValuesEqual: want true (enable_preferred_primaries off, preferred_primaries is server-owned), got false")
+	}
+}
+
+// TestMemberServerValuesEqualDetectsPreferredPrimariesWhenFlagOn is the
+// flag-on counterpart: the same mismatch is real drift once the flag is
+// on.
+func TestMemberServerValuesEqualDetectsPreferredPrimariesWhenFlagOn(t *testing.T) {
+	a := []memberServerValue{{
+		Name:                     "member1.example.com",
+		EnablePreferredPrimaries: true,
+		PreferredPrimaries:       []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com"}},
+	}}
+	b := []memberServerValue{{
+		Name:                     "member1.example.com",
+		EnablePreferredPrimaries: true,
+		PreferredPrimaries:       []externalServerValue{{Address: "10.0.0.2", Name: "ns2.example.com"}},
+	}}
+	if memberServerValuesEqual(a, b) {
+		t.Error("memberServerValuesEqual: want false (enable_preferred_primaries on, preferred_primaries differs), got true")
+	}
+}
+
+// TestMemberServerValuesEqualDetectsEnablePreferredPrimariesTransition
+// proves the flag comparison stays unconditional even though the value
+// comparison is gated, so a false -> true transition is still detected.
+func TestMemberServerValuesEqualDetectsEnablePreferredPrimariesTransition(t *testing.T) {
+	a := []memberServerValue{{Name: "member1.example.com", EnablePreferredPrimaries: false}}
+	b := []memberServerValue{{
+		Name:                     "member1.example.com",
+		EnablePreferredPrimaries: true,
+		PreferredPrimaries:       []externalServerValue{{Address: "10.0.0.1", Name: "ns1.example.com"}},
+	}}
+	if memberServerValuesEqual(a, b) {
+		t.Error("memberServerValuesEqual: want false (enable_preferred_primaries transitioned false -> true), got true")
+	}
+}
+
+// ── isUpToDate / lateInitialize: use_grid_zone_timer gating ─────────────
+//
+// use_grid_zone_timer is the SDK-documented use flag for soa_default_ttl,
+// soa_expire, soa_negative_ttl, soa_refresh, and soa_retry. When off, the
+// zone inherits the Grid's SOA timer settings and the appliance echoes
+// back the Grid's values (realistic non-zero defaults, not zeros) rather
+// than what was submitted — comparing them unconditionally would create
+// a permanent no-op Update loop the moment a user set any soa_* field.
+
+// gridSoaDefaults returns a zoneAuthFields populated with realistic
+// non-zero Grid-inherited SOA timer values, standing in for what a real
+// appliance echoes back on GET when use_grid_zone_timer is off.
+func gridSoaDefaults(useGridZoneTimer *bool) zoneAuthFields {
+	return zoneAuthFields{
+		SoaDefaultTTL:    uint32Ptr(28800),
+		SoaExpire:        uint32Ptr(2419200),
+		SoaNegativeTTL:   uint32Ptr(900),
+		SoaRefresh:       uint32Ptr(10800),
+		SoaRetry:         uint32Ptr(3600),
+		UseGridZoneTimer: useGridZoneTimer,
+	}
+}
+
+// TestIsUpToDateIgnoresSoaMismatchWhenNoSoaFieldsSetAndFlagOff proves
+// every soa_* mismatch is ignored while use_grid_zone_timer is off and
+// desired sets none of the five soa_* fields (nothing for
+// effectiveUseGridZoneTimer to force on) — using realistic non-zero Grid
+// defaults on the observed side. This must fail against a naive
+// unconditional uint32OrZero(desired) == uint32OrZero(observed)
+// comparison.
+func TestIsUpToDateIgnoresSoaMismatchWhenNoSoaFieldsSetAndFlagOff(t *testing.T) {
+	desired := zoneAuthFields{
+		UseGridZoneTimer: boolPtr(false),
+	}
+	observed := gridSoaDefaults(boolPtr(false))
+
+	if !isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want true (use_grid_zone_timer off, no soa_* fields set, nothing to force on), got false")
+	}
+}
+
+// TestIsUpToDateDetectsSoaMismatchEvenWhenUseGridZoneTimerFlagFalse is
+// the fix under test: a user who sets a soa_* field while leaving
+// use_grid_zone_timer unset or explicitly false must still see real
+// drift, because effectiveUseGridZoneTimer forces the flag on for the
+// wire the moment any soa_* field is set — WAPI actually applies (and
+// echoes back) the submitted values in that case rather than silently
+// keeping the zone on the Grid's inherited timer. Before this fix,
+// isUpToDate compared the raw (never-forced) flag and treated this as
+// "off, ignore" — silently dropping the user's spec value forever.
+func TestIsUpToDateDetectsSoaMismatchEvenWhenUseGridZoneTimerFlagFalse(t *testing.T) {
+	desired := zoneAuthFields{
+		SoaDefaultTTL:    uint32Ptr(3600),
+		SoaExpire:        uint32Ptr(1209600),
+		SoaNegativeTTL:   uint32Ptr(300),
+		SoaRefresh:       uint32Ptr(3600),
+		SoaRetry:         uint32Ptr(900),
+		UseGridZoneTimer: boolPtr(false),
+	}
+	observed := gridSoaDefaults(boolPtr(false))
+
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (soa_* fields set forces the effective flag on, and observed still shows the Grid-inherited values/flag-off), got true")
+	}
+}
+
+// TestIsUpToDateDetectsSoaMismatchWhenUseGridZoneTimerOn is the flag-on
+// counterpart: the same soa_* mismatch is real drift once the flag is on.
+func TestIsUpToDateDetectsSoaMismatchWhenUseGridZoneTimerOn(t *testing.T) {
+	desired := zoneAuthFields{
+		SoaDefaultTTL:    uint32Ptr(3600),
+		SoaExpire:        uint32Ptr(1209600),
+		SoaNegativeTTL:   uint32Ptr(300),
+		SoaRefresh:       uint32Ptr(3600),
+		SoaRetry:         uint32Ptr(900),
+		UseGridZoneTimer: boolPtr(true),
+	}
+	observed := gridSoaDefaults(boolPtr(true))
+
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (use_grid_zone_timer on, soa_* fields differ), got true")
+	}
+}
+
+// TestIsUpToDateDetectsUseGridZoneTimerTransition proves the flag's own
+// comparison stays unconditional even though the soa_* comparisons are
+// gated, so a false -> true transition is still detected as drift on its
+// own, independent of whether the soa_* fields happen to already match.
+func TestIsUpToDateDetectsUseGridZoneTimerTransition(t *testing.T) {
+	desired := gridSoaDefaults(boolPtr(true))
+	observed := gridSoaDefaults(boolPtr(false))
+
+	if isUpToDate(desired, observed) {
+		t.Error("isUpToDate: want false (use_grid_zone_timer transitioned false -> true), got true")
+	}
+}
+
+// TestLateInitializeGatesSoaFieldsOnUseGridZoneTimer proves the five
+// soa_* fields are only back-filled from observed when
+// use_grid_zone_timer is (or will become) on — back-filling a
+// Grid-inherited SOA value into spec while the flag is off would
+// silently claim a setting the zone does not actually have in effect.
+func TestLateInitializeGatesSoaFieldsOnUseGridZoneTimer(t *testing.T) {
+	desired := zoneAuthFields{UseGridZoneTimer: boolPtr(false)}
+	observed := gridSoaDefaults(boolPtr(false))
+
+	updated, _ := lateInitializeFields(desired, observed)
+	if updated.SoaDefaultTTL != nil {
+		t.Errorf("lateInitializeFields: SoaDefaultTTL = %v, want nil (use_grid_zone_timer off, nothing to back-fill)", updated.SoaDefaultTTL)
+	}
+	if updated.SoaExpire != nil {
+		t.Errorf("lateInitializeFields: SoaExpire = %v, want nil (use_grid_zone_timer off, nothing to back-fill)", updated.SoaExpire)
+	}
+}
+
+// TestLateInitializeBackfillsSoaFieldsWhenUseGridZoneTimerOn is the
+// flag-on counterpart: the soa_* fields do back-fill once the flag is on.
+func TestLateInitializeBackfillsSoaFieldsWhenUseGridZoneTimerOn(t *testing.T) {
+	desired := zoneAuthFields{UseGridZoneTimer: boolPtr(true)}
+	observed := gridSoaDefaults(boolPtr(true))
+
+	updated, changed := lateInitializeFields(desired, observed)
+	if !changed {
+		t.Fatal("lateInitializeFields: want changed=true, got false")
+	}
+	if updated.SoaDefaultTTL == nil || *updated.SoaDefaultTTL != 28800 {
+		t.Errorf("lateInitializeFields: SoaDefaultTTL = %v, want 28800", updated.SoaDefaultTTL)
+	}
+	if updated.SoaRefresh == nil || *updated.SoaRefresh != 10800 {
+		t.Errorf("lateInitializeFields: SoaRefresh = %v, want 10800", updated.SoaRefresh)
+	}
+}
+
+// TestLateInitializeGatesSoaFieldsOnEffectivePostBackfillFlag proves the
+// gate does not depend on op ordering: when the user has not set
+// use_grid_zone_timer at all (desired nil) but the observed side has it
+// on, the flag itself back-fills to true AND that same effective value
+// gates the soa_* back-fill — regardless of which op the ops table
+// happens to run first.
+func TestLateInitializeGatesSoaFieldsOnEffectivePostBackfillFlag(t *testing.T) {
+	desired := zoneAuthFields{} // UseGridZoneTimer unset by the user
+	observed := gridSoaDefaults(boolPtr(true))
+
+	updated, changed := lateInitializeFields(desired, observed)
+	if !changed {
+		t.Fatal("lateInitializeFields: want changed=true, got false")
+	}
+	if updated.UseGridZoneTimer == nil || !*updated.UseGridZoneTimer {
+		t.Errorf("lateInitializeFields: UseGridZoneTimer = %v, want true (back-filled from observed)", updated.UseGridZoneTimer)
+	}
+	if updated.SoaDefaultTTL == nil || *updated.SoaDefaultTTL != 28800 {
+		t.Errorf("lateInitializeFields: SoaDefaultTTL = %v, want 28800 (gated on the effective post-backfill flag value, not the pre-backfill nil)", updated.SoaDefaultTTL)
+	}
+}
+
 // ── isUpToDate: exhaustive field-mismatch coverage ──────────────────────
 //
 // isUpToDate short-circuits on the first mismatched field, so a single
@@ -273,16 +483,17 @@ func TestMemberServerValuesEqualIgnoresNestedTsigKeyNameWhenFlagOff(t *testing.T
 
 func TestIsUpToDateFieldMismatches(t *testing.T) {
 	base := zoneAuthFields{
-		Comment:        strPtrOrNil("hello"),
-		Disable:        boolPtr(false),
-		SoaDefaultTTL:  uint32Ptr(28800),
-		SoaExpire:      uint32Ptr(2419200),
-		SoaNegativeTTL: uint32Ptr(900),
-		SoaRefresh:     uint32Ptr(10800),
-		SoaRetry:       uint32Ptr(3600),
-		NsGroup:        strPtrOrNil("default-nsgroup"),
-		ExtAttrs:       map[string]string{"env": "prod"},
-		GridPrimary:    []memberServerValue{{Name: "member1.example.com"}},
+		Comment:          strPtrOrNil("hello"),
+		Disable:          boolPtr(false),
+		SoaDefaultTTL:    uint32Ptr(28800),
+		SoaExpire:        uint32Ptr(2419200),
+		SoaNegativeTTL:   uint32Ptr(900),
+		SoaRefresh:       uint32Ptr(10800),
+		SoaRetry:         uint32Ptr(3600),
+		UseGridZoneTimer: boolPtr(true),
+		NsGroup:          strPtrOrNil("default-nsgroup"),
+		ExtAttrs:         map[string]string{"env": "prod"},
+		GridPrimary:      []memberServerValue{{Name: "member1.example.com"}},
 		GridSecondaries: []memberServerValue{
 			{Name: "member2.example.com"},
 		},
@@ -322,6 +533,18 @@ func TestIsUpToDateFieldMismatches(t *testing.T) {
 		"SoaRetry": {
 			reason: "SoaRetry mismatch must be detected.",
 			mutate: func(f zoneAuthFields) zoneAuthFields { f.SoaRetry = uint32Ptr(1); return f },
+		},
+		"UseGridZoneTimer": {
+			reason: "UseGridZoneTimer mismatch must be detected on a pure flag-only transition. The soa_* fields are also cleared here: once any of them is set, effectiveUseGridZoneTimer forces the effective flag on regardless of this field's literal value, so leaving them set would no longer isolate a flag-only transition.",
+			mutate: func(f zoneAuthFields) zoneAuthFields {
+				f.UseGridZoneTimer = boolPtr(false)
+				f.SoaDefaultTTL = nil
+				f.SoaExpire = nil
+				f.SoaNegativeTTL = nil
+				f.SoaRefresh = nil
+				f.SoaRetry = nil
+				return f
+			},
 		},
 		"NsGroup": {
 			reason: "NsGroup mismatch must be detected.",

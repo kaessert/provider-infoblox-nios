@@ -78,6 +78,8 @@ type ZoneAuthParameters struct {
 	SoaRefresh *uint32 `json:"soaRefresh,omitempty"`
 	// Number of seconds a secondary server waits before retrying the primary server after a failed connection.
 	SoaRetry *uint32 `json:"soaRetry,omitempty"`
+	// Whether the zone uses the Grid's SOA timer settings (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry) or its own. When false, the zone inherits the Grid's timer values regardless of what is set on this resource.
+	UseGridZoneTimer *bool `json:"useGridZoneTimer,omitempty"`
 	// Name server group that serves DNS for this zone.
 	NsGroup *string `json:"nsGroup,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
@@ -131,6 +133,8 @@ type ZoneAuthObservation struct {
 	SoaRefresh *uint32 `json:"soaRefresh,omitempty"` // atProvider
 	// Number of seconds a secondary server waits before retrying the primary server after a failed connection.
 	SoaRetry *uint32 `json:"soaRetry,omitempty"` // atProvider
+	// Whether the zone uses the Grid's SOA timer settings (soaDefaultTtl, soaExpire, soaNegativeTtl, soaRefresh, soaRetry) or its own. When false, the zone inherits the Grid's timer values regardless of what is set on this resource.
+	UseGridZoneTimer *bool `json:"useGridZoneTimer,omitempty"` // atProvider
 	// Name server group that serves DNS for this zone.
 	NsGroup *string `json:"nsGroup,omitempty"` // atProvider
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
