@@ -35,6 +35,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/range/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/range/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
@@ -109,18 +110,25 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector that rangeExistsByNaturalKey needs directly so
+// it can issue a server-side filtered search through conn.GetObject and
+// let the SDK's typed *ibclient.NotFoundError reach isNotFound unwrapped
+// (ObjectManager's GetNetworkRange re-wraps that error with fmt.Errorf's
+// %s verb, which flattens it into a plain string no classifier can
+// unwrap). The Connector performs HTTP Basic Auth on every request and
+// only validates configuration locally — no network round-trip happens
+// until the first Observe/Create/Update/Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -150,10 +158,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -444,11 +452,23 @@ func deleteRange(objMgr ibclient.IBObjectManager, ref string) error {
 // tuple WAPI uses to compute the _ref. Used by Delete() when the stored
 // _ref 404s: a hit here means the _ref is merely stale, not that the
 // object is gone. Range has no single-object natural-key getter, so this
-// searches via GetNetworkRange (a list call) with a server-side query
-// filter instead. All three fields are required non-empty; when any is
-// missing there is no way to re-discover the object, so the search is
-// skipped (found=false) rather than treated as an error.
-func rangeExistsByNaturalKey(objMgr ibclient.IBObjectManager, startAddr, endAddr, networkView *string) (bool, error) {
+// issues the search directly through the raw connector with a
+// server-side query filter and answers from the match count.
+//
+// This deliberately bypasses ibclient.IBObjectManager.GetNetworkRange:
+// that method re-wraps a genuinely empty result with
+// fmt.Errorf("failed getting DHCP IPv4 Range: %s", err), which flattens
+// the SDK's typed *ibclient.NotFoundError into a plain string no
+// classifier can unwrap — isNotFound would then see neither a typed
+// error nor an HTTP status code in the message and misreport a clean
+// "nothing matched" result as a hard error. Calling conn.GetObject
+// directly lets the SDK's connector return the *ibclient.NotFoundError
+// unwrapped, so isNotFound classifies it correctly.
+//
+// All three fields are required non-empty; when any is missing there is
+// no way to re-discover the object, so the search is skipped
+// (found=false) rather than treated as an error.
+func rangeExistsByNaturalKey(conn ibclient.IBConnector, startAddr, endAddr, networkView *string) (bool, error) {
 	if strOrEmpty(startAddr) == "" || strOrEmpty(endAddr) == "" || strOrEmpty(networkView) == "" {
 		return false, nil
 	}
@@ -457,7 +477,8 @@ func rangeExistsByNaturalKey(objMgr ibclient.IBObjectManager, startAddr, endAddr
 		"end_addr":     strOrEmpty(endAddr),
 		"network_view": strOrEmpty(networkView),
 	}
-	res, err := objMgr.GetNetworkRange(ibclient.NewQueryParams(false, sf))
+	var res []ibclient.Range
+	err := conn.GetObject(ibclient.NewEmptyRange(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
@@ -474,7 +495,7 @@ func rangeExistsByNaturalKey(objMgr ibclient.IBObjectManager, startAddr, endAddr
 // finds a live range, deleting is refused because ownership of that
 // range cannot be verified from the search alone (see the staleref
 // package doc for the full rationale).
-func deleteRangeResolving404(objMgr ibclient.IBObjectManager, ref string, startAddr, endAddr, networkView *string) error {
+func deleteRangeResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, startAddr, endAddr, networkView *string) error {
 	delErr := deleteRange(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -482,7 +503,7 @@ func deleteRangeResolving404(objMgr ibclient.IBObjectManager, ref string, startA
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteRange)
 	}
-	found, searchErr := rangeExistsByNaturalKey(objMgr, startAddr, endAddr, networkView)
+	found, searchErr := rangeExistsByNaturalKey(conn, startAddr, endAddr, networkView)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteRange)
 	}

@@ -97,18 +97,24 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: mc.Manager, conn: mc.Connector}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.RangeTemplate].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the same connector underlying objMgr, kept separately so
+	// rangeTemplateExistsByNaturalKey can issue its search directly
+	// through it rather than through objMgr.GetAllRangeTemplate — see
+	// rangeTemplateExistsByNaturalKey for why that distinction matters
+	// for error classification.
+	conn ibclient.IBConnector
 }
 
 // ── namespaced type <-> scope-neutral currency conversion ──────────────────
@@ -171,7 +177,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.R
 			// whenever an identity-composing field changes, so a 404 here
 			// is not proof the object is gone (see the staleref package
 			// doc). Resolve the natural key before concluding that.
-			found, searchErr := rangeTemplateExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name)
+			found, searchErr := rangeTemplateExistsByNaturalKey(e.conn, cr.Spec.ForProvider.Name)
 			if searchErr != nil {
 				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveRangeTemplate)
 			}
@@ -266,7 +272,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.RangeTemplate) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider
-	if err := deleteRangeTemplateResolving404(e.objMgr, externalID, p.Name); err != nil {
+	if err := deleteRangeTemplateResolving404(e.objMgr, e.conn, externalID, p.Name); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

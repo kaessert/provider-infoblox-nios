@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
@@ -103,18 +104,26 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector that rangeTemplateExistsByNaturalKey needs
+// directly so it can issue a server-side filtered search through
+// conn.GetObject and let the SDK's typed *ibclient.NotFoundError reach
+// isNotFound unwrapped (ObjectManager's GetAllRangeTemplate re-wraps
+// that error with fmt.Errorf's %s verb, which flattens it into a plain
+// string no classifier can unwrap). The Connector performs HTTP Basic
+// Auth on every request and only validates configuration locally — no
+// network round-trip happens until the first Observe/Create/Update/
+// Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -144,10 +153,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -697,16 +706,29 @@ func deleteRangeTemplate(objMgr ibclient.IBObjectManager, ref string) error {
 // uses to compute the _ref. Used by Delete() when the stored _ref 404s:
 // a hit here means the _ref is merely stale, not that the object is
 // gone. RangeTemplate has no single-object natural-key getter, so this
-// searches via GetAllRangeTemplate (a list call) with a server-side
-// query filter instead. name is required non-empty; when it is missing
-// there is no way to re-discover the object, so the search is skipped
-// (found=false) rather than treated as an error.
-func rangeTemplateExistsByNaturalKey(objMgr ibclient.IBObjectManager, name *string) (bool, error) {
+// issues the search directly through the raw connector with a
+// server-side query filter and answers from the match count.
+//
+// This deliberately bypasses ibclient.IBObjectManager.GetAllRangeTemplate:
+// that method re-wraps a genuinely empty result with
+// fmt.Errorf("failed getting Range Template Record: %s", err), which
+// flattens the SDK's typed *ibclient.NotFoundError into a plain string
+// no classifier can unwrap — isNotFound would then see neither a typed
+// error nor an HTTP status code in the message and misreport a clean
+// "nothing matched" result as a hard error. Calling conn.GetObject
+// directly lets the SDK's connector return the *ibclient.NotFoundError
+// unwrapped, so isNotFound classifies it correctly.
+//
+// name is required non-empty; when it is missing there is no way to
+// re-discover the object, so the search is skipped (found=false) rather
+// than treated as an error.
+func rangeTemplateExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
 	if strOrEmpty(name) == "" {
 		return false, nil
 	}
 	sf := map[string]string{"name": strOrEmpty(name)}
-	res, err := objMgr.GetAllRangeTemplate(ibclient.NewQueryParams(false, sf))
+	var res []ibclient.Rangetemplate
+	err := conn.GetObject(ibclient.NewEmptyRangeTemplate(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
@@ -724,7 +746,7 @@ func rangeTemplateExistsByNaturalKey(objMgr ibclient.IBObjectManager, name *stri
 // refused because ownership of that range template cannot be verified
 // from the search alone (see the staleref package doc for the full
 // rationale).
-func deleteRangeTemplateResolving404(objMgr ibclient.IBObjectManager, ref string, name *string) error {
+func deleteRangeTemplateResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name *string) error {
 	delErr := deleteRangeTemplate(objMgr, ref)
 	if delErr == nil {
 		return nil
@@ -732,7 +754,7 @@ func deleteRangeTemplateResolving404(objMgr ibclient.IBObjectManager, ref string
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteRangeTemplate)
 	}
-	found, searchErr := rangeTemplateExistsByNaturalKey(objMgr, name)
+	found, searchErr := rangeTemplateExistsByNaturalKey(conn, name)
 	if searchErr != nil {
 		return errors.Wrap(searchErr, errDeleteRangeTemplate)
 	}
