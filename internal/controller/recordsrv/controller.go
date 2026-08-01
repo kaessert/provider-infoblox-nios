@@ -35,19 +35,20 @@ import (
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage     = "cannot track ProviderConfig usage"
-	errGetPC            = "cannot get ProviderConfig"
-	errGetClusterPC     = "cannot get ClusterProviderConfig"
-	errUnsupportedKind  = "unsupported provider config kind"
-	errGetSecret        = "cannot get credentials secret"
-	errNoSecretRef      = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey   = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveSRVRecord = "cannot observe SRVRecord"
-	errCreateSRVRecord  = "cannot create SRVRecord"
-	errUpdateSRVRecord  = "cannot update SRVRecord"
-	errDeleteSRVRecord  = "cannot delete SRVRecord"
+	errTrackPCUsage        = "cannot track ProviderConfig usage"
+	errPersistExternalName = "cannot persist refreshed external name"
+	errGetPC               = "cannot get ProviderConfig"
+	errGetClusterPC        = "cannot get ClusterProviderConfig"
+	errUnsupportedKind     = "unsupported provider config kind"
+	errGetSecret           = "cannot get credentials secret"
+	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveSRVRecord    = "cannot observe SRVRecord"
+	errCreateSRVRecord     = "cannot create SRVRecord"
+	errUpdateSRVRecord     = "cannot update SRVRecord"
+	errDeleteSRVRecord     = "cannot delete SRVRecord"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets

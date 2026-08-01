@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordaaaa/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-recordaaaa.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.AAAARecord].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -181,7 +183,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.AA
 // Update patches the mutable AAAARecord fields. View (immutable) is
 // never sent — see updateAAAARecord. name and ipv6Addr are _ref-mutating
 // (UNSTABLE _ref) — see clusterExternal.Update for the full rationale.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.AAAARecord) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.AAAARecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -194,7 +196,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.AA
 	// object's current _ref, and renaming or changing ipv6Addr changes
 	// the _ref.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

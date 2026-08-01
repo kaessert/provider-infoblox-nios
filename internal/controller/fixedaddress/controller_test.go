@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
@@ -31,6 +32,24 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -387,7 +406,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:          ibclient.EA{"env": "prod"},
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
@@ -430,7 +449,7 @@ func TestClusterObserveNotUpToDate(t *testing.T) {
 		Comment:     "old comment",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment") // drifted from server
 
@@ -451,7 +470,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -475,7 +494,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -525,7 +544,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())              // simulate NameAsExternalName initializer
 
@@ -542,7 +561,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -554,7 +573,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -569,7 +588,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -595,7 +614,7 @@ func TestClusterCreateCapturesServerAssignedRef(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -619,7 +638,7 @@ func TestClusterCreateIPv6(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddressIPv6("my-fixedaddress-v6", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -639,7 +658,7 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -666,7 +685,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment:     "old comment",
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -701,7 +720,7 @@ func TestClusterUpdateRefreshesUnstableRef(t *testing.T) {
 		MatchClient: stringPtr("MAC_ADDRESS"),
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", oldRef)
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.9")
 
@@ -742,7 +761,7 @@ func TestClusterUpdateDefaultsMatchClientForIPv4(t *testing.T) {
 		MatchClient: stringPtr("MAC_ADDRESS"),
 	})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 	cr.Spec.ForProvider.MatchClient = nil // unset — no AtProvider state populated either
 	cr.Spec.ForProvider.Comment = stringPtr("triggers update")
@@ -766,7 +785,7 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	ref := "fixedaddress/test1:10.0.0.5"
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("triggers update")
@@ -789,7 +808,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed("fixedaddress", &ibclient.FixedAddress{IPv4Address: "10.0.0.5", NetviewName: "default"})
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -809,7 +828,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -824,7 +843,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -839,7 +858,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -918,7 +937,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		MatchClient: stringPtr("MAC_ADDRESS"),
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -941,7 +960,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -964,7 +983,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1009,7 +1028,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1029,7 +1048,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1046,7 +1065,7 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -1068,7 +1087,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Comment:     "old comment",
 	})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1093,7 +1112,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed("fixedaddress", &ibclient.FixedAddress{IPv4Address: "10.0.0.5", NetviewName: "default"})
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1113,7 +1132,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1125,7 +1144,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/test1:10.0.0.5", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err == nil {
@@ -1233,7 +1252,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}

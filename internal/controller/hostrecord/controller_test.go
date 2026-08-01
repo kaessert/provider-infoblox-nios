@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
@@ -31,6 +32,24 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 )
+
+// recordingKubeClient is a minimal client.Client stub used to verify that
+// Update() persists a rotated external-name annotation via a real kube
+// client call, not merely an in-memory meta.SetExternalName mutation that
+// crossplane-runtime's managed reconciler would silently discard after a
+// successful external Update(). Only Update is exercised by these tests;
+// every other client.Client method is unused here and left to the
+// embedded nil interface (calling one would panic, which is the correct
+// failure mode for an accidental, untested dependency).
+type recordingKubeClient struct {
+	client.Client
+	updated client.Object
+}
+
+func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	k.updated = obj
+	return nil
+}
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
@@ -386,7 +405,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Disable:     boolPtr(false),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.TTL = uint32Ptr(300)
@@ -419,7 +438,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/does-not-exist:host.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -440,7 +459,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())          // simulate NameAsExternalName initializer
 
@@ -457,7 +476,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -469,7 +488,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -495,7 +514,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	// leaves Zone at "" too.
 	ref := m.seed(&ibclient.HostRecord{})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -581,7 +600,7 @@ func TestClusterObserveFullMirror(t *testing.T) {
 		DnsAliases:  []string{"alias.example.com"},
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 
 	if _, err := e.Observe(context.Background(), cr); err != nil {
@@ -610,7 +629,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -630,7 +649,7 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 
 	_, err := e.Create(context.Background(), cr)
@@ -654,7 +673,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 		View:        stringPtr("default"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	// Mutate the immutable networkView field in spec — this must NOT
 	// affect ResourceUpToDate, since networkView is excluded from
@@ -685,7 +704,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment:     stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -713,7 +732,7 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 		View:        stringPtr("default"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -739,7 +758,7 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/test1:host.example.com/default")
 
 	_, err := e.Update(context.Background(), cr)
@@ -771,7 +790,7 @@ func TestClusterUpdateRefChange(t *testing.T) {
 	newRef := "record:host/test999:host.example.com/other"
 	m.renameRefOnUpdate = newRef
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", oldRef)
 	cr.Spec.ForProvider.View = stringPtr("other")
 
@@ -793,7 +812,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default")})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -813,7 +832,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/does-not-exist:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -828,7 +847,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/test1:host.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -843,7 +862,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -922,7 +941,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		View:        stringPtr("default"),
 	})
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -942,7 +961,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -958,7 +977,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -975,7 +994,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -987,7 +1006,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1005,7 +1024,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.HostRecord{})
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1077,7 +1096,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1096,7 +1115,7 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1120,7 +1139,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		View:        stringPtr("default"),
 	})
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Ipv4Addrs = []namespacedv1alpha1.HostRecordIpv4Addr{{Ipv4Addr: "10.0.0.2"}}
 
@@ -1142,7 +1161,7 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/test1:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Update(context.Background(), cr)
@@ -1171,7 +1190,7 @@ func TestNamespacedUpdateRefChange(t *testing.T) {
 	newRef := "record:host/test999:host.example.com/other"
 	m.renameRefOnUpdate = newRef
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", oldRef, "ProviderConfig")
 	cr.Spec.ForProvider.View = stringPtr("other")
 
@@ -1191,7 +1210,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default")})
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1204,7 +1223,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1219,7 +1238,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{client: newTestClient(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/test1:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1331,7 +1350,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{kube: &recordingKubeClient{}}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1502,7 +1521,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 		View:        stringPtr("observed-view"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Name = stringPtr("host.example.com")
 	cr.Spec.ForProvider.Ipv4Addrs = []clusterv1alpha1.HostRecordIpv4Addr{{Ipv4Addr: "10.0.0.1"}}
@@ -1530,7 +1549,7 @@ func TestCreateOnlyForwardsFirstIpv4Addr(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = []clusterv1alpha1.HostRecordIpv4Addr{
 		{Ipv4Addr: "10.0.0.1"},
@@ -1694,7 +1713,7 @@ func TestClusterCreateWithIpv4Cidr(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
@@ -1724,7 +1743,7 @@ func TestClusterCreateRejectsIpv4CidrWithStaticAddr(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
 	// newClusterHostRecord already sets a static 10.0.0.1 ipv4Addrs entry.
@@ -1745,7 +1764,7 @@ func TestClusterCreateStaticAddrsStillWorks(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "") // no external-name yet
 	// newClusterHostRecord already sets a static 10.0.0.1 ipv4Addrs entry
 	// and leaves ipv4Cidr/ipv6Cidr unset.
@@ -1775,7 +1794,7 @@ func TestClusterCreateWithIpv6CidrAllocatesIP(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
@@ -1805,7 +1824,7 @@ func TestClusterCreateWithDualStackCidrs(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
@@ -1842,7 +1861,7 @@ func TestClusterCreateRejectsIpv6CidrWithStaticAddr(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
 	cr.Spec.ForProvider.Ipv6Addrs = []clusterv1alpha1.HostRecordIpv6Addr{
@@ -1863,7 +1882,7 @@ func TestClusterCreateRejectsFilterParamsAndCidr(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
@@ -1894,7 +1913,7 @@ func TestClusterObserveLateInitializesIpv4AddrsAfterCidrAllocation(t *testing.T)
 		View:        stringPtr("default"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
@@ -1931,7 +1950,7 @@ func TestClusterObserveLateInitializesIpv6AddrsAfterCidrAllocation(t *testing.T)
 		View:        stringPtr("default"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
 
@@ -1967,7 +1986,7 @@ func TestClusterObserveIgnoresCreateOnlyAllocationFieldsInIsUpToDate(t *testing.
 		View:        stringPtr("default"),
 	})
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
 	cr.Spec.ForProvider.Ipv4Cidr = stringPtr("10.0.0.0/24")
 	cr.Spec.ForProvider.Ipv6Cidr = stringPtr("2001:db8::/64")
@@ -2044,7 +2063,7 @@ func TestClusterCreateWithFilterParams(t *testing.T) {
 	srv := newFilterAllocationServer(t, allocRef, allocatedRec, &captured)
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.FilterParams = map[string]string{"*Site": "HQ"}
@@ -2082,7 +2101,7 @@ func TestClusterCreateRejectsFilterParamsWithoutIpAddressType(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{client: newTestClient(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "")
 	cr.Spec.ForProvider.Ipv4Addrs = nil
 	cr.Spec.ForProvider.FilterParams = map[string]string{"*Site": "HQ"}

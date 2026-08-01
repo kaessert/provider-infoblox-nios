@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-rangetemplate.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Rang
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.RangeTemplate].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -205,7 +207,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.RangeTem
 
 // Update patches the mutable RangeTemplate fields. No immutable fields are
 // known for RangeTemplate — every ForProvider field is sent.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.RangeTemplate) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.RangeTemplate) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -219,7 +221,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.RangeTem
 	// object_manager_range_template.go's NewRangeTemplate/UpdateRangeTemplate,
 	// which re-fetches by the new ref after the PUT.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

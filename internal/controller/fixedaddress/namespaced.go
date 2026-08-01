@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-fixedaddress.infobloxnios.m.crossplane.io"
@@ -105,11 +106,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.FixedAddress].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -286,7 +288,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Fi
 // _ref-mutating (UNSTABLE external name, ADR-IN-0004), the external-name
 // annotation is refreshed whenever the WAPI response returns a different
 // _ref than the one used to issue the request.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
 	f := namespacedToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
@@ -296,7 +298,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Fi
 	}
 
 	if fa.Ref != "" && fa.Ref != externalID {
-		meta.SetExternalName(cr, fa.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, fa.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dnsview/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-dnsview.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{conn: conn}, nil
+	return &namespacedExternal{kube: c.kube, conn: conn}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.DNSView].
 type namespacedExternal struct {
+	kube k8sclient.Client
 	conn ibclient.IBConnector
 }
 
@@ -168,7 +170,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.DN
 
 // Update patches the mutable DNSView fields (is_default is read-only and
 // never sent — see buildView). WAPI's view PUT is a partial merge.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.DNSView) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.DNSView) (managed.ExternalUpdate, error) {
 	f := fieldsFromNamespacedParams(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
@@ -180,7 +182,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.DN
 	// See clusterExternal.Update — DNSView is in the _ref-unstable
 	// resource group, and renaming the view changes its _ref.
 	if ref != "" && ref != externalID {
-		meta.SetExternalName(cr, ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

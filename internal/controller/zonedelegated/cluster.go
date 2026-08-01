@@ -20,6 +20,7 @@ import (
 
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-zonedelegated.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Zone
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.ZoneDelegated].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 }
 
@@ -185,7 +187,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ZoneDele
 
 // Update patches the mutable ZoneDelegated fields. fqdn, view, and
 // zoneFormat (immutable) are never sent — see updateZoneDelegated.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -195,7 +197,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneDele
 	}
 
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

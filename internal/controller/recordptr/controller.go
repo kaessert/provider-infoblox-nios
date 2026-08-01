@@ -35,20 +35,21 @@ import (
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage     = "cannot track ProviderConfig usage"
-	errGetPC            = "cannot get ProviderConfig"
-	errGetClusterPC     = "cannot get ClusterProviderConfig"
-	errUnsupportedKind  = "unsupported provider config kind"
-	errGetSecret        = "cannot get credentials secret"
-	errNoSecretRef      = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey   = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager = "cannot create Infoblox NIOS WAPI object manager"
-	errObservePTRRecord = "cannot observe PTRRecord"
-	errCreatePTRRecord  = "cannot create PTRRecord"
-	errUpdatePTRRecord  = "cannot update PTRRecord"
-	errDeletePTRRecord  = "cannot delete PTRRecord"
-	errCidrIPMutex      = "cidr and ipv4Addr/ipv6Addr are mutually exclusive"
+	errTrackPCUsage        = "cannot track ProviderConfig usage"
+	errPersistExternalName = "cannot persist refreshed external name"
+	errGetPC               = "cannot get ProviderConfig"
+	errGetClusterPC        = "cannot get ClusterProviderConfig"
+	errUnsupportedKind     = "unsupported provider config kind"
+	errGetSecret           = "cannot get credentials secret"
+	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
+	errObservePTRRecord    = "cannot observe PTRRecord"
+	errCreatePTRRecord     = "cannot create PTRRecord"
+	errUpdatePTRRecord     = "cannot update PTRRecord"
+	errDeletePTRRecord     = "cannot delete PTRRecord"
+	errCidrIPMutex         = "cidr and ipv4Addr/ipv6Addr are mutually exclusive"
 )
 
 // wapiVersion is the NIOS WAPI version this provider targets

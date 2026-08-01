@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dnsview/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-dnsview.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.DNSV
 		return nil, err
 	}
 
-	return &clusterExternal{conn: conn}, nil
+	return &clusterExternal{kube: c.kube, conn: conn}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.DNSView].
 type clusterExternal struct {
+	kube k8sclient.Client
 	conn ibclient.IBConnector
 }
 
@@ -148,7 +150,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DNSView)
 
 // Update patches the mutable DNSView fields (is_default is read-only and
 // never sent — see buildView). WAPI's view PUT is a partial merge.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.DNSView) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DNSView) (managed.ExternalUpdate, error) {
 	f := fieldsFromClusterParams(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
@@ -162,7 +164,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.DNSView)
 	// the external-name annotation must be refreshed here whenever the
 	// PUT response's _ref differs from the one we sent the request to.
 	if ref != "" && ref != externalID {
-		meta.SetExternalName(cr, ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

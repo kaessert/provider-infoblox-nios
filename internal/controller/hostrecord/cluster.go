@@ -19,6 +19,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-hostrecord.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Host
 		return nil, err
 	}
 
-	return &clusterExternal{client: hc}, nil
+	return &clusterExternal{kube: c.kube, client: hc}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.HostRecord].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	client *hostRecordClient
 }
 
@@ -255,7 +257,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.HostReco
 
 // Update patches the mutable HostRecord fields. networkView (immutable) is
 // never sent — see updateHostRecord.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalUpdate, error) {
 	p := &cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -270,7 +272,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.HostReco
 	// _ref and the old _ref immediately 404s — so the external-name
 	// annotation must be refreshed here.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

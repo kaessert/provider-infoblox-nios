@@ -19,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/extensibleattributedef/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-extensibleattributedef.infobloxnios.m.crossplane.io"
@@ -101,12 +102,13 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{conn: conn}, nil
+	return &namespacedExternal{kube: c.kube, conn: conn}, nil
 }
 
 // namespacedExternal implements
 // managed.TypedExternalClient[*namespacedv1alpha1.ExtensibleAttributeDef].
 type namespacedExternal struct {
+	kube k8sclient.Client
 	conn *ibclient.Connector
 }
 
@@ -208,7 +210,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ex
 
 // Update patches the mutable ExtensibleAttributeDef fields. type/min/max
 // (immutable) are never sent — see updateEADefinition.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -221,7 +223,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Ex
 	// See clusterExternal.Update — renaming an ExtensibleAttributeDef
 	// changes its _ref (live-verified, ADR-IN-0004).
 	if newRef != "" && newRef != externalID {
-		meta.SetExternalName(cr, newRef)
+		if err := externalname.Refresh(ctx, e.kube, cr, newRef); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

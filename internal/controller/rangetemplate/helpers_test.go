@@ -541,7 +541,7 @@ func TestClusterUpdateChangesExternalNameOnRefChange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newClusterRangeTemplate("my-rangetemplate", oldRef)
 	cr.Spec.ForProvider.Name = stringPtr("renamed-template")
 
@@ -566,7 +566,7 @@ func TestNamespacedUpdateChangesExternalNameOnRefChange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
 	cr := newNamespacedRangeTemplate("app-ns", "my-rangetemplate", oldRef, "ProviderConfig")
 	cr.Spec.ForProvider.Name = stringPtr("renamed-template")
 

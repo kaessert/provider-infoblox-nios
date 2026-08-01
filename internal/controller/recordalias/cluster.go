@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-recordalias.infobloxnios.crossplane.io"
@@ -76,11 +77,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Alia
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr, conn: conn}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr, conn: conn}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.AliasRecord].
 type clusterExternal struct {
+	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
 	conn   ibclient.IBConnector
 }
@@ -157,7 +159,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.AliasRec
 
 // Update patches the mutable AliasRecord fields. View (soft-immutable) is
 // never sent — see updateAliasRecord.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.AliasRecord) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AliasRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -171,7 +173,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.AliasRec
 	// old _ref immediately 404s — so the external-name annotation must be
 	// refreshed here whenever it differs.
 	if newRef != "" && newRef != externalID {
-		meta.SetExternalName(cr, newRef)
+		if err := externalname.Refresh(ctx, e.kube, cr, newRef); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

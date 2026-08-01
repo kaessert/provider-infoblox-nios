@@ -18,6 +18,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const namespacedControllerName = "namespaced-hostrecord.infobloxnios.m.crossplane.io"
@@ -100,11 +101,12 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, err
 	}
 
-	return &namespacedExternal{client: hc}, nil
+	return &namespacedExternal{kube: c.kube, client: hc}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.HostRecord].
 type namespacedExternal struct {
+	kube   k8sclient.Client
 	client *hostRecordClient
 }
 
@@ -275,7 +277,7 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ho
 
 // Update patches the mutable HostRecord fields. networkView (immutable) is
 // never sent — see updateHostRecord.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.HostRecord) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.HostRecord) (managed.ExternalUpdate, error) {
 	p := &cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -288,7 +290,9 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Ho
 	// object's current _ref, and renaming (or changing view) changes the
 	// _ref.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }

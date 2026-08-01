@@ -19,6 +19,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtclbdn/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
 const clusterControllerName = "cluster-dtclbdn.infobloxnios.crossplane.io"
@@ -77,11 +78,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.DTCL
 		return nil, err
 	}
 
-	return &clusterExternal{clients: clients}, nil
+	return &clusterExternal{kube: c.kube, clients: clients}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.DTCLBDN].
 type clusterExternal struct {
+	kube    k8sclient.Client
 	clients *dtcLbdnClients
 }
 
@@ -164,7 +166,7 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DTCLBDN)
 // Update replaces the mutable DTCLBDN fields. There are no known
 // immutable fields for DTCLBDN, so every field is echoed (this API uses
 // PUT full-replace semantics).
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
@@ -177,7 +179,9 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.DTCLBDN)
 	// DTC LBDN (a mutable field) may change its _ref (live-verified,
 	// ADR-IN-0004) — refresh the annotation whenever it differs.
 	if rec.Ref != "" && rec.Ref != externalID {
-		meta.SetExternalName(cr, rec.Ref)
+		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
+		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
