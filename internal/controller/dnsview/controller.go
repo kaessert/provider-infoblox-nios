@@ -16,6 +16,12 @@
 // accidental deletion — see isWellKnownDNSViewName and Delete in
 // cluster.go/namespaced.go.
 //
+// DNSView is wired to the UID-in-EA object-identity ladder (see the
+// recorda/ARecord controller, the pilot resource, and the
+// internal/clients/identity package doc for the full rationale).
+// newViewForGet (already used by the direct-GET path) doubles as the
+// newEmpty constructor identity.Resolve needs.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared WAPI plumbing, field comparison, and late-init logic lives here.
 package dnsview
@@ -41,29 +47,37 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dnsview/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dnsview/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewConnector        = "cannot create Infoblox NIOS WAPI connector"
-	errObserveDNSView      = "cannot observe DNSView"
-	errCreateDNSView       = "cannot create DNSView"
-	errUpdateDNSView       = "cannot update DNSView"
-	errDeleteDNSView       = "cannot delete DNSView"
-	errEmptyRef            = "empty reference to an object is not allowed"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewConnector              = "cannot create Infoblox NIOS WAPI connector"
+	errObserveDNSView            = "cannot observe DNSView"
+	errCreateDNSView             = "cannot create DNSView"
+	errUpdateDNSView             = "cannot update DNSView"
+	errDeleteDNSView             = "cannot delete DNSView"
+	errEmptyRef                  = "empty reference to an object is not allowed"
+	errEmptyUID                  = "cannot stamp DNSView identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -2140,20 +2154,34 @@ func getViewByRef(conn ibclient.IBConnector, ref string) (*ibclient.View, error)
 }
 
 // createView issues a direct WAPI POST for a new view object and returns
-// the server-assigned _ref.
-func createView(conn ibclient.IBConnector, f dnsViewFields) (string, error) {
-	return conn.CreateObject(buildView(f))
+// the server-assigned _ref. Stamps the owning managed resource's uid
+// into the object's extensible attributes in the same request that
+// creates it (identity.Stamp).
+func createView(conn ibclient.IBConnector, f dnsViewFields, uid string) (string, error) {
+	if uid == "" {
+		return "", errors.New(errEmptyUID)
+	}
+	v := buildView(f)
+	v.Ea = identity.Stamp(v.Ea, uid)
+	return conn.CreateObject(v)
 }
 
 // updateView issues a direct WAPI PUT against ref with the mutable view
 // fields (is_default has no ForProvider representation and is therefore
 // never present in buildView's output — see the immutable-fields note in
 // the package doc comment). WAPI's view PUT is a partial merge (only
-// included fields change). Returns the object's current _ref, which
-// differs from ref whenever name changed (DNSView is in the _ref-unstable
-// resource group).
-func updateView(conn ibclient.IBConnector, ref string, f dnsViewFields) (string, error) {
-	return conn.UpdateObject(buildView(f), ref)
+// included fields change) — but buildView always populates Ea, so every
+// PUT re-asserts the identity stamp (identity.Stamp) and never leaves it
+// off the wire, even on a partial-merge API.
+// Returns the object's current _ref, which differs from ref whenever
+// name changed (DNSView is in the _ref-unstable resource group).
+func updateView(conn ibclient.IBConnector, ref string, f dnsViewFields, uid string) (string, error) {
+	if uid == "" {
+		return "", errors.New(errEmptyUID)
+	}
+	v := buildView(f)
+	v.Ea = identity.Stamp(v.Ea, uid)
+	return conn.UpdateObject(v, ref)
 }
 
 // deleteView issues a direct WAPI DELETE for the view object identified by
@@ -2163,51 +2191,83 @@ func deleteView(conn ibclient.IBConnector, ref string) error {
 	return err
 }
 
-// viewExistsByNaturalKey reports whether a live View still exists under
-// the CR's own name — the same field WAPI uses to compute the _ref (DNS
-// view names are unique Grid-wide). Used by Delete() when the stored
-// _ref 404s: a hit here means the _ref is merely stale, not that the
-// object is gone. When name is empty there is no way to re-discover the
-// object, so the search is skipped (found=false) rather than treated as
-// an error.
-func viewExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
-	if strOrEmpty(name) == "" {
-		return false, nil
-	}
-	var res []ibclient.View
-	err := conn.GetObject(ibclient.NewEmptyDNSView(), "", ibclient.NewQueryParams(false, map[string]string{"name": strOrEmpty(name)}), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteViewResolving404 issues the WAPI delete and, on a 404 against the
-// stored _ref, resolves the object's natural key before concluding it is
-// gone. A 404 on a derived handle is evidence the handle rotated, not
-// evidence the object was removed: if the natural-key search still finds
-// a live view, deleting is refused because ownership of that view cannot
-// be verified from the search alone (see the staleref package doc for the
-// full rationale).
-func deleteViewResolving404(conn ibclient.IBConnector, ref string, name *string) error {
-	delErr := deleteView(conn, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. See recorda's ensureIdentityPrerequisite for the full
+// rationale.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteDNSView)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := viewExistsByNaturalKey(conn, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteDNSView)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveViewIdentity resolves the View identified by ref/uid through
+// the shared UID-in-EA ladder. newViewForGet (already used by the
+// direct-GET path) doubles as the newEmpty constructor.
+func resolveViewIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.View, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.View](ctx, conn, newViewForGet, ref, uid)
+}
+
+// deleteViewIdentity issues the WAPI delete for the View this managed
+// resource owns, resolving through the identity ladder first so a stale
+// _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity doc for the full ownership-verification rules.
+// Well-known views (default/External/Internal) are the caller's
+// responsibility to exclude before calling this — see
+// isWellKnownDNSViewName and Delete in cluster.go/namespaced.go.
+func deleteViewIdentity(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveViewIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteDNSView)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteView(conn, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteDNSView)
+	default:
+		return errors.New("identity: unresolved DNSView outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
