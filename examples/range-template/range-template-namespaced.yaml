@@ -32,7 +32,7 @@ metadata:
       - field: cloudApiCompatible
         value: true
       - field: name
-        skip: "renaming a range template can change the WAPI _ref (like ARecord); covered by controller unit tests instead"
+        skip: "renaming a range template can change the WAPI _ref (like ARecord); not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: serverAssociationType
         skip: "requires a specific, mutually-consistent Grid association (member/failover) not modeled by this standalone example"
       - field: failoverAssociation

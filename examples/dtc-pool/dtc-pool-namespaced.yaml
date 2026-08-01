@@ -40,7 +40,7 @@ metadata:
       - field: ttl
         value: 3600
       - field: name
-        skip: "renaming a DTC Pool may change its WAPI _ref; covered by controller unit tests instead"
+        skip: "renaming a DTC Pool may change its WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: lbPreferredTopology
         skip: "only meaningful when lbPreferredMethod=TOPOLOGY; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
       - field: lbAlternateTopology

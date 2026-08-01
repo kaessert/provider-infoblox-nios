@@ -167,7 +167,7 @@ metadata:
       - field: useSortlist
         value: true
       - field: name
-        skip: "renaming rotates the WAPI _ref (DNSView is in the _ref-unstable resource group); covered by controller unit tests instead"
+        skip: "renaming rotates the WAPI _ref (DNSView is in the _ref-unstable resource group); not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: networkView
         skip: "structural reassociation requiring a second NetworkView object not created by this standalone example"
       - field: ddnsPrincipalGroup

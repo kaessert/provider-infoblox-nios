@@ -26,7 +26,7 @@ metadata:
       - field: comment
         value: "Updated by update-tester (namespaced)"
       - field: name
-        skip: "renaming rotates the WAPI _ref; covered by controller unit tests instead"
+        skip: "renaming rotates the WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:

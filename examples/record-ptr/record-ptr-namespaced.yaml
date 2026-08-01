@@ -35,11 +35,11 @@ metadata:
       - field: ttl
         value: 3600
       - field: ptrdname
-        skip: "_ref-mutating identity field for PTRRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for PTRRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: name
-        skip: "_ref-mutating identity field for PTRRecord; covered by controller unit tests instead"
+        skip: "_ref-mutating identity field for PTRRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: ipv4Addr
-        skip: "keys the record and the auto-derived name; changing it risks _ref rotation, covered by controller unit tests instead"
+        skip: "keys the record and the auto-derived name; changing it risks _ref rotation, not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: ipv6Addr
         skip: "mutually exclusive with ipv4Addr, unset in this example"
       - field: extAttrs
