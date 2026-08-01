@@ -24,7 +24,21 @@
 //     (a match could belong to a different resource entirely). Refuse
 //     the delete rather than risk destroying someone else's object.
 //
-// RefusalError is the error every resource returns for the second branch.
+// Observe() must apply the identical resolution before it may report a
+// resource as gone: crossplane-runtime's managed reconciler calls Observe()
+// first on the deletion path, and if Observe() reports ResourceExists:
+// false it never calls Delete() at all — it just unpublishes the managed
+// resource and clears the finalizer. A stale-_ref 404 in Observe()
+// therefore bypasses every Delete() safeguard above and orphans the
+// backend object with no error, no event, and no trace that Delete() was
+// ever skipped. Observe() follows the same two-step resolution, with the
+// same fail-closed answer on the second step: a natural-key match cannot
+// be silently adopted (bound to this managed resource's external name)
+// because ownership is unverifiable, so it must refuse rather than
+// report the resource as either gone or healthy.
+//
+// RefusalError is the error every resource's Delete() returns for a
+// natural-key match. ObserveRefusalError is the equivalent for Observe().
 package staleref
 
 import "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -48,4 +62,27 @@ const refusalMessage = "refusing to delete: stored _ref is stale (404) and an ob
 // no mutating call against the backend.
 func RefusalError() error {
 	return errors.New(refusalMessage)
+}
+
+// observeRefusalMessage mirrors refusalMessage for the Observe() path. It
+// deliberately does not say "deleting" — Observe() runs on every
+// reconcile, not just deletion — and it warns explicitly against
+// auto-adopting the match, since Observe() (unlike Delete()) could
+// otherwise be tempted to silently rebind the managed resource's identity
+// to whatever the search happened to find.
+const observeRefusalMessage = "cannot observe: stored external-name (_ref) is stale (404) and an object matching this resource's identity still exists on the Grid. " +
+	"Binding this managed resource to it automatically is not safe because ownership is unverifiable. " +
+	"Reconcile the external-name annotation to the live _ref, or remove the object on the Grid manually, then retry. " +
+	"To abandon the object without deleting it, remove the finalizer."
+
+// ObserveRefusalError returns the error an Observe() implementation must
+// return when the stored external-name 404s but a natural-key search
+// finds a live object that could be the same one. Returning this error
+// (rather than ExternalObservation{ResourceExists: false}) keeps
+// crossplane-runtime's finalizer in place — so the deletion path never
+// silently unpublishes the managed resource while a matching object is
+// still live on the Grid — and surfaces ReconcileError to the operator
+// instead of guessing which object this managed resource now owns.
+func ObserveRefusalError() error {
+	return errors.New(observeRefusalMessage)
 }

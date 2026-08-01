@@ -19,6 +19,7 @@ import (
 
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-zoneauth.infobloxnios.m.crossplane.io"
@@ -222,6 +223,17 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	rec, err := getZoneAuthByRef(e.conn, externalID)
 	if err != nil {
 		if isNotFound(err) {
+			// The stored external-name is a derived handle: it rotates
+			// whenever an identity-composing field changes, so a 404 here
+			// is not proof the object is gone (see the staleref package
+			// doc). Resolve the natural key before concluding that.
+			found, searchErr := zoneAuthExistsByNaturalKey(e.conn, cr.Spec.ForProvider.FQDN, cr.Spec.ForProvider.View)
+			if searchErr != nil {
+				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneAuth)
+			}
+			if found {
+				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
+			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneAuth)

@@ -20,6 +20,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-ipv4sharednetwork.infobloxnios.m.crossplane.io"
@@ -127,6 +128,17 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.I
 	sn, err := e.objMgr.GetIpv4SharedNetworkByRef(externalID)
 	if err != nil {
 		if isNotFound(err) {
+			// The stored external-name is a derived handle: it rotates
+			// whenever an identity-composing field changes, so a 404 here
+			// is not proof the object is gone (see the staleref package
+			// doc). Resolve the natural key before concluding that.
+			found, searchErr := ipv4SharedNetworkExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.NetworkView, cr.Spec.ForProvider.Name)
+			if searchErr != nil {
+				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveIPv4SharedNet)
+			}
+			if found {
+				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
+			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveIPv4SharedNet)
@@ -213,9 +225,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the IPv4SharedNetwork. A 404 is treated as
-// already-deleted (idempotent). This is a hard delete — a subsequent GET
-// on the same ref 404s.
+// Delete removes the IPv4SharedNetwork. A 404 on the stored _ref is not
+// treated as already-deleted by itself — see
+// deleteIPv4SharedNetworkResolving404 — because the _ref is a derived
+// handle that rotates whenever an identity field changes, and a stale
+// handle 404s exactly like a genuinely deleted object.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	p := cr.Spec.ForProvider

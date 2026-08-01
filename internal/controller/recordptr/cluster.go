@@ -21,6 +21,7 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordptr/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-recordptr.infobloxnios.crossplane.io"
@@ -104,6 +105,17 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.PTRReco
 	rec, err := e.objMgr.GetPTRRecordByRef(externalID)
 	if err != nil {
 		if isNotFound(err) {
+			// The stored external-name is a derived handle: it rotates
+			// whenever an identity-composing field changes, so a 404 here
+			// is not proof the object is gone (see the staleref package
+			// doc). Resolve the natural key before concluding that.
+			found, searchErr := ptrRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Ptrdname, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.IPv4Addr, cr.Spec.ForProvider.IPv6Addr)
+			if searchErr != nil {
+				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObservePTRRecord)
+			}
+			if found {
+				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
+			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObservePTRRecord)

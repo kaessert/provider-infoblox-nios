@@ -812,6 +812,40 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	}
 }
 
+// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// Observe()-side half of the same defect: crossplane-runtime's managed
+// reconciler calls Observe() before Delete() on the deletion path, and if
+// Observe() reports ResourceExists:false the reconciler never calls
+// Delete() at all — it just clears the finalizer, orphaning the Grid
+// object. A 404 against the stored _ref must not be silently treated as
+// "does not exist" when a natural-key search finds a live object under
+// the CR's own identity fields.
+func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockDtcServerServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.DtcServer{Name: stringPtr("my-dtc-server"), Host: stringPtr("2.3.4.5")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCServer("my-dtcserver", "dtc:server/stale-ref:my-dtc-server")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1155,6 +1189,35 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockDtcServerServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.DtcServer{Name: stringPtr("my-dtc-server"), Host: stringPtr("2.3.4.5")})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", "dtc:server/stale-ref:my-dtc-server", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot observe") {
+		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
 	}
 }
 
