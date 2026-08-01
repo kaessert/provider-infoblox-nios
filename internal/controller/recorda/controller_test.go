@@ -187,10 +187,41 @@ type mockWapiServer struct {
 	// tests assert what was actually requested independently of what
 	// address got allocated.
 	lastCreateIpv4Addr *string
+
+	// ── identity EA-definition prerequisite probe state ─────────────
+	//
+	// eaDefExists controls whether GET .../extensibleattributedef
+	// reports the identity extensible attribute definition as present.
+	// Defaults to true (see newMockWapiServer) so tests that do not
+	// specifically exercise the prerequisite probe never trigger a
+	// create call for it.
+	eaDefExists bool
+	// eaDefCreateStatus, when non-zero, is the HTTP status the mock
+	// returns for a POST .../extensibleattributedef instead of
+	// succeeding — used to simulate a credential that cannot create the
+	// definition (401/403).
+	eaDefCreateStatus int
+	// eaDefCreateBody is the response body written alongside
+	// eaDefCreateStatus — a WAPI-shaped error payload.
+	eaDefCreateBody string
+	// eaDefSearchCalls/eaDefCreateCalls count requests to the
+	// extensibleattributedef existence-check and create endpoints,
+	// independent of searchCalls (record:a) above — used to prove the
+	// probe's own cost (at most one round trip per TTL window) and that
+	// a refusal issues no ARecord create.
+	eaDefSearchCalls int
+	eaDefCreateCalls int
 }
 
 func newMockWapiServer() *mockWapiServer {
-	return &mockWapiServer{records: map[string]*ibclient.RecordA{}}
+	return &mockWapiServer{
+		records: map[string]*ibclient.RecordA{},
+		// The identity EA definition is present by default so every
+		// pre-existing Create test (written before the prerequisite probe
+		// existed) sees the prerequisite as already satisfied and never
+		// exercises the create-definition path.
+		eaDefExists: true,
+	}
 }
 
 func (m *mockWapiServer) seed(rec *ibclient.RecordA) string {
@@ -274,6 +305,45 @@ func (m *mockWapiServer) handler() http.Handler {
 		rec.Zone = zoneFromName(rec.Name)
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
+	})
+
+	// Identity EA-definition prerequisite probe endpoints
+	// (internal/clients/identity.Prober.Ensure): the existence check and,
+	// when absent, the create attempt for the "Crossplane Internal ID"
+	// extensible attribute definition. eaDefExists defaults to true (see
+	// newMockWapiServer) so tests that never touch these fields see the
+	// prerequisite as already satisfied.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefSearchCalls++
+		exists := m.eaDefExists
+		m.mu.Unlock()
+
+		if !exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+			return
+		}
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefCreateCalls++
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+
+		m.mu.Lock()
+		m.eaDefExists = true
+		m.mu.Unlock()
+		writeJSON(w, http.StatusOK, "extensibleattributedef/test:"+url.QueryEscape(identity.EAKey))
 	})
 
 	// Search endpoint (GetARecord, and the identity ladder's EA search):
@@ -945,6 +1015,251 @@ func TestCreateARecordRejectsCidrWithStaticIP(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("createARecord: error = %v, want it to mention 'mutually exclusive'", err)
+	}
+}
+
+// ── cluster: Create identity prerequisite probe ──────────────────────────
+//
+// These tests inject a fresh identity.NewProber() per test (never
+// identity.DefaultProber) so their verdict caches never leak into each
+// other or into any other test in this binary that happens to call
+// Create() without configuring the probe explicitly.
+
+func TestClusterCreateIdentityDefinitionAlreadyExists(t *testing.T) {
+	m := newMockWapiServer() // eaDefExists: true by default
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-already-has-definition",
+	}
+	cr := newClusterARecord("my-arecord", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	searchCalls, createCalls := m.eaDefSearchCalls, m.eaDefCreateCalls
+	m.mu.Unlock()
+	if searchCalls != 1 {
+		t.Errorf("eaDefSearchCalls = %d, want exactly 1 (the probe still runs once)", searchCalls)
+	}
+	if createCalls != 0 {
+		t.Errorf("eaDefCreateCalls = %d, want 0 — a present definition must never be (re)created", createCalls)
+	}
+}
+
+func TestClusterCreateIdentityDefinitionAbsentAndCreatable(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-absent-creatable",
+	}
+	cr := newClusterARecord("my-arecord", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	createCalls := m.eaDefCreateCalls
+	nRecords := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 1 {
+		t.Errorf("eaDefCreateCalls = %d, want exactly 1", createCalls)
+	}
+	if nRecords != 1 {
+		t.Errorf("records created = %d, want 1 — Create must proceed once the definition is created", nRecords)
+	}
+}
+
+func TestClusterCreateIdentityDefinitionAbsentAndForbidden(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = `{"Error":"AdmConProtoError: Not authorized"}`
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "nios.example.com",
+	}
+	cr := newClusterARecord("my-arecord", "")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when the identity definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Create: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+	if !strings.Contains(err.Error(), "nios.example.com") || !strings.Contains(err.Error(), "POST /wapi/v2.12/extensibleattributedef") {
+		t.Errorf("Create: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+	}
+
+	m.mu.Lock()
+	nRecords := len(m.records)
+	m.mu.Unlock()
+	if nRecords != 0 {
+		t.Errorf("records created = %d, want 0 — no ARecord POST must be issued when the prerequisite is refused", nRecords)
+	}
+
+	got := meta.GetExternalName(cr)
+	if got != "" && got != cr.GetName() {
+		t.Errorf("Create: external-name = %q, want it left unset when the prerequisite refuses", got)
+	}
+}
+
+// TestClusterCreateIdentityPrerequisiteCachedWithinTTL proves the
+// Prober's cache means a second Create against the same endpoint does
+// not re-probe within the TTL — the probe costs at most one WAPI round
+// trip per TTL window per endpoint, not one per reconcile.
+func TestClusterCreateIdentityPrerequisiteCachedWithinTTL(t *testing.T) {
+	m := newMockWapiServer() // eaDefExists: true by default
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	prober := identity.NewProber()
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   prober,
+		endpoint: "grid-cache-test",
+	}
+
+	for i := 0; i < 2; i++ {
+		cr := newClusterARecord("my-arecord", "")
+		if _, err := e.Create(context.Background(), cr); err != nil {
+			t.Fatalf("Create[%d]: unexpected error: %v", i, err)
+		}
+	}
+
+	m.mu.Lock()
+	searchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if searchCalls != 1 {
+		t.Errorf("eaDefSearchCalls after 2 Create calls = %d, want exactly 1 (cached within the TTL)", searchCalls)
+	}
+}
+
+// TestClusterCreateValidatesInputsBeforeProbing proves the cidr/ipv4Addr
+// mutual-exclusivity check runs before the identity prerequisite probe —
+// a purely local validation failure must never cost a network round
+// trip. The mock server has no extensibleattributedef routes wired to
+// succeed by anything other than eaDefExists's default; forcing the
+// definition absent-and-forbidden here means any probe call would fail
+// loudly with a *PrerequisiteError instead of the expected
+// "mutually exclusive" validation error, proving the probe was never
+// reached.
+func TestClusterCreateValidatesInputsBeforeProbing(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "grid-validate-first",
+	}
+	cr := newClusterARecord("my-arecord", "")
+	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.5")
+	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when cidr and ipv4Addr are both set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("Create: error = %v, want it to mention 'mutually exclusive' (local validation must run before the probe)", err)
+	}
+
+	m.mu.Lock()
+	searchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if searchCalls != 0 {
+		t.Errorf("eaDefSearchCalls = %d, want 0 — local validation must fail before any probe round trip", searchCalls)
+	}
+}
+
+// TestClusterCreateDefaultsToSharedProberAndEndpointFallback proves
+// Create still works when built without an explicit prober/endpoint
+// (e.g. every pre-existing Create test in this file, and the RBAC
+// fallback Setup() path before this ticket's wiring) — it falls back to
+// identity.DefaultProber and unresolvedProbeEndpoint rather than
+// panicking or erroring on an empty cache key.
+func TestClusterCreateDefaultsToSharedProberAndEndpointFallback(t *testing.T) {
+	m := newMockWapiServer() // eaDefExists: true by default
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterARecord("my-arecord", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+}
+
+func TestNamespacedCreateIdentityDefinitionAbsentAndForbidden(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = `{"Error":"AdmConProtoError: Not authorized"}`
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube:     &recordingKubeClient{},
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		prober:   identity.NewProber(),
+		endpoint: "nios.example.com",
+	}
+	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
+
+	_, err := e.Create(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Create: expected an error when the identity definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Create: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+
+	m.mu.Lock()
+	nRecords := len(m.records)
+	m.mu.Unlock()
+	if nRecords != 0 {
+		t.Errorf("records created = %d, want 0 — no ARecord POST must be issued when the prerequisite is refused", nRecords)
 	}
 }
 

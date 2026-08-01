@@ -65,7 +65,18 @@ const (
 	errEmptyUID                  = "cannot stamp ARecord identity: managed resource's metadata.uid is empty"
 	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
 		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// Production code always goes through Connect(), which resolves the
+// endpoint from the ProviderConfig's credentials Secret (validated
+// non-empty by extractCredentials) before constructing the client — this
+// fallback is only ever reached by this package's own white-box unit
+// tests that build clusterExternal/namespacedExternal directly, bypassing
+// Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -443,6 +454,23 @@ func observeFromRecordA(externalID string, rec *ibclient.RecordA) observedARecor
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
+// validateARecordCreateInputs performs the local, network-free sanity
+// checks a create call requires: uid must be set (identity.Stamp cannot
+// stamp an empty value), and cidr/ipv4Addr are mutually exclusive. Both
+// Create() (before it probes the identity prerequisite — a purely local
+// validation failure must never cost a network round-trip) and
+// createARecord (for callers that invoke it directly) run this check
+// first.
+func validateARecordCreateInputs(ipv4Addr, cidr *string, uid string) error {
+	if uid == "" {
+		return errors.New(errEmptyUID)
+	}
+	if strOrEmpty(cidr) != "" && strOrEmpty(ipv4Addr) != "" {
+		return errors.New(errCidrIPv4Mutex)
+	}
+	return nil
+}
+
 // createARecord issues the WAPI create call, stamping the owning managed
 // resource's uid into the object's extensible attributes in the same
 // request that creates it (identity.Stamp) — there is no follow-up call,
@@ -457,15 +485,11 @@ func observeFromRecordA(externalID string, rec *ibclient.RecordA) observedARecor
 // explicitly for consistent behavior across all three next-available-IP
 // record types.
 func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string, uid string) (*ibclient.RecordA, error) {
-	if uid == "" {
-		return nil, errors.New(errEmptyUID)
+	if err := validateARecordCreateInputs(ipv4Addr, cidr, uid); err != nil {
+		return nil, err
 	}
 
 	cidrVal := strOrEmpty(cidr)
-	if cidrVal != "" && strOrEmpty(ipv4Addr) != "" {
-		return nil, errors.New(errCidrIPv4Mutex)
-	}
-
 	netView := strOrEmpty(networkView)
 	if cidrVal != "" && netView == "" {
 		netView = "default"
@@ -526,12 +550,71 @@ func deleteARecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+//
+// ADR-IN-0006 §4: the "Crossplane Internal ID" extensible-attribute
+// definition is an install prerequisite for every resource that stamps or
+// resolves identity through it. Wired into Create() only (not Connect(),
+// which must stay network-lazy — see newObjectManager's doc — and not
+// Observe(), whose identity-EA search takes a different failure path
+// documented on resolveARecordIdentity/observeARecord below).
+
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+//
+// prober defaults to identity.DefaultProber when nil — the production
+// path always shares one Prober across every controller so the TTL
+// round-trip budget applies provider-wide (see identity.DefaultProber's
+// doc); tests that need an isolated verdict cache, instead of sharing
+// state with every other test in this binary, inject their own
+// identity.NewProber() instance. endpoint similarly falls back to
+// unresolvedProbeEndpoint only when the caller was built without a
+// resolved Grid host — see that constant's doc.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
+	}
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
+	}
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
+	}
+	return nil
+}
+
 // ── Identity resolution (shared by both scopes) ─────────────────────────
 //
 // ADR-IN-0006 replaces this resource's original natural-key delete
 // refusal with the UID-in-EA ladder implemented once in
 // internal/clients/identity and reused by every rotating-identifier NIOS
 // type. ARecord is the pilot wiring.
+//
+// Observe's identity-EA search (searchByUID inside identity.Resolve, hit
+// whenever the stored reference is empty or has 404'd) queries WAPI by
+// "*Crossplane Internal ID=<uid>". Live verification against a real Grid
+// confirmed this fails exactly like the Create-time stamp does when the
+// definition is absent — WAPI returns HTTP 400
+// ("AdmConProtoError: Unknown extensible attribute: Crossplane Internal ID"),
+// not an empty result set — so an unguarded Observe would surface that
+// opaque 400 instead of the ADR §4 remediation on every reconcile that
+// needs the search path (an unknown or rotated reference). This is not
+// wired here: Observe's identity search is reachable far more often than
+// Create's stamp (every poll interval, for any object whose reference is
+// unknown or stale), so gating it on the same prerequisite probe is
+// tracked as its own follow-up rather than folded into this ticket's
+// Create-path scope.
 
 // observeRefFor derives the reference the identity ladder should attempt
 // first for a managed resource's stored external-name. When the

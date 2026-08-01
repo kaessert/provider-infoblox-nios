@@ -20,6 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 )
 
@@ -77,7 +78,15 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.ARec
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: mgrConn.Manager, conn: mgrConn.Connector}, nil
+	return &clusterExternal{
+		kube:   c.kube,
+		objMgr: mgrConn.Manager,
+		conn:   mgrConn.Connector,
+		// prober is left nil (defaults to identity.DefaultProber in
+		// ensureIdentityPrerequisite) so every controller in the process
+		// shares one TTL-bounded verdict cache per Grid endpoint.
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.ARecord].
@@ -88,6 +97,15 @@ type clusterExternal struct {
 	// against directly — it needs visibility into search match counts
 	// that objMgr's typed methods hide. See resolveARecordIdentity.
 	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
+	// new object. nil defaults to identity.DefaultProber — see
+	// ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host. See
+	// ensureIdentityPrerequisite's empty-string fallback.
+	endpoint string
 }
 
 // Observe resolves the ARecord through the shared UID-in-EA identity
@@ -157,9 +175,20 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AReco
 // uid into the object's identity extensible attribute in the same
 // request (see createARecord), and records the server-assigned _ref as
 // the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalCreation, error) {
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createARecord(e.objMgr, p.Name, p.View, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView, string(cr.GetUID()))
+	uid := string(cr.GetUID())
+
+	// Local, network-free validation first — a bad request must never
+	// cost a probe round-trip.
+	if err := validateARecordCreateInputs(p.IPv4Addr, p.Cidr, uid); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createARecord(e.objMgr, p.Name, p.View, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateARecord)
 	}
