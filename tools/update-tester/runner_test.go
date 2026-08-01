@@ -14,15 +14,43 @@ const testFieldNotifyDelay = "notifyDelay"
 
 // fakeCluster is an in-memory stand-in for a live cluster's view of a single
 // managed resource. It implements the subset of kubectl behaviour Runner
-// depends on (get -o json, get -o jsonpath=..., patch, wait) so runFieldTest
-// can be exercised without a real cluster.
+// depends on (get -o json, get -o jsonpath=..., get events, patch, wait) so
+// runFieldTest can be exercised without a real cluster.
 type fakeCluster struct {
 	forProvider map[string]interface{}
 	atProvider  map[string]interface{}
 	generation  int64
 
+	// kind and name identify the resource for event-evidence lookups
+	// (kubectl get events ... involvedObject matching). Tests exercising
+	// countUpdateEvents/runFieldTest's evidence check set these to match
+	// the kind/name passed into runFieldTest.
+	kind string
+	name string
+
+	// recordUpdateEvent, when true, makes each real field patch (not the
+	// ClearConditions status patch) increment eventCount by one — simulating
+	// a controller whose Update() call emits an UpdatedExternalResource
+	// event. Left false, patches succeed and atProvider still converges, but
+	// no event is ever recorded — the "update not evidenced" scenario.
+	recordUpdateEvent bool
+	eventCount        int32
+	// emitZeroCountEvent, when true, reports the aggregated event's .count
+	// field as 0 once eventCount reaches at least 1 — mirroring client-go's
+	// event recorder, which leaves .count unset (0) for an event's first,
+	// unaggregated occurrence. Exercises sumEventOccurrences's zero-guard
+	// (a 0 count is 1 occurrence, not 0) through the runFieldTest evidence
+	// check rather than only through the standalone sumEventOccurrences unit
+	// tests.
+	emitZeroCountEvent bool
+
 	patchCalls int
 	waitCalls  int
+	// nudgeCalls counts NudgeReconcile's metadata-annotation patches,
+	// tracked separately from patchCalls (real field patches) so tests can
+	// assert the forced second reconcile fired without conflating it with
+	// the field patch itself.
+	nudgeCalls int
 }
 
 // exec implements the Runner.execFunc signature, dispatching on the kubectl
@@ -45,6 +73,9 @@ func (f *fakeCluster) exec(args []string) (string, error) {
 }
 
 func (f *fakeCluster) handleGet(args []string) (string, error) {
+	if len(args) > 1 && args[1] == "events" {
+		return f.handleGetEvents()
+	}
 	for _, a := range args {
 		if strings.HasPrefix(a, "jsonpath=") {
 			b, err := json.Marshal(f.atProvider)
@@ -60,6 +91,30 @@ func (f *fakeCluster) handleGet(args []string) (string, error) {
 		jsonKeyStatus: map[string]interface{}{jsonKeyAtProvider: f.atProvider},
 	}
 	b, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// handleGetEvents backs `kubectl get events --all-namespaces -o json`. It
+// reports zero items until a real field patch has incremented eventCount
+// (via recordUpdateEvent), then a single aggregated Item carrying the
+// current count — mirroring client-go's event-recorder aggregation that
+// countUpdateEvents/sumEventOccurrences must sum rather than count Items.
+func (f *fakeCluster) handleGetEvents() (string, error) {
+	list := eventList{}
+	if f.eventCount > 0 {
+		count := f.eventCount
+		if f.emitZeroCountEvent {
+			count = 0
+		}
+		item := eventItem{Reason: eventReasonUpdated, Count: count}
+		item.InvolvedObject.Kind = f.kind
+		item.InvolvedObject.Name = f.name
+		list.Items = []eventItem{item}
+	}
+	b, err := json.Marshal(list)
 	if err != nil {
 		return "", err
 	}
@@ -88,6 +143,16 @@ func (f *fakeCluster) handlePatch(args []string) (string, error) {
 	if err := json.Unmarshal([]byte(payload), &patch); err != nil {
 		return "", fmt.Errorf("fakeCluster: parsing patch payload: %w", err)
 	}
+
+	if _, isMetadataPatch := patch["metadata"]; isMetadataPatch {
+		// NudgeReconcile — a metadata-annotation-only patch used to force a
+		// reconcile without touching spec.forProvider. Counted separately
+		// so it is never mistaken for a real field patch (which would
+		// corrupt patchCalls/eventCount assertions below).
+		f.nudgeCalls++
+		return "", nil
+	}
+
 	specRaw, _ := patch["spec"].(map[string]interface{})
 	forProviderRaw, _ := specRaw["forProvider"].(map[string]interface{})
 
@@ -99,6 +164,9 @@ func (f *fakeCluster) handlePatch(args []string) (string, error) {
 
 	f.generation++
 	f.patchCalls++
+	if f.recordUpdateEvent {
+		f.eventCount++
+	}
 	return "", nil
 }
 
@@ -138,6 +206,8 @@ func TestRunFieldTestNoOpDetection(t *testing.T) {
 		forProvider: map[string]interface{}{testFieldNotifyDelay: float64(10)},
 		atProvider:  map[string]interface{}{testFieldNotifyDelay: float64(10)},
 		generation:  1,
+		kind:        testKindARecord,
+		name:        testNameARecord,
 	}
 	r := newFakeRunner(f)
 	snapshot, err := json.Marshal(f.atProvider)
@@ -146,7 +216,7 @@ func TestRunFieldTestNoOpDetection(t *testing.T) {
 	}
 
 	test := UpdateTest{Field: testFieldNotifyDelay, Value: 10}
-	result, newSnapshot := r.runFieldTest(test, snapshot)
+	result, newSnapshot := r.runFieldTest(test, snapshot, testKindARecord, testNameARecord)
 
 	if !result.NoOp {
 		t.Fatalf("expected NoOp=true, got %+v", result)
@@ -174,12 +244,18 @@ func TestRunFieldTestNoOpDetection(t *testing.T) {
 
 // TestRunFieldTestExecutesWhenValueDiffers covers the negative case: a field
 // whose pre-patch value differs from the target is patched and tested
-// normally, producing a genuine PASS.
+// normally, producing a genuine PASS backed by positive update-event
+// evidence (see TestRunFieldTestNotEvidencedWhenNoUpdateEvent for the
+// counter-case), and exercises the forced second reconcile that refreshes
+// atProvider independently of the provider's poll interval.
 func TestRunFieldTestExecutesWhenValueDiffers(t *testing.T) {
 	f := &fakeCluster{
-		forProvider: map[string]interface{}{testFieldNotifyDelay: float64(5)},
-		atProvider:  map[string]interface{}{testFieldNotifyDelay: float64(5)},
-		generation:  1,
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
 	}
 	r := newFakeRunner(f)
 	snapshot, err := json.Marshal(f.atProvider)
@@ -188,7 +264,7 @@ func TestRunFieldTestExecutesWhenValueDiffers(t *testing.T) {
 	}
 
 	test := UpdateTest{Field: testFieldNotifyDelay, Value: 10}
-	result, newSnapshot := r.runFieldTest(test, snapshot)
+	result, newSnapshot := r.runFieldTest(test, snapshot, testKindARecord, testNameARecord)
 
 	if result.NoOp {
 		t.Fatalf("expected NoOp=false when the pre-patch value differs, got %+v", result)
@@ -199,17 +275,106 @@ func TestRunFieldTestExecutesWhenValueDiffers(t *testing.T) {
 	if !result.Passed {
 		t.Fatalf("expected the update test to pass, got %+v", result)
 	}
+	if !result.UpdateEvidenced {
+		t.Errorf("expected UpdateEvidenced=true when the controller emits an update event, got %+v", result)
+	}
+	if result.NotEvidenced {
+		t.Errorf("expected NotEvidenced=false for an evidenced update, got %+v", result)
+	}
 	if f.patchCalls != 1 {
 		t.Errorf("expected exactly 1 patch call, got %d", f.patchCalls)
 	}
-	if f.waitCalls != 1 {
-		t.Errorf("expected exactly 1 wait call, got %d", f.waitCalls)
+	if f.nudgeCalls != 1 {
+		t.Errorf("expected exactly 1 nudge call (forcing the second reconcile), got %d", f.nudgeCalls)
+	}
+	if f.waitCalls != 2 {
+		t.Errorf("expected exactly 2 wait calls (first reconcile + forced re-observe), got %d", f.waitCalls)
 	}
 	if bytes.Equal(newSnapshot, snapshot) {
 		t.Error("expected the post-patch snapshot to differ from the input snapshot")
 	}
 	if len(result.SideFx) != 0 {
 		t.Errorf("expected no side effects, got %v", result.SideFx)
+	}
+}
+
+// TestRunFieldTestNotEvidencedWhenNoUpdateEvent covers the failure mode this
+// evidence check exists to catch: a field whose observed value ends up
+// matching the target (e.g. because something outside the reconciler wrote
+// it) but for which the controller never recorded an update event. Without
+// the event-count signal this would be indistinguishable from a genuine
+// PASS; with it, it must be downgraded to a distinct failure.
+func TestRunFieldTestNotEvidencedWhenNoUpdateEvent(t *testing.T) {
+	f := &fakeCluster{
+		forProvider: map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		atProvider:  map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		generation:  1,
+		kind:        testKindARecord,
+		name:        testNameARecord,
+		// recordUpdateEvent left false: the patch still "succeeds" (the fake
+		// always converges atProvider), but no UpdatedExternalResource event
+		// is ever recorded — simulating a reconciler whose Update() path
+		// never actually ran.
+	}
+	r := newFakeRunner(f)
+	snapshot, err := json.Marshal(f.atProvider)
+	if err != nil {
+		t.Fatalf("marshalling snapshot: %v", err)
+	}
+
+	test := UpdateTest{Field: testFieldNotifyDelay, Value: 10}
+	result, _ := r.runFieldTest(test, snapshot, testKindARecord, testNameARecord)
+
+	if result.Passed {
+		t.Fatalf("expected Passed=false when no update event was recorded, got %+v", result)
+	}
+	if !result.NotEvidenced {
+		t.Fatalf("expected NotEvidenced=true, got %+v", result)
+	}
+	if result.UpdateEvidenced {
+		t.Errorf("expected UpdateEvidenced=false, got %+v", result)
+	}
+	if result.Error == nil {
+		t.Fatal("expected a non-nil error explaining the missing evidence")
+	}
+	const wantSubstr = "update not evidenced"
+	if !strings.Contains(result.Error.Error(), wantSubstr) {
+		t.Errorf("error = %q, want substring %q", result.Error.Error(), wantSubstr)
+	}
+}
+
+// TestRunFieldTestZeroCountEventStillEvidencesUpdate confirms the evidence
+// check applies the same zero-guard as sumEventOccurrences: an aggregated
+// event whose .count field reads 0 (client-go leaves it unset for a single,
+// unaggregated occurrence) must still count as one occurrence and evidence
+// the update, not be mistaken for "no event happened".
+func TestRunFieldTestZeroCountEventStillEvidencesUpdate(t *testing.T) {
+	f := &fakeCluster{
+		forProvider:        map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		atProvider:         map[string]interface{}{testFieldNotifyDelay: float64(5)},
+		generation:         1,
+		kind:               testKindARecord,
+		name:               testNameARecord,
+		recordUpdateEvent:  true,
+		emitZeroCountEvent: true,
+	}
+	r := newFakeRunner(f)
+	snapshot, err := json.Marshal(f.atProvider)
+	if err != nil {
+		t.Fatalf("marshalling snapshot: %v", err)
+	}
+
+	test := UpdateTest{Field: testFieldNotifyDelay, Value: 10}
+	result, _ := r.runFieldTest(test, snapshot, testKindARecord, testNameARecord)
+
+	if !result.UpdateEvidenced {
+		t.Fatalf("expected UpdateEvidenced=true for a zero-count first occurrence, got %+v", result)
+	}
+	if !result.Passed {
+		t.Fatalf("expected Passed=true, got %+v", result)
+	}
+	if result.NotEvidenced {
+		t.Errorf("expected NotEvidenced=false, got %+v", result)
 	}
 }
 
@@ -221,6 +386,8 @@ func TestRunFieldTestNoOpUsesExpectOverride(t *testing.T) {
 		forProvider: map[string]interface{}{"dnssecValidationEnabled": true},
 		atProvider:  map[string]interface{}{"dnssecValidationEnabled": true},
 		generation:  1,
+		kind:        testKindARecord,
+		name:        testNameARecord,
 	}
 	r := newFakeRunner(f)
 	snapshot, err := json.Marshal(f.atProvider)
@@ -229,7 +396,7 @@ func TestRunFieldTestNoOpUsesExpectOverride(t *testing.T) {
 	}
 
 	test := UpdateTest{Field: "dnssecValidationEnabled", Value: true, Expect: true}
-	result, _ := r.runFieldTest(test, snapshot)
+	result, _ := r.runFieldTest(test, snapshot, testKindARecord, testNameARecord)
 
 	if !result.NoOp {
 		t.Fatalf("expected NoOp=true, got %+v", result)
