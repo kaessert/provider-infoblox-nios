@@ -7,6 +7,12 @@
 # Crossplane stores it in the crossplane.io/external-name annotation. Do
 # not set that annotation manually — the controller populates it.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
 # Required fields:
 #   name:     owner name in FQDN format. WAPI ties the record's `_ref` to
 #             (view, zone, name); the controller re-syncs the annotation
@@ -73,7 +79,7 @@ metadata:
         skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
-    name: www.example.com
+    name: www-${data.runToken}.example.com
     ipv4Addr: 192.0.2.10
     view: default
     comment: Managed by Crossplane

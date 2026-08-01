@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# test/e2e/gen-datasource.sh — Generate a per-run uptest datasource file.
+#
+# The shared NIOS Grid Manager is one host, one object namespace. Two E2E
+# runs of the same resource that both use the literal identity baked into an
+# example manifest (e.g. `www.example.com`) collide on Create with
+# `IBDataConflictError`. This script derives per-run backend identities from
+# a seed — normally $KIND_CLUSTER_NAME, which AGENTS.md worktree isolation
+# already makes unique per run — and writes them to a uptest
+# `--data-source` YAML file so `${data.<key>}` placeholders in example
+# manifests resolve to values that differ between concurrent runs.
+#
+# Usage:
+#   test/e2e/gen-datasource.sh <seed> <output-file>
+#
+#   seed:        per-run identity seed. Use $KIND_CLUSTER_NAME — do not pass
+#                a raw worktree path or other high-entropy string directly:
+#                this script hashes the seed down to a fixed-length token
+#                regardless of the seed's own length, but the seed itself
+#                should be stable for the whole run and different across
+#                concurrent runs, which KIND_CLUSTER_NAME already guarantees.
+#   output-file: where to write the generated datasource YAML. Point
+#                UPTEST_DATASOURCE_PATH at this same path before invoking
+#                `make e2e.<resource>` — see "Wiring" below.
+#
+# Two values are generated:
+#
+#   runToken  — a fixed-length (10 char), lowercase hex token. Safe to embed
+#               in any DNS label: hex is alphanumeric, so splicing it
+#               between two hyphens (e.g. `www-${data.runToken}.example.com`)
+#               can never produce a leading/trailing hyphen or an invalid
+#               character, and the fixed length bounds the resulting FQDN
+#               regardless of how long the seed is. Used to disambiguate
+#               NAMED objects between runs — DNS records, zones, DTC
+#               objects, EA definitions, and similar resources whose WAPI
+#               identity is a name, not an address.
+#
+#   netPrefix — a /28 block (16 addresses) carved out of 192.0.2.0/24
+#               (TEST-NET-1, RFC 5737 — the same documentation range this
+#               provider's examples already use for illustrative IPv4Addr
+#               values). The /24 is partitioned into 16 non-overlapping /28
+#               blocks and one is picked deterministically from the seed's
+#               hash, so concurrent runs land in different blocks. This is
+#               the address-space half of the mechanism for ADDRESSED
+#               objects (Network, NetworkContainer, Range, FixedAddress,
+#               IPv4SharedNetwork), which have no name field at all and
+#               cannot be disambiguated by runToken. The concurrency
+#               ceiling this implies — at most 16 non-colliding runs against
+#               this block before a prefix repeats — is a real, documented
+#               bound (ADR-IN-0007), not one this script tries to eliminate.
+#               NOTE: this value is generated and plumbed through the
+#               datasource file on every run, but a given resource's example
+#               manifest only consumes it once that resource's identity is
+#               tokenised (record-a does not — its identity is (view, zone,
+#               name), not an address).
+#
+# Both values are derived deterministically from the seed with sha256, so
+# the same seed always reproduces the same identities within a run
+# (idempotent — re-running this script mid-run does not rotate the
+# identity out from under an in-flight test), and two different seeds are
+# astronomically unlikely to collide on runToken (2^40 space).
+#
+# Wiring (this repository does not set UPTEST_DATASOURCE_PATH in the
+# Makefile — see the ticket history on IN-E2E-ISO-MECH for why):
+#
+#   CL="e2e-$(basename "$WORKTREE")"
+#   DS_FILE="$WORKTREE/e2e-datasource-${CL}.yaml"
+#   test/e2e/gen-datasource.sh "$CL" "$DS_FILE"
+#   make e2e.record-a KIND_CLUSTER_NAME="$CL" UPTEST_DATASOURCE_PATH="$DS_FILE"
+#
+# Mutation check / disabling the mechanism: simply omit the UPTEST_DATASOURCE_PATH
+# assignment (or pass an empty string). `${data.runToken}` placeholders in the
+# example manifests then stay literal — identical across every run — which
+# reproduces the pre-isolation collision this script exists to prevent.
+set -euo pipefail
+
+SEED="${1:?usage: gen-datasource.sh <seed> <output-file>}"
+OUT="${2:?usage: gen-datasource.sh <seed> <output-file>}"
+
+HASH="$(printf '%s' "${SEED}" | sha256sum | cut -d' ' -f1)"
+
+RUN_TOKEN="${HASH:0:10}"
+if ! [[ "${RUN_TOKEN}" =~ ^[0-9a-f]{10}$ ]]; then
+  echo "gen-datasource: derived runToken '${RUN_TOKEN}' is not a safe DNS label fragment" >&2
+  exit 1
+fi
+
+BLOCK_INDEX=$(( 16#${HASH:10:2} % 16 ))
+NET_PREFIX="192.0.2.$(( BLOCK_INDEX * 16 ))/28"
+
+mkdir -p "$(dirname "${OUT}")"
+cat > "${OUT}" <<DATASOURCE
+# Generated by test/e2e/gen-datasource.sh — do not edit by hand.
+# seed: ${SEED}
+runToken: "${RUN_TOKEN}"
+netPrefix: "${NET_PREFIX}"
+DATASOURCE
+
+echo "==> Wrote per-run uptest datasource to ${OUT}"
+echo "    seed=${SEED} runToken=${RUN_TOKEN} netPrefix=${NET_PREFIX}"
