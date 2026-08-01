@@ -56,7 +56,13 @@ metadata:
     # a valid, harmless state. Confirmed live against a scratch Grid object:
     # enableFixedRrsetOrderFqdns, enableMatchRecursiveOnly, and the dnssec*
     # enable flags accept true with their companion lists/keys left empty —
-    # no business-rule dependency, so they stay value-tested.
+    # no business-rule dependency, so they stay value-tested. blacklistAction
+    # targets "REFUSE" and dnssecValidationEnabled targets false — a live
+    # scratch-object check against the Grid showed both fields already
+    # return "REDIRECT"/true on a freshly created view (a Grid-level
+    # customization, not the vendor-documented default), so the original
+    # "REDIRECT"/true targets never actually exercised Update(); the values
+    # here were chosen to genuinely differ from that observed default.
     # filterAaaa and rootNameServerType are
     # Grid-specific string enumerations not enforced by the CRD schema, so
     # no safe value can be assumed without a live Grid to validate
