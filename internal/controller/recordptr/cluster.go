@@ -20,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordptr/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-recordptr.infobloxnios.crossplane.io"
@@ -78,94 +78,89 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.PTRR
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{kube: c.kube, objMgr: objMgr.Manager, conn: objMgr.Connector, endpoint: creds.Host}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.PTRRecord].
 type clusterExternal struct {
-	kube   k8sclient.Client
-	objMgr ibclient.IBObjectManager
+	kube     k8sclient.Client
+	objMgr   ibclient.IBObjectManager
+	conn     ibclient.IBConnector
+	prober   *identity.Prober
+	endpoint string
 }
 
-// Observe fetches the PTRRecord from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the PTRRecord through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetPTRRecordByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetPTRRecordByRef(externalID)
+	res, err := observePTRRecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Name, &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := ptrRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Ptrdname, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.IPv4Addr, cr.Spec.ForProvider.IPv6Addr)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObservePTRRecord)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObservePTRRecord)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromRecordPTR(externalID, rec)
-	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = clusterv1alpha1.PTRRecordObservation{
-		Ptrdname: o.Ptrdname,
-		Name:     o.Name,
-		IPv4Addr: o.IPv4Addr,
-		IPv6Addr: o.IPv6Addr,
-		View:     o.View,
-		Comment:  o.Comment,
-		TTL:      o.TTL,
-		UseTTL:   o.UseTTL,
-		ExtAttrs: o.ExtAttrs,
+		Ptrdname: res.obs.Ptrdname,
+		Name:     res.obs.Name,
+		IPv4Addr: res.obs.IPv4Addr,
+		IPv6Addr: res.obs.IPv6Addr,
+		View:     res.obs.View,
+		Comment:  res.obs.Comment,
+		TTL:      res.obs.TTL,
+		UseTTL:   res.obs.UseTTL,
+		ExtAttrs: res.obs.ExtAttrs,
 		// Cidr/NetworkView are create-time-only allocation hints the WAPI
 		// never echoes back in a GET response — mirrored directly from
 		// ForProvider (informational only) rather than from the observed
 		// RecordPTR.
 		Cidr:        p.Cidr,
 		NetworkView: p.NetworkView,
-		Ref:         o.Ref,
-		Zone:        o.Zone,
+		Ref:         res.obs.Ref,
+		Zone:        res.obs.Zone,
 	}
-	// Explicit assignment (rather than folding ID into the struct literal
-	// above) keeps the server-assigned identifier's provenance obvious at
-	// the call site — it always mirrors the external name used to fetch
-	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	lateInit := lateInitialize(&p.Name, &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new PTRRecord and records the server-assigned
-// _ref as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalCreation, error) {
+// Create provisions a new PTRRecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createPTRRecord(e.objMgr, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.View, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView)
+	uid := string(cr.GetUID())
+
+	if err := validatePTRRecordCreateInputs(p.IPv4Addr, p.IPv6Addr, p.Cidr, uid); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createPTRRecord(e.objMgr, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.View, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreatePTRRecord)
 	}
@@ -175,12 +170,12 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.PTRRecor
 }
 
 // Update patches the mutable PTRRecord fields. View (immutable) is never
-// sent — see updatePTRRecord.
+// sent — see updatePTRRecord. Every call re-asserts the identity stamp.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updatePTRRecord(e.objMgr, externalID, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := updatePTRRecord(e.objMgr, externalID, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdatePTRRecord)
 	}
@@ -198,15 +193,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.PTRRec
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the PTRRecord. A 404 on the stored _ref is not treated
-// as already-deleted by itself — see deletePTRRecordResolving404 —
-// because the _ref is a derived handle that rotates whenever an identity
-// field changes, and a stale handle 404s exactly like a genuinely
-// deleted object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalDelete, error) {
+// Delete removes the PTRRecord, resolving through the shared identity
+// ladder first.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.PTRRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deletePTRRecordResolving404(e.objMgr, externalID, p.View, p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr); err != nil {
+	if err := deletePTRRecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
