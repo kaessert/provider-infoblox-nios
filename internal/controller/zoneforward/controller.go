@@ -7,6 +7,15 @@
 // request/response envelope, so there is no internal REST client to
 // compose.
 //
+// ZoneForward is wired to the UID-in-EA object-identity ladder (see the
+// recorda/ARecord controller, the pilot resource, and the
+// internal/clients/identity package doc for the full rationale): the
+// WAPI _ref every create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 //
@@ -34,28 +43,42 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneforward/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneforward/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveZoneForward  = "cannot observe ZoneForward"
-	errCreateZoneForward   = "cannot create ZoneForward"
-	errUpdateZoneForward   = "cannot update ZoneForward"
-	errDeleteZoneForward   = "cannot delete ZoneForward"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveZoneForward        = "cannot observe ZoneForward"
+	errCreateZoneForward         = "cannot create ZoneForward"
+	errUpdateZoneForward         = "cannot update ZoneForward"
+	errDeleteZoneForward         = "cannot delete ZoneForward"
+	errEmptyUID                  = "cannot stamp ZoneForward identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// Production code always goes through Connect(), which resolves the
+// endpoint from the ProviderConfig's credentials Secret (validated
+// non-empty by extractCredentials) before constructing the client — this
+// fallback is only ever reached by this package's own white-box unit
+// tests that build clusterExternal/namespacedExternal directly, bypassing
+// Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -108,18 +131,22 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector the identity ladder needs directly (it operates
+// below ObjectManager's typed methods so it can see search match
+// counts). The Connector performs HTTP Basic Auth on every request and
+// only validates configuration locally — no network round-trip happens
+// until the first Observe/Create/Update/Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -149,10 +176,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -362,7 +389,7 @@ func isUpToDate(forwardTo []ibclient.NameServer, forwardingServers []*ibclient.F
 	if strOrEmpty(externalNsGroup) != strOrEmpty(rec.ExternalNsGroup) {
 		return false
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -435,7 +462,7 @@ func lateInitializeFlags(disable, forwardersOnly **bool, rec *ibclient.ZoneForwa
 // lateInitializeExtAttrs back-fills extAttrs.
 func lateInitializeExtAttrs(extAttrs *map[string]string, rec *ibclient.ZoneForward) bool {
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			return true
 		}
@@ -538,14 +565,21 @@ func observeFromZoneForward(externalID string, rec *ibclient.ZoneForward) observ
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createZoneForward issues the WAPI create call. forwardTo and
-// forwardingServers are already converted to the SDK's shape by the
-// caller (see cluster.go/namespaced.go).
-func createZoneForward(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string) (*ibclient.ZoneForward, error) {
+// createZoneForward issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp) — there is no follow-up
+// call, so there is no window in which the object exists without its
+// identity stamp. forwardTo and forwardingServers are already converted
+// to the SDK's shape by the caller (see cluster.go/namespaced.go).
+func createZoneForward(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string, uid string) (*ibclient.ZoneForward, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateZoneForward(
 		strOrEmpty(comment),
 		boolOrFalse(disable),
-		buildEA(extAttrs),
+		ea,
 		ibclient.NullableNameServers{NameServers: forwardTo},
 		boolOrFalse(forwardersOnly),
 		&ibclient.NullableForwardingServers{Servers: forwardingServers},
@@ -559,13 +593,21 @@ func createZoneForward(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, 
 
 // updateZoneForward issues the WAPI update call. fqdn, view, and
 // zoneFormat are intentionally never passed — UpdateZoneForward has no
-// parameters for them (immutable fields).
-func updateZoneForward(objMgr ibclient.IBObjectManager, ref string, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string) (*ibclient.ZoneForward, error) {
+// parameters for them (immutable fields). Every call re-asserts the
+// identity stamp (identity.Stamp) in the extattrs it sends — a WAPI PUT
+// carrying extattrs replaces the whole map rather than merging it, so
+// omitting the stamp here would wipe it off the object on the first
+// field update after create.
+func updateZoneForward(objMgr ibclient.IBObjectManager, ref string, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string, uid string) (*ibclient.ZoneForward, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateZoneForward(
 		ref,
 		strOrEmpty(comment),
 		boolOrFalse(disable),
-		buildEA(extAttrs),
+		ea,
 		ibclient.NullableNameServers{NameServers: forwardTo},
 		boolOrFalse(forwardersOnly),
 		&ibclient.NullableForwardingServers{Servers: forwardingServers},
@@ -580,57 +622,139 @@ func deleteZoneForward(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// zoneForwardExistsByNaturalKey reports whether a live ZoneForward still
-// exists under the CR's own (fqdn, view) identity — the same fields WAPI
-// uses to compute the _ref. Used by Delete() when the stored _ref 404s: a
-// hit here means the _ref is merely stale, not that the object is gone.
-// The SDK exposes no single-object convenience getter for this object
-// type (only GetZoneForwardByRef and the list-returning
-// GetZoneForwardFilters), so this issues a filtered list search and
-// treats any result as a match. When fqdn is empty there is no way to
-// re-discover the object, so the search is skipped (found=false) rather
-// than treated as an error.
-func zoneForwardExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn, view *string) (bool, error) {
-	if strOrEmpty(fqdn) == "" {
-		return false, nil
-	}
-	sf := map[string]string{"fqdn": strOrEmpty(fqdn)}
-	if strOrEmpty(view) != "" {
-		sf["view"] = strOrEmpty(view)
-	}
-	res, err := objMgr.GetZoneForwardFilters(ibclient.NewQueryParams(false, sf))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+//
+// See recorda's ensureIdentityPrerequisite doc for the full rationale:
+// the identity extensible-attribute definition is an install
+// prerequisite, probed unconditionally before Create (which always
+// stamps identity) and reactively — only on the identity-EA search
+// step's own failure — for Observe/Delete.
 
-// deleteZoneForwardResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the handle
-// rotated, not evidence the object was removed: if the natural-key search
-// still finds a live zone, deleting is refused because ownership of that
-// zone cannot be verified from the search alone (see the staleref package
-// doc for the full rationale).
-func deleteZoneForwardResolving404(objMgr ibclient.IBObjectManager, ref string, fqdn, view *string) error {
-	delErr := deleteZoneForward(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. A *identity.PrerequisiteError is returned verbatim. prober
+// defaults to identity.DefaultProber when nil; endpoint falls back to
+// unresolvedProbeEndpoint when the caller was built without a resolved
+// Grid host.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteZoneForward)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := zoneForwardExistsByNaturalKey(objMgr, fqdn, view)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteZoneForward)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. When the
+// annotation still holds the framework's NameAsExternalName default (the
+// CR's own Kubernetes name) no real WAPI _ref has ever been assigned, so
+// this reports "" rather than handing the ladder a value that can never
+// resolve.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveZoneForwardIdentity resolves the ZoneForward identified by
+// ref/uid through the shared UID-in-EA ladder.
+func resolveZoneForwardIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.ZoneForward, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.ZoneForward](ctx, conn, ibclient.NewEmptyZoneForward, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// ZoneForward through the identity ladder during Observe — common to
+// both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.ZoneForward
+	obs          observedZoneForward
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeZoneForward runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeZoneForward(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment, nsGroup, externalNsGroup **string, disable, forwardersOnly **bool, extAttrs *map[string]string, view, zoneFormat **string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveZoneForwardIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromZoneForward(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, nsGroup, externalNsGroup, disable, forwardersOnly, extAttrs, view, zoneFormat, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteZoneForwardIdentity issues the WAPI delete for the ZoneForward
+// this managed resource owns, resolving through the identity ladder
+// first so a stale _ref is never mistaken for a deleted object. See
+// recorda's deleteARecordIdentity doc for the full ownership-
+// verification rules.
+func deleteZoneForwardIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveZoneForwardIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteZoneForward)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteZoneForward(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteZoneForward)
+	default:
+		return errors.New("identity: unresolved ZoneForward outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

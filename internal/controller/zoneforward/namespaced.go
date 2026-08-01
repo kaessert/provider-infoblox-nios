@@ -19,8 +19,8 @@ import (
 
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneforward/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-zoneforward.infobloxnios.m.crossplane.io"
@@ -97,18 +97,32 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		objMgr:   mgrConn.Manager,
+		conn:     mgrConn.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.ZoneForward].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
 // namespacedNameServersToSDK converts the CRD's NameServer list into the
@@ -182,37 +196,26 @@ func namespacedForwardingServersFromSDK(in []*ibclient.Forwardingmemberserver) [
 	return out
 }
 
-// Observe fetches the ZoneForward from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the ZoneForward through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetZoneForwardByRef(externalID)
+	res, err := observeZoneForward(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.ExtAttrs, &p.View, &p.ZoneFormat)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := zoneForwardExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Fqdn, cr.Spec.ForProvider.View)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveZoneForward)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveZoneForward)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromZoneForward(externalID, rec)
+	rec := res.rec
+	o := res.obs
 	cr.Status.AtProvider = namespacedv1alpha1.ZoneForwardObservation{
 		Fqdn:              o.Fqdn,
 		ForwardTo:         namespacedNameServersFromSDK(rec.ForwardTo.NameServers),
@@ -233,32 +236,45 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Z
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.ExtAttrs, &p.View, &p.ZoneFormat, rec)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(
+		namespacedNameServersToSDK(p.ForwardTo),
+		namespacedForwardingServersToSDK(p.ForwardingServers),
+		p.Comment, p.NsGroup, p.ExternalNsGroup,
+		p.Disable, p.ForwardersOnly,
+		p.ExtAttrs,
+		rec,
+	) && !res.adopted
+
 	return managed.ExternalObservation{
-		ResourceExists: true,
-		ResourceUpToDate: isUpToDate(
-			namespacedNameServersToSDK(p.ForwardTo),
-			namespacedForwardingServersToSDK(p.ForwardingServers),
-			p.Comment, p.NsGroup, p.ExternalNsGroup,
-			p.Disable, p.ForwardersOnly,
-			p.ExtAttrs,
-			rec,
-		),
-		ResourceLateInitialized: lateInit,
+		ResourceExists:          true,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new ZoneForward and records the server-assigned
-// _ref as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalCreation, error) {
+// Create provisions a new ZoneForward, stamping the managed resource's
+// own uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createZoneForward(e.objMgr, p.Fqdn, p.View, p.ZoneFormat, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateZoneForward)
 	}
@@ -268,12 +284,14 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Zo
 }
 
 // Update patches the mutable ZoneForward fields. fqdn, view, and
-// zoneFormat (immutable) are never sent — see updateZoneForward.
+// zoneFormat (immutable) are never sent — see updateZoneForward. Every
+// call re-asserts the identity stamp since a WAPI PUT carrying extattrs
+// replaces the whole map rather than merging it.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs)
+	rec, err := updateZoneForward(e.objMgr, externalID, p.Comment, p.NsGroup, p.ExternalNsGroup, p.Disable, p.ForwardersOnly, namespacedNameServersToSDK(p.ForwardTo), namespacedForwardingServersToSDK(p.ForwardingServers), p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneForward)
 	}
@@ -286,14 +304,13 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ZoneForward. A 404 against the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteZoneForwardResolving404 — because the _ref is a derived handle
-// that rotates when fqdn/view changes.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalDelete, error) {
+// Delete removes the ZoneForward, resolving through the shared identity
+// ladder first — see deleteZoneForwardIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteZoneForwardResolving404(e.objMgr, externalID, p.Fqdn, p.View); err != nil {
+	if err := deleteZoneForwardIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
