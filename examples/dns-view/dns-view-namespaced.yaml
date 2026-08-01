@@ -31,8 +31,6 @@ metadata:
         value: 5
       - field: useBlacklist
         value: true
-      - field: enableBlacklist
-        value: true
       - field: blacklistAction
         value: "REDIRECT"
       - field: blacklistLogQuery
@@ -62,8 +60,6 @@ metadata:
       - field: ddnsRestrictStatic
         value: true
       - field: useDns64
-        value: true
-      - field: dns64Enabled
         value: true
       - field: useDnssec
         value: true
@@ -139,6 +135,10 @@ metadata:
         skip: "requires the forwarders list (skipped below) to be non-empty per WAPI business rules"
       - field: nxdomainRedirect
         skip: "requires nxdomainRedirectAddresses (skipped below) to be non-empty per WAPI business rules"
+      - field: enableBlacklist
+        skip: "requires blacklistRulesets (skipped below) to be non-empty per WAPI business rules, and additionally blacklistRedirectAddresses when blacklistAction is REDIRECT; blacklistAction/blacklistLogQuery/blacklistRedirectTtl remain update-tested since they are settable while the blacklist itself is disabled"
+      - field: dns64Enabled
+        skip: "requires dns64Groups (skipped below) to be non-empty per WAPI business rules (\"DNS64 cannot be enabled unless at least one synthesis group is configured\"); the useDns64 override flag is still exercised"
       - field: blacklistRedirectAddresses
         skip: "list field, not a scalar update-test target"
       - field: blacklistRulesets

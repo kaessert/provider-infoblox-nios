@@ -1748,6 +1748,33 @@ the provider (`kubectl apply -f package/crds/`, or let your package manager
 do it as part of the provider upgrade). Existing managed resources do not
 need to be re-created.
 
+### DNSView integer field type unification
+
+`DNSView` (both cluster-scoped and namespace-scoped) modeled thirteen
+numeric fields as 64-bit integers even though the backing API field is
+32-bit unsigned. Those fields now use the same `int32` CRD schema format
+already used everywhere else in the provider:
+
+- `spec.forProvider`/`status.atProvider`: `blacklistRedirectTtl`, `lameTtl`,
+  `maxCacheTtl`, `maxNcacheTtl`, `nxdomainRedirectTtl`, `notifyDelay`,
+  `rpzDropIpRuleMinPrefixLengthIpv4`, `rpzDropIpRuleMinPrefixLengthIpv6`
+- `responseRateLimiting`: `responsesPerSecond`, `window`, `slip`
+- `scavengingSettings.scavengingSchedule`: `every`, `minutesPastHour`,
+  `hourOfDay`, `year`, `month`, `dayOfMonth`
+
+The five `*Ttl` fields keep their existing `minimum: 0` / `maximum:
+2147483647` bounds. `scavengingSchedule.recurringTime` is unchanged — it
+carries a Unix epoch timestamp, not a plain counter, and stays `int64`.
+
+No existing value is out of range for any of the converted fields — the
+backing API has always rejected out-of-range input for these fields, this
+is a schema-shape change only, not a behavior change.
+
+**Action required:** reapply the `DNSView` CRDs after upgrading the
+provider (`kubectl apply -f package/crds/`, or let your package manager do
+it as part of the provider upgrade). Existing managed resources do not
+need to be re-created.
+
 ## Development
 
 ```bash

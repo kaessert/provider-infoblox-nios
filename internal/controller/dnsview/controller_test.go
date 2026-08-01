@@ -36,7 +36,7 @@ import (
 
 func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
-func int64Ptr(i int64) *int64    { return &i }
+func uint32Ptr(u uint32) *uint32 { return &u }
 
 // newTestScheme returns a scheme with corev1 (for Secrets) and the
 // provider's API types registered.
@@ -1338,7 +1338,7 @@ func TestLateInitializeBackfillsServerDefaults(t *testing.T) {
 		Name:        stringPtr("v"),
 		Comment:     stringPtr("server default"),
 		NetworkView: stringPtr("default"),
-		NotifyDelay: int64Ptr(600),
+		NotifyDelay: uint32Ptr(600),
 	}
 
 	got, changed := lateInitializeFields(desired, observed)
@@ -1365,7 +1365,7 @@ func TestLateInitializeSkipsGatedValueWhenFlagOff(t *testing.T) {
 	observed := dnsViewFields{
 		Name:       stringPtr("v"),
 		UseLameTTL: boolPtr(false),
-		LameTTL:    int64Ptr(600), // realistic non-zero zone default, not 0
+		LameTTL:    uint32Ptr(600), // realistic non-zero zone default, not 0
 	}
 
 	got, _ := lateInitializeFields(desired, observed)
@@ -1630,7 +1630,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseBlacklist = boolPtr(false)
-				f.BlacklistRedirectTTL = int64Ptr(3600)
+				f.BlacklistRedirectTTL = uint32Ptr(3600)
 				return f
 			}(),
 		},
@@ -1837,7 +1837,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 		{
 			name:     "UseLameTTL/LameTTL",
 			desired:  func() dnsViewFields { f := base(); f.UseLameTTL = boolPtr(false); return f }(),
-			observed: func() dnsViewFields { f := base(); f.UseLameTTL = boolPtr(false); f.LameTTL = int64Ptr(600); return f }(),
+			observed: func() dnsViewFields { f := base(); f.UseLameTTL = boolPtr(false); f.LameTTL = uint32Ptr(600); return f }(),
 		},
 		{
 			name:    "UseMaxCacheTTL/MaxCacheTTL",
@@ -1845,7 +1845,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseMaxCacheTTL = boolPtr(false)
-				f.MaxCacheTTL = int64Ptr(86400)
+				f.MaxCacheTTL = uint32Ptr(86400)
 				return f
 			}(),
 		},
@@ -1855,7 +1855,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseMaxNcacheTTL = boolPtr(false)
-				f.MaxNcacheTTL = int64Ptr(10800)
+				f.MaxNcacheTTL = uint32Ptr(10800)
 				return f
 			}(),
 		},
@@ -1905,7 +1905,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseNxdomainRedirect = boolPtr(false)
-				f.NxdomainRedirectTTL = int64Ptr(60)
+				f.NxdomainRedirectTTL = uint32Ptr(60)
 				return f
 			}(),
 		},
@@ -1945,7 +1945,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseRpzDropIPRule = boolPtr(false)
-				f.RpzDropIPRuleMinPrefixLengthIPv4 = int64Ptr(24)
+				f.RpzDropIPRuleMinPrefixLengthIPv4 = uint32Ptr(24)
 				return f
 			}(),
 		},
@@ -1955,7 +1955,7 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 			observed: func() dnsViewFields {
 				f := base()
 				f.UseRpzDropIPRule = boolPtr(false)
-				f.RpzDropIPRuleMinPrefixLengthIPv6 = int64Ptr(64)
+				f.RpzDropIPRuleMinPrefixLengthIPv6 = uint32Ptr(64)
 				return f
 			}(),
 		},
@@ -1984,8 +1984,8 @@ func TestIsUpToDateIgnoresGatedValueWhenFlagOff(t *testing.T) {
 // TestIsUpToDateIgnoresGatedValueWhenFlagOff: a representative sample of
 // gated pairs still detect a genuine mismatch once the flag is on.
 func TestIsUpToDateDetectsGatedValueWhenFlagOn(t *testing.T) {
-	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(30)}
-	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(600)}
+	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: uint32Ptr(30)}
+	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: uint32Ptr(600)}
 	if isUpToDate(desired, observed) {
 		t.Error("isUpToDate: want false (UseLameTTL on, LameTTL differs), got true")
 	}
@@ -1997,7 +1997,7 @@ func TestIsUpToDateDetectsGatedValueWhenFlagOn(t *testing.T) {
 // value's comparison in that state.
 func TestIsUpToDateDetectsUseFlagTransition(t *testing.T) {
 	desired := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(false)}
-	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: int64Ptr(600)}
+	observed := dnsViewFields{Name: stringPtr("v"), UseLameTTL: boolPtr(true), LameTTL: uint32Ptr(600)}
 	if isUpToDate(desired, observed) {
 		t.Error("isUpToDate: want false (UseLameTTL transitioned true -> false), got true")
 	}
@@ -2011,7 +2011,7 @@ func TestIsUpToDateGatedPointerStruct(t *testing.T) {
 	observed := dnsViewFields{
 		Name:                    stringPtr("v"),
 		UseResponseRateLimiting: boolPtr(false),
-		ResponseRateLimiting:    &responseRateLimitingValue{ResponsesPerSecond: int64Ptr(20)},
+		ResponseRateLimiting:    &responseRateLimitingValue{ResponsesPerSecond: uint32Ptr(20)},
 	}
 	if !isUpToDate(desired, observed) {
 		t.Error("isUpToDate: want true (UseResponseRateLimiting off, ResponseRateLimiting is server-owned), got false")
@@ -2139,7 +2139,7 @@ func TestLateInitializeGatesUsingEffectiveFlagFromObserved(t *testing.T) {
 	observed := dnsViewFields{
 		Name:       stringPtr("v"),
 		UseLameTTL: boolPtr(true),
-		LameTTL:    int64Ptr(45),
+		LameTTL:    uint32Ptr(45),
 	}
 
 	got, _ := lateInitializeFields(desired, observed)

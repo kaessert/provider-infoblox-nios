@@ -98,7 +98,7 @@ spec:
                       DNS responses resulting from blacklist redirection. Must be
                       non-negative (0-2147483647); NIOS has no zone/grid-default sentinel
                       for this field, so out-of-range values are rejected outright.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -330,7 +330,7 @@ spec:
                       lame servers. Must be non-negative (0-2147483647); to inherit
                       the grid default, set useLameTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -397,7 +397,7 @@ spec:
                       answers. Must be non-negative (0-2147483647); to inherit the
                       grid default, set useMaxCacheTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -406,7 +406,7 @@ spec:
                       answers. Must be non-negative (0-2147483647); to inherit the
                       grid default, set useMaxNcacheTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -423,7 +423,7 @@ spec:
                   notifyDelay:
                     description: The number of seconds of delay before notify messages
                       are sent to secondaries.
-                    format: int64
+                    format: int32
                     type: integer
                   nxdomainLogQuery:
                     description: The flag that indicates whether NXDOMAIN redirection
@@ -450,7 +450,7 @@ spec:
                       DNS responses resulting from NXDOMAIN redirection. Must be non-negative
                       (0-2147483647); NIOS has no zone/grid-default sentinel for this
                       field, so out-of-range values are rejected outright.
-                    format: int64
+                    format: int32
                     maximum: 2147483647
                     minimum: 0
                     type: integer
@@ -476,18 +476,18 @@ spec:
                         type: boolean
                       responsesPerSecond:
                         description: The number of responses per client per second.
-                        format: int64
+                        format: int32
                         type: integer
                       slip:
                         description: The response rate limiting slip. If slip is not
                           0, every n-th rate-limited UDP request is sent a truncated
                           response instead of being dropped.
-                        format: int64
+                        format: int32
                         type: integer
                       window:
                         description: The time interval in seconds over which responses
                           are tracked.
-                        format: int64
+                        format: int32
                         type: integer
                     type: object
                   rootNameServerType:
@@ -501,13 +501,13 @@ spec:
                     description: The minimum prefix length for IPv4 RPZ-IP triggers.
                       The appliance ignores RPZ-IP triggers with prefix lengths less
                       than this value.
-                    format: int64
+                    format: int32
                     type: integer
                   rpzDropIpRuleMinPrefixLengthIpv6:
                     description: The minimum prefix length for IPv6 RPZ-IP triggers.
                       The appliance ignores RPZ-IP triggers with prefix lengths less
                       than this value.
-                    format: int64
+                    format: int32
                     type: integer
                   rpzQnameWaitRecurse:
                     description: The flag that indicates whether recursive RPZ lookups
@@ -599,7 +599,7 @@ spec:
                         properties:
                           dayOfMonth:
                             description: The day of the month for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           disable:
                             description: If set to true, the scheduled task is disabled.
@@ -607,23 +607,23 @@ spec:
                           every:
                             description: The number of frequency units to wait before
                               repeating the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           frequency:
                             description: The frequency for the scheduled task.
                             type: string
                           hourOfDay:
                             description: The hour of day for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           minutesPastHour:
                             description: The minutes past the hour for the scheduled
                               task.
-                            format: int64
+                            format: int32
                             type: integer
                           month:
                             description: The month for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           recurringTime:
                             description: The recurring time for the schedule, in Epoch
@@ -645,7 +645,7 @@ spec:
                             type: array
                           year:
                             description: The year for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                         type: object
                     type: object
@@ -856,7 +856,7 @@ spec:
                       DNS responses resulting from blacklist redirection. Must be
                       non-negative (0-2147483647); NIOS has no zone/grid-default sentinel
                       for this field, so out-of-range values are rejected outright.
-                    format: int64
+                    format: int32
                     type: integer
                   blacklistRulesets:
                     description: The name of the Ruleset object assigned at the Grid
@@ -1152,7 +1152,7 @@ spec:
                       lame servers. Must be non-negative (0-2147483647); to inherit
                       the grid default, set useLameTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     type: integer
                   matchClients:
                     description: A named ACL, or a list of IPv4/IPv6 addresses, networks,
@@ -1217,14 +1217,14 @@ spec:
                       answers. Must be non-negative (0-2147483647); to inherit the
                       grid default, set useMaxCacheTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     type: integer
                   maxNcacheTtl:
                     description: The maximum number of seconds to cache negative (NXDOMAIN)
                       answers. Must be non-negative (0-2147483647); to inherit the
                       grid default, set useMaxNcacheTtl to false rather than passing
                       a negative sentinel value.
-                    format: int64
+                    format: int32
                     type: integer
                   name:
                     description: Name of the DNS view. Renaming an existing view changes
@@ -1239,7 +1239,7 @@ spec:
                   notifyDelay:
                     description: The number of seconds of delay before notify messages
                       are sent to secondaries.
-                    format: int64
+                    format: int32
                     type: integer
                   nxdomainLogQuery:
                     description: The flag that indicates whether NXDOMAIN redirection
@@ -1266,7 +1266,7 @@ spec:
                       DNS responses resulting from NXDOMAIN redirection. Must be non-negative
                       (0-2147483647); NIOS has no zone/grid-default sentinel for this
                       field, so out-of-range values are rejected outright.
-                    format: int64
+                    format: int32
                     type: integer
                   nxdomainRulesets:
                     description: The names of the Ruleset objects assigned at the
@@ -1297,18 +1297,18 @@ spec:
                         type: boolean
                       responsesPerSecond:
                         description: The number of responses per client per second.
-                        format: int64
+                        format: int32
                         type: integer
                       slip:
                         description: The response rate limiting slip. If slip is not
                           0, every n-th rate-limited UDP request is sent a truncated
                           response instead of being dropped.
-                        format: int64
+                        format: int32
                         type: integer
                       window:
                         description: The time interval in seconds over which responses
                           are tracked.
-                        format: int64
+                        format: int32
                         type: integer
                     type: object
                   rootNameServerType:
@@ -1322,13 +1322,13 @@ spec:
                     description: The minimum prefix length for IPv4 RPZ-IP triggers.
                       The appliance ignores RPZ-IP triggers with prefix lengths less
                       than this value.
-                    format: int64
+                    format: int32
                     type: integer
                   rpzDropIpRuleMinPrefixLengthIpv6:
                     description: The minimum prefix length for IPv6 RPZ-IP triggers.
                       The appliance ignores RPZ-IP triggers with prefix lengths less
                       than this value.
-                    format: int64
+                    format: int32
                     type: integer
                   rpzQnameWaitRecurse:
                     description: The flag that indicates whether recursive RPZ lookups
@@ -1420,7 +1420,7 @@ spec:
                         properties:
                           dayOfMonth:
                             description: The day of the month for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           disable:
                             description: If set to true, the scheduled task is disabled.
@@ -1428,23 +1428,23 @@ spec:
                           every:
                             description: The number of frequency units to wait before
                               repeating the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           frequency:
                             description: The frequency for the scheduled task.
                             type: string
                           hourOfDay:
                             description: The hour of day for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           minutesPastHour:
                             description: The minutes past the hour for the scheduled
                               task.
-                            format: int64
+                            format: int32
                             type: integer
                           month:
                             description: The month for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                           recurringTime:
                             description: The recurring time for the schedule, in Epoch
@@ -1466,7 +1466,7 @@ spec:
                             type: array
                           year:
                             description: The year for the scheduled task.
-                            format: int64
+                            format: int32
                             type: integer
                         type: object
                     type: object

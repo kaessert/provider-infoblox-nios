@@ -441,7 +441,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.BlacklistRedirectTTL != nil {
 		in, out := &in.BlacklistRedirectTTL, &out.BlacklistRedirectTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.BlacklistRulesets != nil {
@@ -663,7 +663,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.LameTTL != nil {
 		in, out := &in.LameTTL, &out.LameTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseLameTTL != nil {
@@ -695,7 +695,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.MaxCacheTTL != nil {
 		in, out := &in.MaxCacheTTL, &out.MaxCacheTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseMaxCacheTTL != nil {
@@ -705,7 +705,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.MaxNcacheTTL != nil {
 		in, out := &in.MaxNcacheTTL, &out.MaxNcacheTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseMaxNcacheTTL != nil {
@@ -715,7 +715,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.NotifyDelay != nil {
 		in, out := &in.NotifyDelay, &out.NotifyDelay
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.NxdomainLogQuery != nil {
@@ -740,7 +740,7 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.NxdomainRedirectTTL != nil {
 		in, out := &in.NxdomainRedirectTTL, &out.NxdomainRedirectTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.NxdomainRulesets != nil {
@@ -780,12 +780,12 @@ func (in *DNSViewObservation) DeepCopyInto(out *DNSViewObservation) {
 	}
 	if in.RpzDropIPRuleMinPrefixLengthIPv4 != nil {
 		in, out := &in.RpzDropIPRuleMinPrefixLengthIPv4, &out.RpzDropIPRuleMinPrefixLengthIPv4
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.RpzDropIPRuleMinPrefixLengthIPv6 != nil {
 		in, out := &in.RpzDropIPRuleMinPrefixLengthIPv6, &out.RpzDropIPRuleMinPrefixLengthIPv6
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseRpzDropIPRule != nil {
@@ -896,7 +896,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.BlacklistRedirectTTL != nil {
 		in, out := &in.BlacklistRedirectTTL, &out.BlacklistRedirectTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.BlacklistRulesets != nil {
@@ -1118,7 +1118,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.LameTTL != nil {
 		in, out := &in.LameTTL, &out.LameTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseLameTTL != nil {
@@ -1150,7 +1150,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.MaxCacheTTL != nil {
 		in, out := &in.MaxCacheTTL, &out.MaxCacheTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseMaxCacheTTL != nil {
@@ -1160,7 +1160,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.MaxNcacheTTL != nil {
 		in, out := &in.MaxNcacheTTL, &out.MaxNcacheTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseMaxNcacheTTL != nil {
@@ -1170,7 +1170,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.NotifyDelay != nil {
 		in, out := &in.NotifyDelay, &out.NotifyDelay
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.NxdomainLogQuery != nil {
@@ -1195,7 +1195,7 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.NxdomainRedirectTTL != nil {
 		in, out := &in.NxdomainRedirectTTL, &out.NxdomainRedirectTTL
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.NxdomainRulesets != nil {
@@ -1235,12 +1235,12 @@ func (in *DNSViewParameters) DeepCopyInto(out *DNSViewParameters) {
 	}
 	if in.RpzDropIPRuleMinPrefixLengthIPv4 != nil {
 		in, out := &in.RpzDropIPRuleMinPrefixLengthIPv4, &out.RpzDropIPRuleMinPrefixLengthIPv4
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.RpzDropIPRuleMinPrefixLengthIPv6 != nil {
 		in, out := &in.RpzDropIPRuleMinPrefixLengthIPv6, &out.RpzDropIPRuleMinPrefixLengthIPv6
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.UseRpzDropIPRule != nil {
@@ -1311,17 +1311,17 @@ func (in *DNSViewResponseRateLimiting) DeepCopyInto(out *DNSViewResponseRateLimi
 	}
 	if in.ResponsesPerSecond != nil {
 		in, out := &in.ResponsesPerSecond, &out.ResponsesPerSecond
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Window != nil {
 		in, out := &in.Window, &out.Window
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Slip != nil {
 		in, out := &in.Slip, &out.Slip
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 }
@@ -1361,32 +1361,32 @@ func (in *DNSViewScavengingSchedule) DeepCopyInto(out *DNSViewScavengingSchedule
 	}
 	if in.Every != nil {
 		in, out := &in.Every, &out.Every
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.MinutesPastHour != nil {
 		in, out := &in.MinutesPastHour, &out.MinutesPastHour
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.HourOfDay != nil {
 		in, out := &in.HourOfDay, &out.HourOfDay
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Year != nil {
 		in, out := &in.Year, &out.Year
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Month != nil {
 		in, out := &in.Month, &out.Month
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.DayOfMonth != nil {
 		in, out := &in.DayOfMonth, &out.DayOfMonth
-		*out = new(int64)
+		*out = new(uint32)
 		**out = **in
 	}
 	if in.Repeat != nil {

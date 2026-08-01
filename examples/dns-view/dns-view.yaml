@@ -49,9 +49,11 @@ metadata:
     # update-test targets and are skipped. Fields whose "enable" semantics
     # require non-empty companion data that this minimal example doesn't
     # provide (forwardOnly needs forwarders; nxdomainRedirect needs
-    # nxdomainRedirectAddresses) are skipped, while their override ("use")
-    # flags are still exercised since flipping the override alone is a
-    # valid, harmless state. filterAaaa and rootNameServerType are
+    # nxdomainRedirectAddresses; enableBlacklist needs blacklistRulesets and,
+    # when blacklistAction is REDIRECT, blacklistRedirectAddresses;
+    # dns64Enabled needs dns64Groups) are skipped, while their override
+    # ("use") flags are still exercised since flipping the override alone is
+    # a valid, harmless state. filterAaaa and rootNameServerType are
     # Grid-specific string enumerations not enforced by the CRD schema, so
     # no safe value can be assumed without a live Grid to validate
     # against — skipped. ddnsPrincipalGroup references a pre-existing Grid
@@ -69,8 +71,6 @@ metadata:
       - field: notifyDelay
         value: 5
       - field: useBlacklist
-        value: true
-      - field: enableBlacklist
         value: true
       - field: blacklistAction
         value: "REDIRECT"
@@ -101,8 +101,6 @@ metadata:
       - field: ddnsRestrictStatic
         value: true
       - field: useDns64
-        value: true
-      - field: dns64Enabled
         value: true
       - field: useDnssec
         value: true
@@ -178,6 +176,10 @@ metadata:
         skip: "requires the forwarders list (skipped below) to be non-empty per WAPI business rules"
       - field: nxdomainRedirect
         skip: "requires nxdomainRedirectAddresses (skipped below) to be non-empty per WAPI business rules"
+      - field: enableBlacklist
+        skip: "requires blacklistRulesets (skipped below) to be non-empty per WAPI business rules, and additionally blacklistRedirectAddresses when blacklistAction is REDIRECT; blacklistAction/blacklistLogQuery/blacklistRedirectTtl remain update-tested since they are settable while the blacklist itself is disabled"
+      - field: dns64Enabled
+        skip: "requires dns64Groups (skipped below) to be non-empty per WAPI business rules (\"DNS64 cannot be enabled unless at least one synthesis group is configured\"); the useDns64 override flag is still exercised"
       - field: blacklistRedirectAddresses
         skip: "list field, not a scalar update-test target"
       - field: blacklistRulesets
