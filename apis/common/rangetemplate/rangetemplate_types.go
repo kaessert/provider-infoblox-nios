@@ -47,7 +47,8 @@ type RangeTemplateParameters struct {
 	Comment *string `json:"comment,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
-	ExtAttrs map[string]string `json:"extattrs"`
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k != 'Crossplane Internal ID')",message="the 'Crossplane Internal ID' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs"
+	ExtAttrs map[string]string `json:"extAttrs"`
 	// DHCP options to apply to ranges created from this template.
 	// +optional
 	Options []*RangeTemplateOption `json:"options"`
@@ -86,7 +87,7 @@ type RangeTemplateObservation struct {
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
-	ExtAttrs map[string]string `json:"extattrs"` // atProvider
+	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
 	// DHCP options to apply to ranges created from this template.
 	// +optional
 	Options []*RangeTemplateOption `json:"options"` // atProvider

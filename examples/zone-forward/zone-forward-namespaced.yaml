@@ -37,7 +37,7 @@ metadata:
         skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
       - field: externalNsGroup
         skip: "references a pre-existing Grid stub-server name server group not created by this standalone example"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

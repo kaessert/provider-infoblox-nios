@@ -80,7 +80,8 @@ type DTCLBDNParameters struct {
 	Disable *bool `json:"disable,omitempty"`
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
-	ExtAttrs map[string]string `json:"extattrs"`
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k != 'Crossplane Internal ID')",message="the 'Crossplane Internal ID' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs"
+	ExtAttrs map[string]string `json:"extAttrs"`
 }
 
 // DTCLBDNObservation holds the observed state of a DTCLBDN.
@@ -126,7 +127,7 @@ type DTCLBDNObservation struct {
 	Disable *bool `json:"disable,omitempty"` // atProvider
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
 	// +optional
-	ExtAttrs map[string]string `json:"extattrs"` // atProvider
+	ExtAttrs map[string]string `json:"extAttrs"` // atProvider
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Aggregate health status of the LBDN.

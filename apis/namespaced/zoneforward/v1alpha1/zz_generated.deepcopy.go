@@ -190,8 +190,8 @@ func (in *ZoneForwardObservation) DeepCopyInto(out *ZoneForwardObservation) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.Extattrs != nil {
-		in, out := &in.Extattrs, &out.Extattrs
+	if in.ExtAttrs != nil {
+		in, out := &in.ExtAttrs, &out.ExtAttrs
 		*out = make(map[string]string, len(*in))
 		for key, val := range *in {
 			(*out)[key] = val
@@ -271,8 +271,8 @@ func (in *ZoneForwardParameters) DeepCopyInto(out *ZoneForwardParameters) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.Extattrs != nil {
-		in, out := &in.Extattrs, &out.Extattrs
+	if in.ExtAttrs != nil {
+		in, out := &in.ExtAttrs, &out.ExtAttrs
 		*out = make(map[string]string, len(*in))
 		for key, val := range *in {
 			(*out)[key] = val

@@ -50,7 +50,7 @@ metadata:
     # for the TOPOLOGY/DYNAMIC_RATIO methods this example does not use.
     # servers references DTCServer resources and is intentionally omitted
     # from this standalone example (see the field doc above). monitors is
-    # a list field, not a scalar update-test target. extattrs is an
+    # a list field, not a scalar update-test target. extAttrs is an
     # optional map field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
@@ -83,7 +83,7 @@ metadata:
         skip: "references DTCServer resources, intentionally omitted from this standalone example"
       - field: monitors
         skip: "list field of health monitors, not a scalar update-test target"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

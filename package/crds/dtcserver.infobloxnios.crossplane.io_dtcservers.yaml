@@ -85,7 +85,7 @@ spec:
                   disable:
                     description: Whether the DTC Server is disabled.
                     type: boolean
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata
@@ -94,6 +94,11 @@ spec:
                       CRD representation (the controller translates to/from the SDK''s
                       EA map[string]interface{} type).'
                     type: object
+                    x-kubernetes-validations:
+                    - message: the 'Crossplane Internal ID' extensible attribute is
+                        reserved for the provider's identity stamp and cannot be set
+                        in spec.forProvider.extAttrs
+                      rule: self.all(k, k != 'Crossplane Internal ID')
                   host:
                     description: Address or FQDN of the backend server.
                     type: string
@@ -231,7 +236,7 @@ spec:
                   disable:
                     description: Whether the DTC Server is disabled.
                     type: boolean
-                  extattrs:
+                  extAttrs:
                     additionalProperties:
                       type: string
                     description: 'Extensible attributes (arbitrary key/value metadata

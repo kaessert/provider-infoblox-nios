@@ -137,11 +137,12 @@ func hostRecord() ResourceDescriptor {
 				Description: "Use flag for ttl — when false the zone/grid default TTL applies.",
 			},
 			{
-				Name:        "ExtAttrs",
-				JSONName:    "extAttrs",
-				GoType:      goTypeStringMap,
-				Scope:       FieldScopeBoth,
-				Description: "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+				Name:                   "ExtAttrs",
+				JSONName:               "extAttrs",
+				GoType:                 goTypeStringMap,
+				Scope:                  FieldScopeBoth,
+				Description:            "Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {\"value\": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).",
+				ForProviderValidations: reservedEAKeyValidations(),
 			},
 			// Create-time-only dynamic IP allocation hints (WAPI
 			// func:nextavailableip). These are accepted by

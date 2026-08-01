@@ -92,6 +92,12 @@ type FieldData struct {
 	// Reference holds cross-resource reference template data. Nil for
 	// every ARecord field today.
 	Reference *ReferenceData
+	// ExtraValidations are field-level kubebuilder XValidation rules
+	// (catalog.FieldDef.ForProviderValidations). Rendered ONLY on
+	// ForProvider fields — buildAtProviderFieldData never populates
+	// this, so the same underlying catalog rule (e.g. the reserved
+	// extAttrs identity key) never reaches the AtProvider mirror.
+	ExtraValidations []catalog.ValidationRule
 }
 
 // ReferenceData is the template data for one field's cross-resource
@@ -281,15 +287,16 @@ func buildReferenceData(ref *catalog.ReferenceDescriptor, goFieldName, goType st
 // buildFieldData converts one catalog.FieldDef into ForProvider FieldData.
 func buildFieldData(f catalog.FieldDef, isCluster bool) FieldData {
 	fd := FieldData{
-		Name:        f.Name,
-		GoType:      f.GoType,
-		JSONName:    f.JSONName,
-		Description: f.Description,
-		OmitEmpty:   isOmitEmpty(f.GoType, f.Required),
-		Required:    f.Required,
-		Immutable:   f.Immutable,
-		Enum:        f.Enum,
-		Reference:   buildReferenceData(f.Reference, f.Name, f.GoType, isCluster),
+		Name:             f.Name,
+		GoType:           f.GoType,
+		JSONName:         f.JSONName,
+		Description:      f.Description,
+		OmitEmpty:        isOmitEmpty(f.GoType, f.Required),
+		Required:         f.Required,
+		Immutable:        f.Immutable,
+		Enum:             f.Enum,
+		Reference:        buildReferenceData(f.Reference, f.Name, f.GoType, isCluster),
+		ExtraValidations: f.ForProviderValidations,
 	}
 	if f.Minimum != nil {
 		fd.HasMinimum = true
@@ -532,6 +539,9 @@ type {{.Kind}}Parameters struct {
 {{- end}}
 {{- if .HasMaximum}}
 	// +kubebuilder:validation:Maximum={{.Maximum}}
+{{- end}}
+{{- range .ExtraValidations}}
+	// +kubebuilder:validation:XValidation:rule="{{.Rule}}",message="{{.Message}}"
 {{- end}}
 {{- template "referenceMarker" .}}
 	{{.Name}} {{.GoType}} {{jsonTag .JSONName .OmitEmpty}}

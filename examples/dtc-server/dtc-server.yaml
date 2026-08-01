@@ -43,7 +43,7 @@ metadata:
     # mutable, but renaming a DTC Server may change its WAPI _ref; that
     # rotation is already exercised by controller unit tests, so it is
     # skipped here. monitors is a list
-    # field, not a scalar update-test target. extattrs is an optional map
+    # field, not a scalar update-test target. extAttrs is an optional map
     # field skipped for low update-test value.
     crossplane.io/update-test: |
       - field: comment
@@ -62,7 +62,7 @@ metadata:
         skip: "renaming a DTC Server may change its WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: monitors
         skip: "list field of IP/FQDN and monitor pairs, not a scalar update-test target"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

@@ -41,7 +41,7 @@ metadata:
         skip: "only meaningful when serverAssociationType=MEMBER; not a scalar update-test target"
       - field: msServer
         skip: "write-only convenience parameter, never mirrored into the observed state"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: options
         skip: "list field of DHCP option structs, not a scalar update-test target"

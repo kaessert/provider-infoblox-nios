@@ -99,6 +99,14 @@ const (
 	// sentinel TTL value.
 	ttlMinimumSeconds = 0
 	ttlMaximumSeconds = 2147483647
+	// reservedEAKey is the extensible attribute key the provider stamps
+	// into every managed object's extattrs to carry its identity (the
+	// managed resource's metadata.uid). It is reserved in every
+	// ForProvider extensible-attribute map field — see
+	// reservedEAKeyValidations — because a user-supplied value would
+	// race the provider for its own identity key and make the object
+	// unrecoverable.
+	reservedEAKey = "Crossplane Internal ID"
 )
 
 // int64Ptr returns a pointer to v. Used to populate FieldDef.Minimum and
@@ -172,6 +180,36 @@ type FieldDef struct {
 	// delete-time option flag, not part of the RecordA response
 	// struct returned by GetARecord.
 	OmitFromObservation bool
+	// ForProviderValidations are field-level kubebuilder XValidation
+	// rules rendered ONLY on the ForProvider (spec) copy of this field —
+	// never on the AtProvider (status) mirror, even for a Scope=Both
+	// field. Used for constraints that apply to user input only, e.g.
+	// every extensible-attribute map field rejects the reserved
+	// "Crossplane Internal ID" key in ForProvider (see
+	// reservedEAKeyValidations) while AtProvider keeps mirroring the
+	// Grid's real extattrs map, identity stamp included, for the
+	// full-mirror observation invariant.
+	ForProviderValidations []ValidationRule
+}
+
+// reservedEAKeyValidations returns the field-level CEL validation that
+// rejects the reserved reservedEAKey extensible attribute key in a
+// ForProvider extAttrs map. Shared by every resource whose catalog entry
+// models the extAttrs field, so the rule text and message stay identical
+// catalog-wide. Tolerates an absent or empty map: the "all" CEL macro is
+// vacuously true over zero keys, and per convention 0030 this map field
+// carries no omitempty, so an empty map serialises as {} rather than null.
+func reservedEAKeyValidations() []ValidationRule {
+	return []ValidationRule{
+		{
+			Rule: "self.all(k, k != '" + reservedEAKey + "')",
+			// The message is embedded in a kubebuilder marker as
+			// message="...", so it deliberately uses single quotes
+			// around the key name rather than double quotes, which
+			// would prematurely terminate the marker's quoted value.
+			Message: "the '" + reservedEAKey + "' extensible attribute is reserved for the provider's identity stamp and cannot be set in spec.forProvider.extAttrs",
+		},
+	}
 }
 
 // ReferenceDescriptor describes a cross-resource reference for a FieldDef.

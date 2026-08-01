@@ -52,7 +52,7 @@ metadata:
         skip: "references ZoneAuth resources, intentionally omitted from this standalone example"
       - field: topology
         skip: "only meaningful when lbMethod=TOPOLOGY; not used by this example's RATIO method"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:

@@ -17,7 +17,7 @@
 #   offset:             start address offset within the parent network when
 #                       instantiated.
 #
-# Optional mutable fields: comment, extattrs, options, useOptions,
+# Optional mutable fields: comment, extAttrs, options, useOptions,
 # serverAssociationType, failoverAssociation, member, cloudApiCompatible,
 # msServer. No immutable fields are known for this resource — every Create
 # parameter is also accepted by Update.
@@ -46,7 +46,7 @@ metadata:
     # (an existing failover association or Grid member) not modeled by
     # this standalone example, so they are skipped. msServer is a
     # write-only convenience parameter never mirrored into the observed
-    # state. extattrs and options are map/list fields skipped for low
+    # state. extAttrs and options are map/list fields skipped for low
     # update-test value.
     crossplane.io/update-test: |
       - field: comment
@@ -69,7 +69,7 @@ metadata:
         skip: "only meaningful when serverAssociationType=MEMBER; not a scalar update-test target"
       - field: msServer
         skip: "write-only convenience parameter, never mirrored into the observed state"
-      - field: extattrs
+      - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: options
         skip: "list field of DHCP option structs, not a scalar update-test target"
