@@ -342,6 +342,44 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/networkcontainer", createHandler)
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/ipv6networkcontainer", createHandler)
 
+	// Search endpoints (GetNetworkContainer): a GET with no _ref path
+	// segment, filtered by network_view/network query params.
+	// Registered as exact literal paths so Go's ServeMux prefers them
+	// over the {ref...} wildcard below for requests to precisely
+	// "networkcontainer"/"ipv6networkcontainer" (real _refs always
+	// carry additional path segments).
+	searchHandler := func(isIPv6 bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			networkView := q.Get("network_view")
+			cidr := q.Get("network")
+
+			m.mu.Lock()
+			var matches []ibclient.NetworkContainer
+			for ref, nc := range m.containers {
+				refIsIPv6 := strings.HasPrefix(ref, "ipv6networkcontainer/")
+				if refIsIPv6 != isIPv6 {
+					continue
+				}
+				if networkView != "" && nc.NetviewName != networkView {
+					continue
+				}
+				if cidr != "" && nc.Cidr != cidr {
+					continue
+				}
+				matches = append(matches, *nc)
+			}
+			m.mu.Unlock()
+
+			// Always respond 200 — WAPI search semantics report
+			// "not found" via an empty array, never an HTTP error
+			// status.
+			writeJSON(w, http.StatusOK, matches)
+		}
+	}
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/networkcontainer", searchHandler(false))
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/ipv6networkcontainer", searchHandler(true))
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -981,6 +1019,54 @@ func TestClusterDeleteForbidden(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// core defect fix: a 404 against the stored _ref must not be treated as
+// "already deleted" when a natural-key search finds the same identity
+// still live under a different _ref. Deleting that container would be
+// unverifiable ownership, so Delete() must refuse and leave the record
+// in place.
+func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.NetworkContainer{NetviewName: testDefaultName, Cidr: testCIDR})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", "networkcontainer/stale-ref:"+testCIDR+"/"+testDefaultName)
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.containers[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live container was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// companion happy path: a 404 against the stored _ref, and a natural-key
+// search that finds nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetworkContainer("my-container", "networkcontainer/stale-ref:"+testCIDR+"/"+testDefaultName)
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1296,6 +1382,51 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, errDeleteNetworkContainer) {
 		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteNetworkContainer)
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.NetworkContainer{NetviewName: testDefaultName, Cidr: testCIDR})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/stale-ref:"+testCIDR+"/"+testDefaultName, "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.containers[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live container was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetworkContainer(testDefaultName, "my-container", "networkcontainer/stale-ref:"+testCIDR+"/"+testDefaultName, "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
 	}
 }
 

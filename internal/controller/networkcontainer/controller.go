@@ -48,6 +48,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkcontainer/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -462,6 +463,57 @@ func getNetworkContainerByRef(objMgr ibclient.IBObjectManager, ref string) (*ibc
 func deleteNetworkContainer(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteNetworkContainer(ref)
 	return err
+}
+
+// networkContainerExistsByNaturalKey reports whether a live
+// NetworkContainer still exists under the CR's own (networkView, cidr)
+// identity — the same fields WAPI uses to compute the _ref. Used by
+// Delete() when the stored _ref 404s: a hit here means the _ref is
+// merely stale, not that the object is gone. The search is skipped
+// (found=false) when either networkView or cidr is empty — there is no
+// way to re-discover the object in that case. eaSearch is always passed
+// as nil — it is an optional additional filter; omitting it still
+// filters correctly on networkView+cidr alone.
+func networkContainerExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, cidr *string) (bool, error) {
+	nv := strOrEmpty(networkView)
+	c := strOrEmpty(cidr)
+	if nv == "" || c == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetNetworkContainer(nv, c, isIPv6CIDR(c), nil)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteNetworkContainerResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live network container, deleting is
+// refused because ownership of that container cannot be verified from
+// the search alone (see the staleref package doc for the full
+// rationale).
+func deleteNetworkContainerResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, cidr *string) error {
+	delErr := deleteNetworkContainer(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteNetworkContainer)
+	}
+	found, searchErr := networkContainerExistsByNaturalKey(objMgr, networkView, cidr)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteNetworkContainer)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

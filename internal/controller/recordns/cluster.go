@@ -237,11 +237,9 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NSReco
 // (idempotent).
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteNSRecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteNSRecord)
+	p := cr.Spec.ForProvider
+	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

@@ -203,15 +203,16 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the AAAARecord. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the AAAARecord. A 404 on the stored _ref is not treated
+// as already-deleted by itself — see deleteAAAARecordResolving404 —
+// because the _ref is a derived handle that rotates whenever an identity
+// field changes, and a stale handle 404s exactly like a genuinely
+// deleted object.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.AAAARecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteAAAARecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteAAAARecord)
+	p := cr.Spec.ForProvider
+	if err := deleteAAAARecordResolving404(e.objMgr, externalID, p.View, p.Name, p.IPv6Addr); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

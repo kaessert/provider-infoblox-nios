@@ -27,6 +27,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordns/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -493,6 +494,59 @@ func updateNSRecord(objMgr ibclient.IBObjectManager, ref string, nameserver, msD
 func deleteNSRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteNSRecord(ref)
 	return err
+}
+
+// nsRecordExistsByNaturalKey reports whether a live NSRecord still exists
+// under the CR's own (name, view) identity — the same tuple WAPI uses to
+// compute the _ref (both fields are hard-immutable, see isUpToDate's doc
+// comment). Used by Delete() when the stored _ref 404s: a hit here means
+// the _ref is merely stale, not that the object is gone. NSRecord has no
+// single-object natural-key getter, so this searches via
+// GetAllRecordNS (a list call) with a server-side query filter instead.
+// Both fields are required non-empty; when either is missing there is no
+// way to re-discover the object, so the search is skipped (found=false)
+// rather than treated as an error.
+func nsRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, view *string) (bool, error) {
+	if strOrEmpty(name) == "" || strOrEmpty(view) == "" {
+		return false, nil
+	}
+	sf := map[string]string{
+		"name": strOrEmpty(name),
+		"view": strOrEmpty(view),
+	}
+	res, err := objMgr.GetAllRecordNS(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteNSRecordResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding
+// it is gone. A 404 on a derived handle is evidence the handle rotated,
+// not evidence the object was removed: if the natural-key search still
+// finds a live NS record, deleting is refused because ownership of that
+// record cannot be verified from the search alone (see the staleref
+// package doc for the full rationale).
+func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, ref string, name, view *string) error {
+	delErr := deleteNSRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteNSRecord)
+	}
+	found, searchErr := nsRecordExistsByNaturalKey(objMgr, name, view)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteNSRecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

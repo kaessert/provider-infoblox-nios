@@ -41,6 +41,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dnsview/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dnsview/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -2160,6 +2161,53 @@ func updateView(conn ibclient.IBConnector, ref string, f dnsViewFields) (string,
 func deleteView(conn ibclient.IBConnector, ref string) error {
 	_, err := conn.DeleteObject(ref)
 	return err
+}
+
+// viewExistsByNaturalKey reports whether a live View still exists under
+// the CR's own name — the same field WAPI uses to compute the _ref (DNS
+// view names are unique Grid-wide). Used by Delete() when the stored
+// _ref 404s: a hit here means the _ref is merely stale, not that the
+// object is gone. When name is empty there is no way to re-discover the
+// object, so the search is skipped (found=false) rather than treated as
+// an error.
+func viewExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
+	if strOrEmpty(name) == "" {
+		return false, nil
+	}
+	var res []ibclient.View
+	err := conn.GetObject(ibclient.NewEmptyDNSView(), "", ibclient.NewQueryParams(false, map[string]string{"name": strOrEmpty(name)}), &res)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteViewResolving404 issues the WAPI delete and, on a 404 against the
+// stored _ref, resolves the object's natural key before concluding it is
+// gone. A 404 on a derived handle is evidence the handle rotated, not
+// evidence the object was removed: if the natural-key search still finds
+// a live view, deleting is refused because ownership of that view cannot
+// be verified from the search alone (see the staleref package doc for the
+// full rationale).
+func deleteViewResolving404(conn ibclient.IBConnector, ref string, name *string) error {
+	delErr := deleteView(conn, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteDNSView)
+	}
+	found, searchErr := viewExistsByNaturalKey(conn, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteDNSView)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

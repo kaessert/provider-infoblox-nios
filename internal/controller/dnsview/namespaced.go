@@ -204,11 +204,8 @@ func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.DN
 	}
 
 	externalID := meta.GetExternalName(cr)
-	if err := deleteView(e.conn, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteDNSView)
+	if err := deleteViewResolving404(e.conn, externalID, name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

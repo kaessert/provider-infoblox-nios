@@ -230,15 +230,14 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ExtensibleAttributeDef. A 404 is treated as
-// already-deleted (idempotent).
+// Delete removes the ExtensibleAttributeDef. A 404 against the stored
+// _ref is not treated as already-deleted by itself — see
+// deleteEADefinitionResolving404 — because the _ref is a derived handle
+// (name-based) that rotates when name changes.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteEADefinition(e.conn, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteEADefinition)
+	if err := deleteEADefinitionResolving404(e.conn, externalID, cr.Spec.ForProvider.Name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

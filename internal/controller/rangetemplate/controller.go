@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/rangetemplate/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/rangetemplate/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -689,6 +690,56 @@ func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *stri
 func deleteRangeTemplate(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteRangeTemplate(ref)
 	return err
+}
+
+// rangeTemplateExistsByNaturalKey reports whether a live RangeTemplate
+// still exists under the CR's own name identity — the same value WAPI
+// uses to compute the _ref. Used by Delete() when the stored _ref 404s:
+// a hit here means the _ref is merely stale, not that the object is
+// gone. RangeTemplate has no single-object natural-key getter, so this
+// searches via GetAllRangeTemplate (a list call) with a server-side
+// query filter instead. name is required non-empty; when it is missing
+// there is no way to re-discover the object, so the search is skipped
+// (found=false) rather than treated as an error.
+func rangeTemplateExistsByNaturalKey(objMgr ibclient.IBObjectManager, name *string) (bool, error) {
+	if strOrEmpty(name) == "" {
+		return false, nil
+	}
+	sf := map[string]string{"name": strOrEmpty(name)}
+	res, err := objMgr.GetAllRangeTemplate(ibclient.NewQueryParams(false, sf))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteRangeTemplateResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live range template, deleting is
+// refused because ownership of that range template cannot be verified
+// from the search alone (see the staleref package doc for the full
+// rationale).
+func deleteRangeTemplateResolving404(objMgr ibclient.IBObjectManager, ref string, name *string) error {
+	delErr := deleteRangeTemplate(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteRangeTemplate)
+	}
+	found, searchErr := rangeTemplateExistsByNaturalKey(objMgr, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteRangeTemplate)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

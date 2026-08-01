@@ -254,11 +254,9 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 // (idempotent).
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.NSRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteNSRecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteNSRecord)
+	p := cr.Spec.ForProvider
+	if err := deleteNSRecordResolving404(e.objMgr, externalID, p.Name, p.View); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

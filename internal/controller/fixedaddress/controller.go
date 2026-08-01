@@ -34,6 +34,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -880,6 +881,64 @@ func updateFixedAddress(objMgr ibclient.IBObjectManager, ref string, f fixedAddr
 func deleteFixedAddress(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteFixedAddress(ref)
 	return err
+}
+
+// fixedAddressExistsByNaturalKey reports whether a live FixedAddress
+// still exists under the CR's own (networkView, network, ipAddr, isIPv6,
+// mac/duid) identity — the same fields WAPI uses to compute the _ref.
+// Used by Delete() when the stored _ref 404s: a hit here means the _ref
+// is merely stale, not that the object is gone. GetFixedAddress always
+// filters on network_view and network regardless of emptiness, so this
+// search is skipped (found=false) when any of network view, network, or
+// the IP address is empty — there is no way to re-discover the object in
+// that case. GetFixedAddress itself returns (nil, nil) — not a
+// *NotFoundError — when the search matches nothing, so both a nil
+// result and a classified-404 error are treated as "not found".
+func fixedAddressExistsByNaturalKey(objMgr ibclient.IBObjectManager, f fixedAddressFields) (bool, error) {
+	isIPv6 := f.isIPv6()
+	ipAddr := strOrEmpty(f.IPv4Addr)
+	if isIPv6 {
+		ipAddr = strOrEmpty(f.IPv6Addr)
+	}
+	if strOrEmpty(f.NetworkView) == "" || strOrEmpty(f.Network) == "" || ipAddr == "" {
+		return false, nil
+	}
+	rec, err := objMgr.GetFixedAddress(strOrEmpty(f.NetworkView), strOrEmpty(f.Network), ipAddr, isIPv6, strOrEmpty(f.MAC))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if rec == nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// deleteFixedAddressResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deleteFixedAddressResolving404(objMgr ibclient.IBObjectManager, ref string, f fixedAddressFields) error {
+	delErr := deleteFixedAddress(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteFixedAddress)
+	}
+	found, searchErr := fixedAddressExistsByNaturalKey(objMgr, f)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteFixedAddress)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

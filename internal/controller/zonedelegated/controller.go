@@ -34,6 +34,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zonedelegated/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zonedelegated/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -562,6 +563,55 @@ func updateZoneDelegated(objMgr ibclient.IBObjectManager, ref string, comment, n
 func deleteZoneDelegated(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteZoneDelegated(ref)
 	return err
+}
+
+// zoneDelegatedExistsByNaturalKey reports whether a live ZoneDelegated
+// still exists under the CR's own fqdn — the same field WAPI uses to
+// compute the _ref. Used by Delete() when the stored _ref 404s: a hit
+// here means the _ref is merely stale, not that the object is gone.
+// GetZoneDelegated does not surface a not-found condition as an error —
+// per its own implementation it returns (nil, nil) both when fqdn is
+// empty and when the search finds no match — so absence is detected by
+// checking the returned pointer rather than by classifying an error. When
+// fqdn is empty there is no way to re-discover the object, so the search
+// is skipped (found=false) rather than treated as an error.
+func zoneDelegatedExistsByNaturalKey(objMgr ibclient.IBObjectManager, fqdn *string) (bool, error) {
+	if strOrEmpty(fqdn) == "" {
+		return false, nil
+	}
+	rec, err := objMgr.GetZoneDelegated(strOrEmpty(fqdn))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return rec != nil, nil
+}
+
+// deleteZoneDelegatedResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the handle
+// rotated, not evidence the object was removed: if the natural-key search
+// still finds a live zone, deleting is refused because ownership of that
+// zone cannot be verified from the search alone (see the staleref package
+// doc for the full rationale).
+func deleteZoneDelegatedResolving404(objMgr ibclient.IBObjectManager, ref string, fqdn *string) error {
+	delErr := deleteZoneDelegated(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteZoneDelegated)
+	}
+	found, searchErr := zoneDelegatedExistsByNaturalKey(objMgr, fqdn)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteZoneDelegated)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

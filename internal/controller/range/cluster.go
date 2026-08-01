@@ -182,11 +182,9 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Range)
 // (idempotent).
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.Range) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteRange(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteRange)
+	p := cr.Spec.ForProvider
+	if err := deleteRangeResolving404(e.objMgr, externalID, p.StartAddr, p.EndAddr, p.NetworkView); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

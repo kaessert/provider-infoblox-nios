@@ -35,6 +35,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -484,6 +485,56 @@ func updateNetwork(objMgr ibclient.IBObjectManager, ref string, comment *string,
 func deleteNetwork(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteNetwork(ref)
 	return err
+}
+
+// networkExistsByNaturalKey reports whether a live Network still exists
+// under the CR's own (networkView, cidr) identity — the same fields WAPI
+// uses to compute the _ref. Used by Delete() when the stored _ref 404s: a
+// hit here means the _ref is merely stale, not that the object is gone.
+// GetNetwork errors out (rather than returning a *NotFoundError) when
+// either networkView or cidr is empty, so the search is skipped
+// (found=false) in that case rather than treated as an error. ea is
+// always passed as nil — it is an optional additional filter; omitting
+// it still filters correctly on networkView+cidr alone.
+func networkExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, cidr *string) (bool, error) {
+	nv := strOrEmpty(networkView)
+	c := strOrEmpty(cidr)
+	if nv == "" || c == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetNetwork(nv, c, isIPv6CIDR(c), nil)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteNetworkResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding it
+// is gone. A 404 on a derived handle is evidence the handle rotated, not
+// evidence the object was removed: if the natural-key search still finds
+// a live network, deleting is refused because ownership of that network
+// cannot be verified from the search alone (see the staleref package doc
+// for the full rationale).
+func deleteNetworkResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, cidr *string) error {
+	delErr := deleteNetwork(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteNetwork)
+	}
+	found, searchErr := networkExistsByNaturalKey(objMgr, networkView, cidr)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteNetwork)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

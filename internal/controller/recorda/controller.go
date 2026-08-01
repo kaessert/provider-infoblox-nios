@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -473,6 +474,52 @@ func updateARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv4Addr, 
 func deleteARecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteARecord(ref)
 	return err
+}
+
+// aRecordExistsByNaturalKey reports whether a live ARecord still exists
+// under the CR's own (view, name, ipv4Addr) identity — the same tuple
+// WAPI uses to compute the _ref. Used by Delete() when the stored _ref
+// 404s: a hit here means the _ref is merely stale, not that the object
+// is gone. GetARecord requires all three fields non-empty; when any is
+// missing there is no way to re-discover the object, so the search is
+// skipped (found=false) rather than treated as an error.
+func aRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name, ipv4Addr *string) (bool, error) {
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(ipv4Addr) == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetARecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(ipv4Addr))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteARecordResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding it
+// is gone. A 404 on a derived handle is evidence the handle rotated, not
+// evidence the object was removed: if the natural-key search still finds
+// a live record, deleting is refused because ownership of that record
+// cannot be verified from the search alone (see the staleref package doc
+// for the full rationale).
+func deleteARecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, ipv4Addr *string) error {
+	delErr := deleteARecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteARecord)
+	}
+	found, searchErr := aRecordExistsByNaturalKey(objMgr, view, name, ipv4Addr)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteARecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

@@ -312,6 +312,44 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/network", createHandler(false))
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/ipv6network", createHandler(true))
 
+	// Search endpoints (GetNetwork): a GET with no _ref path segment,
+	// filtered by network_view/network query params. Registered as
+	// exact literal paths so Go's ServeMux prefers them over the
+	// {ref...} wildcard below for requests to precisely
+	// "network"/"ipv6network" (real _refs always carry additional path
+	// segments).
+	searchHandler := func(isIPv6 bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			networkView := q.Get("network_view")
+			cidr := q.Get("network")
+
+			m.mu.Lock()
+			var matches []ibclient.Network
+			for ref, nw := range m.networks {
+				refIsIPv6 := strings.HasPrefix(ref, "ipv6network/")
+				if refIsIPv6 != isIPv6 {
+					continue
+				}
+				if networkView != "" && nw.NetviewName != networkView {
+					continue
+				}
+				if cidr != "" && nw.Cidr != cidr {
+					continue
+				}
+				matches = append(matches, *nw)
+			}
+			m.mu.Unlock()
+
+			// Always respond 200 — WAPI search semantics report
+			// "not found" via an empty array, never an HTTP error
+			// status.
+			writeJSON(w, http.StatusOK, matches)
+		}
+	}
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/network", searchHandler(false))
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/ipv6network", searchHandler(true))
+
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
@@ -1025,6 +1063,54 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
+// core defect fix: a 404 against the stored _ref must not be treated as
+// "already deleted" when a natural-key search finds the same identity
+// still live under a different _ref. Deleting that network would be
+// unverifiable ownership, so Delete() must refuse and leave the record
+// in place.
+func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.Network{NetviewName: testNamespace, Cidr: testCIDR}, false)
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "network/stale-ref:"+testCIDR+"/"+testNamespace)
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.networks[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live network was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// companion happy path: a 404 against the stored _ref, and a natural-key
+// search that finds nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newClusterNetwork("my-network", "network/stale-ref:"+testCIDR+"/"+testNamespace)
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+	}
+}
+
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
@@ -1343,6 +1429,51 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, errDeleteNetwork) {
 		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteNetwork)
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.Network{NetviewName: testNamespace, Cidr: testCIDR}, false)
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/stale-ref:"+testCIDR+"/"+testNamespace, "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.networks[liveRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live network was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
+// namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
+func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &namespacedExternal{objMgr: newTestObjectManager(t, srv)}
+	cr := newNamespacedNetwork(testNamespace, "my-network", "network/stale-ref:"+testCIDR+"/"+testNamespace, "ProviderConfig")
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
 	}
 }
 

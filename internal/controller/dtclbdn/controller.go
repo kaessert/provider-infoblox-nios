@@ -61,6 +61,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtclbdn/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtclbdn/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -735,6 +736,58 @@ func updateDtcLbdn(conn ibclient.IBConnector, ref string, name, lbMethod *string
 func deleteDtcLbdn(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteDtcLbdn(ref)
 	return err
+}
+
+// dtcLbdnExistsByNaturalKey reports whether a live DTCLBDN still exists
+// under the CR's own (name) identity — the same field WAPI uses to
+// compute the _ref. Used by Delete() when the stored _ref 404s: a hit
+// here means the _ref is merely stale, not that the object is gone. This
+// cannot use the ObjectManager's GetDtcLbdn(name) convenience method —
+// like GetDtcLbdnByRef, it builds its request object via NewEmptyDtcLbdn,
+// which unconditionally requests `auto_consolidated_monitors` and 400s on
+// this deployment's WAPI schema (see the package doc comment and
+// dtcLbdnReturnFields) — so this issues the same trimmed-return-fields
+// search through the low-level IBConnector instead.
+func dtcLbdnExistsByNaturalKey(conn ibclient.IBConnector, name *string) (bool, error) {
+	if strOrEmpty(name) == "" {
+		return false, nil
+	}
+	var res []ibclient.DtcLbdn
+	lbdn := &ibclient.DtcLbdn{}
+	lbdn.SetReturnFields(append(lbdn.ReturnFields(), dtcLbdnReturnFields...))
+	err := conn.GetObject(lbdn, "", ibclient.NewQueryParams(false, map[string]string{"name": strOrEmpty(name)}), &res)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(res) > 0, nil
+}
+
+// deleteDtcLbdnResolving404 issues the WAPI delete and, on a 404 against
+// the stored _ref, resolves the object's natural key before concluding it
+// is gone. A 404 on a derived handle is evidence the handle rotated, not
+// evidence the object was removed: if the natural-key search still finds
+// a live object, deleting is refused because ownership of that object
+// cannot be verified from the search alone (see the staleref package doc
+// for the full rationale).
+func deleteDtcLbdnResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name *string) error {
+	delErr := deleteDtcLbdn(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteDTCLBDN)
+	}
+	found, searchErr := dtcLbdnExistsByNaturalKey(conn, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteDTCLBDN)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // dtcLbdnReturnFields lists every DtcLbdn field this package reads on

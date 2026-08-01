@@ -178,16 +178,16 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.Network)
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the Network. A 404 is treated as already-deleted
-// (idempotent). This is a hard delete — a subsequent GET on the same ref
-// 404s.
+// Delete removes the Network. A 404 on the stored _ref is not treated as
+// already-deleted by itself — see deleteNetworkResolving404 — because
+// the _ref is a derived handle that rotates whenever an identity field
+// changes, and a stale handle 404s exactly like a genuinely deleted
+// object. This is a hard delete — a subsequent GET on the same ref 404s.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.Network) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteNetwork(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteNetwork)
+	p := cr.Spec.ForProvider
+	if err := deleteNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Network); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

@@ -232,11 +232,9 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.RangeT
 // (idempotent).
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.RangeTemplate) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteRangeTemplate(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteRangeTemplate)
+	p := cr.Spec.ForProvider
+	if err := deleteRangeTemplateResolving404(e.objMgr, externalID, p.Name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

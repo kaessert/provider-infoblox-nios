@@ -218,11 +218,9 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 // on the same ref 404s.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteIPv4SharedNetwork(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteIPv4SharedNet)
+	p := cr.Spec.ForProvider
+	if err := deleteIPv4SharedNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Name); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

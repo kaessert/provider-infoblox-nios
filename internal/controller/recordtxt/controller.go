@@ -30,6 +30,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -446,6 +447,53 @@ func updateTXTRecord(objMgr ibclient.IBObjectManager, ref string, name, text, co
 func deleteTXTRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteTXTRecord(ref)
 	return err
+}
+
+// txtRecordExistsByNaturalKey reports whether a live TXTRecord still
+// exists under the CR's own (view, name) identity — the same tuple WAPI
+// uses to compute the _ref. Used by Delete() when the stored _ref 404s:
+// a hit here means the _ref is merely stale, not that the object is
+// gone. GetTXTRecord requires both fields non-empty (it returns a hard
+// error, not a NotFoundError, when either is missing); when either is
+// missing there is no way to re-discover the object, so the search is
+// skipped (found=false) rather than treated as an error.
+func txtRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, name *string) (bool, error) {
+	if strOrEmpty(view) == "" || strOrEmpty(name) == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetTXTRecord(strOrEmpty(view), strOrEmpty(name))
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteTXTRecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deleteTXTRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name *string) error {
+	delErr := deleteTXTRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeleteTXTRecord)
+	}
+	found, searchErr := txtRecordExistsByNaturalKey(objMgr, view, name)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeleteTXTRecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

@@ -279,15 +279,17 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.HostRe
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the HostRecord. A 404 is treated as already-deleted
-// (idempotent).
+// Delete removes the HostRecord. A 404 on the stored _ref is not treated
+// as already-deleted by itself — see deleteHostRecordResolving404 —
+// because the _ref is a derived handle that rotates whenever an identity
+// field changes, and a stale handle 404s exactly like a genuinely
+// deleted object.
 func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteHostRecord(e.client.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteHostRecord)
+	p := &cr.Spec.ForProvider
+	cf := clusterCompareFields(p)
+	if err := deleteHostRecordResolving404(e.client.objMgr, externalID, p.NetworkView, cf.View, cf.Name, cf.Ipv4Addrs, cf.Ipv6Addrs); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }

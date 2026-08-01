@@ -29,6 +29,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordptr/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordptr/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -491,6 +492,60 @@ func updatePTRRecord(objMgr ibclient.IBObjectManager, ref string, ptrdname, name
 func deletePTRRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeletePTRRecord(ref)
 	return err
+}
+
+// ptrRecordExistsByNaturalKey reports whether a live PTRRecord still
+// exists under the CR's own (view, ptrdname, name/ip) identity — the
+// same tuple WAPI uses to compute the _ref. Used by Delete() when the
+// stored _ref 404s: a hit here means the _ref is merely stale, not that
+// the object is gone. GetPTRRecord requires view and ptrdname plus
+// either a record name or an IP address to retrieve a unique record (it
+// returns a hard error, not a NotFoundError, when neither is supplied);
+// the IP address is preferred here (IPv4 first, then IPv6) as it is the
+// more stable identity component — when neither view, ptrdname, nor an
+// IP address is available there is no way to re-discover the object, so
+// the search is skipped (found=false) rather than treated as an error.
+func ptrRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, ptrdname, name, ipv4Addr, ipv6Addr *string) (bool, error) {
+	ipAddr := strOrEmpty(ipv4Addr)
+	if ipAddr == "" {
+		ipAddr = strOrEmpty(ipv6Addr)
+	}
+	if strOrEmpty(view) == "" || strOrEmpty(ptrdname) == "" || ipAddr == "" {
+		return false, nil
+	}
+	_, err := objMgr.GetPTRRecord(strOrEmpty(view), strOrEmpty(ptrdname), strOrEmpty(name), ipAddr)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deletePTRRecordResolving404 issues the WAPI delete and, on a 404
+// against the stored _ref, resolves the object's natural key before
+// concluding it is gone. A 404 on a derived handle is evidence the
+// handle rotated, not evidence the object was removed: if the
+// natural-key search still finds a live record, deleting is refused
+// because ownership of that record cannot be verified from the search
+// alone (see the staleref package doc for the full rationale).
+func deletePTRRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, ptrdname, name, ipv4Addr, ipv6Addr *string) error {
+	delErr := deletePTRRecord(objMgr, ref)
+	if delErr == nil {
+		return nil
+	}
+	if !isNotFound(delErr) {
+		return errors.Wrap(delErr, errDeletePTRRecord)
+	}
+	found, searchErr := ptrRecordExistsByNaturalKey(objMgr, view, ptrdname, name, ipv4Addr, ipv6Addr)
+	if searchErr != nil {
+		return errors.Wrap(searchErr, errDeletePTRRecord)
+	}
+	if found {
+		return staleref.RefusalError()
+	}
+	return nil
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

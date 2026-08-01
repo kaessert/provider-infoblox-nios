@@ -203,11 +203,9 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 // (idempotent).
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.AliasRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	if err := deleteAliasRecord(e.objMgr, externalID); err != nil {
-		if isNotFound(err) {
-			return managed.ExternalDelete{}, nil
-		}
-		return managed.ExternalDelete{}, errors.Wrap(err, errDeleteAliasRecord)
+	p := cr.Spec.ForProvider
+	if err := deleteAliasRecordResolving404(e.objMgr, externalID, p.View, p.Name, p.TargetName, p.TargetType); err != nil {
+		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
 }
