@@ -20,7 +20,6 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-recorda.infobloxnios.m.crossplane.io"
@@ -97,93 +96,94 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{kube: c.kube, objMgr: mgrConn.Manager, conn: mgrConn.Connector}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.ARecord].
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — it needs visibility into search match counts
+	// that objMgr's typed methods hide. See resolveARecordIdentity.
+	conn ibclient.IBConnector
 }
 
-// Observe fetches the ARecord from the WAPI by its _ref external name and
-// compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the ARecord through the shared UID-in-EA identity
+// ladder (ADR-IN-0006 §2/§3) and compares the result against the desired
+// spec. See observeARecord for the ladder itself.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
+	res, err := observeARecord(ctx, e.conn, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errObserveARecord)
+	}
+	if !res.exists {
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	rec, err := e.objMgr.GetARecordByRef(externalID)
-	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := aRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.IPv4Addr)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveARecord)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
-		return managed.ExternalObservation{}, errors.Wrap(err, errObserveARecord)
-	}
-
-	o := observeFromRecordA(externalID, rec)
-	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = namespacedv1alpha1.ARecordObservation{
-		Name:     o.Name,
-		IPv4Addr: o.IPv4Addr,
-		Comment:  o.Comment,
-		TTL:      o.TTL,
-		UseTTL:   o.UseTTL,
-		ExtAttrs: o.ExtAttrs,
-		View:     o.View,
+		Name:     res.obs.Name,
+		IPv4Addr: res.obs.IPv4Addr,
+		Comment:  res.obs.Comment,
+		TTL:      res.obs.TTL,
+		UseTTL:   res.obs.UseTTL,
+		ExtAttrs: res.obs.ExtAttrs,
+		View:     res.obs.View,
 		// Cidr/NetworkView are create-time-only allocation hints the WAPI
 		// never echoes back in a GET response — mirrored directly from
 		// ForProvider (informational only) rather than from the observed
 		// RecordA.
 		Cidr:        p.Cidr,
 		NetworkView: p.NetworkView,
-		Ref:         o.Ref,
-		Zone:        o.Zone,
+		Ref:         res.obs.Ref,
+		Zone:        res.obs.Zone,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
 	// above) keeps the server-assigned identifier's provenance obvious at
 	// the call site — it always mirrors the external name used to fetch
 	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
+	// A rotated or previously-unknown reference must be persisted
+	// through a path crossplane-runtime actually writes back to the API
+	// server. res.lateInit is already forced true alongside
+	// res.refreshedRef by observeARecord for exactly this reason.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts
+	// the identity stamp (see updateARecord).
+	upToDate := isUpToDate(p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new ARecord and records the server-assigned _ref as
+// Create provisions a new ARecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request (see createARecord), and records the server-assigned _ref as
 // the external name.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createARecord(e.objMgr, p.Name, p.View, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView)
+	rec, err := createARecord(e.objMgr, p.Name, p.View, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateARecord)
 	}
@@ -193,12 +193,14 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.AR
 }
 
 // Update patches the mutable ARecord fields. View (immutable) is never
-// sent — see updateARecord.
+// sent — see updateARecord. Every call re-asserts the identity stamp
+// (updateARecord) since a WAPI PUT carrying extattrs replaces the whole
+// map rather than merging it — live-verified against a real Grid.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateARecord(e.objMgr, externalID, p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := updateARecord(e.objMgr, externalID, p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateARecord)
 	}
@@ -213,15 +215,13 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the ARecord. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteARecordResolving404 — because the
-// _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalDelete, error) {
+// Delete removes the ARecord, resolving through the shared identity
+// ladder first — see deleteARecordIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteARecordResolving404(e.objMgr, externalID, p.View, p.Name, p.IPv4Addr); err != nil {
+	if err := deleteARecordIdentity(ctx, e.conn, e.objMgr, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
