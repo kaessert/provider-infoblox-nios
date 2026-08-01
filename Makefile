@@ -537,29 +537,6 @@ help-special: crossplane.help
 
 .PHONY: crossplane.help help-special
 
-# ====================================================================================
-# Update-tester standalone targets (the update-tester convergence-check convention)
-#
-# These invoke the update-tester tool directly (converge + per-field run)
-# against both scope variants of each resource. They are separate from the
-# uptest post-assert hook integration (which also runs update-tester as part
-# of the full `make e2e.<resource>` Create→Update→Import→Delete cycle) — use
-# these for a fast, standalone check against an already-deployed resource.
-#
-# Guarded: tools/update-tester has not been scaffolded for this provider yet,
-# so these targets no-op with a message rather than failing the build. Once
-# tools/update-tester/*.go exists, $(UPDATE_TESTER) builds normally and the
-# targets run the real converge/run cycle.
-
-UPDATE_TESTER := tools/update-tester/update-tester
-
-$(UPDATE_TESTER):
-	@if [ -d tools/update-tester ] && ls tools/update-tester/*.go >/dev/null 2>&1; then \
-	  cd tools/update-tester && $(GO) build -o update-tester . ; \
-	else \
-	  echo "update-tester: tools/update-tester not yet scaffolded — skipping (no-op)"; \
-	fi
-
 update-test.record-cname: $(UPDATE_TESTER) ## Update test for CNAMERecord (per-field convergence check)
 	@if [ -x $(UPDATE_TESTER) ]; then \
 	  $(UPDATE_TESTER) converge examples/record-cname/record-cname.yaml; \
@@ -592,9 +569,14 @@ update-test.record-mx: $(UPDATE_TESTER)
 #
 # The --types-file for each manifest is resolved from its apiVersion: the
 # first dot-separated segment of the API group is both the apis/<scope>/<seg>
-# directory name and the <seg>_types.go file prefix. The second group segment
-# ("m" for namespace-scoped, absent for cluster-scoped) selects apis/namespaced
-# vs apis/cluster.
+# directory name and the <seg>_types.go file prefix. The scope is namespaced
+# when the API group ends in ".m.crossplane.io" (the "m" marker is a fixed
+# group suffix, not tied to a fixed segment position — e.g.
+# recordcname.infobloxnios.m.crossplane.io) and cluster otherwise (e.g.
+# recordcname.infobloxnios.crossplane.io). A self-check cross-references the
+# manifest filename convention (*-namespaced.yaml) against the resolved scope
+# so a future naming drift fails loudly instead of silently validating
+# against the wrong types file.
 update-test.validate: $(UPDATE_TESTER)
 	@if [ ! -x $(UPDATE_TESTER) ]; then \
 	  echo "update-test.validate: update-tester not available yet — no-op"; \
@@ -605,8 +587,24 @@ update-test.validate: $(UPDATE_TESTER)
 	  av=$$(awk '/^apiVersion:/ {print $$2; exit}' "$$f"); \
 	  grp=$$(echo "$$av" | cut -d/ -f1); \
 	  seg1=$$(echo "$$grp" | cut -d. -f1); \
-	  seg2=$$(echo "$$grp" | cut -d. -f2); \
-	  if [ "$$seg2" = "m" ]; then scope=namespaced; else scope=cluster; fi; \
+	  case "$$grp" in \
+	    *.m.crossplane.io) scope=namespaced ;; \
+	    *) scope=cluster ;; \
+	  esac; \
+	  case "$$f" in \
+	    *-namespaced.yaml) \
+	      if [ "$$scope" != "namespaced" ]; then \
+	        echo "FAIL: $$f looks namespaced by filename but resolved scope=$$scope from apiVersion=$$av"; \
+	        fail=1; \
+	        continue; \
+	      fi ;; \
+	    *) \
+	      if [ "$$scope" != "cluster" ]; then \
+	        echo "FAIL: $$f looks cluster-scoped by filename but resolved scope=$$scope from apiVersion=$$av"; \
+	        fail=1; \
+	        continue; \
+	      fi ;; \
+	  esac; \
 	  types="apis/$$scope/$$seg1/v1alpha1/$${seg1}_types.go"; \
 	  if [ ! -f "$$types" ]; then \
 	    echo "SKIP: $$f — no types file at $$types (apiVersion=$$av)"; \
