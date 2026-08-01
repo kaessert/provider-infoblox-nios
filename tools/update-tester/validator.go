@@ -25,7 +25,7 @@ type ValidationResult struct {
 // FieldValidation holds the status of a single field in validation.
 type FieldValidation struct {
 	JSONName string
-	Status   string // "tested", "skipped", "immutable", "MISSING"
+	Status   string // "tested", "skipped", "immutable", "reference-plumbing", "MISSING"
 }
 
 // Regexes for parsing Go struct fields.
@@ -44,6 +44,33 @@ var (
 	// Matches the start of a Parameters struct.
 	reParamsStruct = regexp.MustCompile(`^type\s+(\w*Parameters)\s+struct\s*\{`)
 )
+
+// referencePlumbingSuffixes are the JSON-name suffixes angryjet appends to a
+// base value field's name when it generates the companion cross-resource
+// reference fields (convention: base field + "Ref" + "Selector", e.g.
+// "canonical" + "canonicalRef" + "canonicalSelector"). These are Crossplane
+// reference-resolution machinery, not independent API fields, so they have
+// no update semantics of their own to exercise.
+var referencePlumbingSuffixes = []string{"Ref", "Selector"}
+
+// isReferencePlumbingField reports whether jsonName is a generated
+// reference-plumbing field (a "*Ref" or "*Selector" companion to a base
+// value field) whose base field is present in fieldSet. Fields are only
+// classified as reference plumbing when the matching base field actually
+// exists — this way a genuinely missing or renamed base value field is
+// still reported as MISSING rather than silently excused.
+func isReferencePlumbingField(jsonName string, fieldSet map[string]bool) bool {
+	for _, suffix := range referencePlumbingSuffixes {
+		if !strings.HasSuffix(jsonName, suffix) {
+			continue
+		}
+		base := strings.TrimSuffix(jsonName, suffix)
+		if base != "" && fieldSet[base] {
+			return true
+		}
+	}
+	return false
+}
 
 // goTypesParser is a small state machine that scans a Go source file line by
 // line looking for the {targetKind}Parameters struct, skipping over any
@@ -204,6 +231,13 @@ func ValidateManifest(m *Manifest, fields []FieldInfo) *ValidationResult {
 		}
 	}
 
+	// Build the set of all field JSON names in this struct so reference-
+	// plumbing detection can confirm a matching base value field exists.
+	fieldSet := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		fieldSet[f.JSONName] = true
+	}
+
 	result := &ValidationResult{
 		Kind:    m.Kind,
 		AllGood: true,
@@ -213,13 +247,18 @@ func ValidateManifest(m *Manifest, fields []FieldInfo) *ValidationResult {
 		var v FieldValidation
 		v.JSONName = f.JSONName
 
-		if f.Immutable {
+		switch {
+		case f.Immutable:
 			v.Status = "immutable"
-		} else if status, ok := tested[f.JSONName]; ok {
-			v.Status = status
-		} else {
-			v.Status = "MISSING"
-			result.AllGood = false
+		case isReferencePlumbingField(f.JSONName, fieldSet):
+			v.Status = "reference-plumbing"
+		default:
+			if status, ok := tested[f.JSONName]; ok {
+				v.Status = status
+			} else {
+				v.Status = "MISSING"
+				result.AllGood = false
+			}
 		}
 		result.Fields = append(result.Fields, v)
 	}
@@ -245,6 +284,9 @@ func PrintValidation(r *ValidationResult) {
 		case "immutable":
 			icon = "✓"
 			detail = "immutable (excluded)"
+		case "reference-plumbing":
+			icon = "✓"
+			detail = "reference plumbing (excluded)"
 		case "MISSING":
 			icon = "✗"
 			detail = "MISSING — not covered by update-test annotation"
