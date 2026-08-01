@@ -19,7 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 const namespacedControllerName = "namespaced-network.infobloxnios.m.crossplane.io"
@@ -97,50 +97,53 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{objMgr: objMgr}, nil
+	return &namespacedExternal{
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.Network].
 type namespacedExternal struct {
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveNetworkIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
-// Observe fetches the Network from the WAPI by its _ref external name and
-// compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the Network through the shared UID-in-EA identity
+// ladder (family-aware — see resolveNetworkIdentity) and compares the
+// result against the desired spec.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	nw, err := e.objMgr.GetNetworkByRef(externalID)
+	res, err := observeNetwork(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Network, &p.Comment, p.ParentCidr, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := networkExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.NetworkView, cr.Spec.ForProvider.Network)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNetwork)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveNetwork)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromNetwork(externalID, nw)
+	o := res.obs
 	members := make([]namespacedv1alpha1.NetworkMember, 0, len(o.Members))
 	for _, m := range o.Members {
 		members = append(members, namespacedv1alpha1.NetworkMember{
@@ -164,27 +167,40 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Network, &p.Comment, &p.ExtAttrs, nw)
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Comment, p.ExtAttrs, res.nw) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Comment, p.ExtAttrs, nw),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new Network and records the server-assigned _ref as
-// the external name. Routes across three creation paths — see
-// createOrAllocateNetwork. The WAPI object type (network vs ipv6network)
-// is selected at runtime from the CIDR format.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalCreation, error) {
+// Create provisions a new Network, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+// Routes across three creation paths — see createOrAllocateNetwork. The
+// WAPI object type (network vs ipv6network) is selected at runtime from
+// the CIDR format.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	nw, err := createOrAllocateNetwork(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.Object, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs)
+	nw, err := createOrAllocateNetwork(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.Object, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateNetwork)
 	}
@@ -195,12 +211,12 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ne
 
 // Update patches the mutable Network fields (comment, extattrs).
 // networkView and network (cidr) are immutable and are never sent — see
-// updateNetwork.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalUpdate, error) {
+// updateNetwork. Every call re-asserts the identity stamp.
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs); err != nil {
+	if _, err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateNetwork)
 	}
 
@@ -208,15 +224,13 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Ne
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the Network. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteNetworkResolving404 — because
-// the _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object. This is a hard delete — a subsequent GET on the same ref 404s.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalDelete, error) {
-	externalID := meta.GetExternalName(cr)
+// Delete removes the Network, resolving through the shared identity
+// ladder first. This is a hard delete — a subsequent GET on the same ref
+// 404s.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalDelete, error) {
 	p := cr.Spec.ForProvider
-	if err := deleteNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Network); err != nil {
+	externalID := meta.GetExternalName(cr)
+	if err := deleteNetworkIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID()), p.Network, p.ParentCidr); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
