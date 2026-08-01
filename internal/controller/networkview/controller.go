@@ -11,6 +11,14 @@
 // or un-defaulted. Standard CRUD applies for every other instance;
 // is_default is cataloged as an immutable, response-only field.
 //
+// NetworkView is wired to the UID-in-EA object-identity ladder (see the
+// internal/clients/identity package doc): the WAPI _ref every create call
+// returns is a derived handle — a rendering of the object's own name, not
+// a stable backend-assigned ID — so this controller stamps the managed
+// resource's own metadata.uid onto the Grid object as an extensible
+// attribute and resolves every Observe/Delete through the shared
+// identity.Resolve ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package networkview
@@ -35,28 +43,42 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewClient           = "cannot create Infoblox NIOS WAPI client"
-	errObserveNetworkView  = "cannot observe NetworkView"
-	errCreateNetworkView   = "cannot create NetworkView"
-	errUpdateNetworkView   = "cannot update NetworkView"
-	errDeleteNetworkView   = "cannot delete NetworkView"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewClient                 = "cannot create Infoblox NIOS WAPI client"
+	errObserveNetworkView        = "cannot observe NetworkView"
+	errCreateNetworkView         = "cannot create NetworkView"
+	errUpdateNetworkView         = "cannot update NetworkView"
+	errDeleteNetworkView         = "cannot delete NetworkView"
+	errEmptyUID                  = "cannot stamp NetworkView identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// Production code always goes through Connect(), which resolves the
+// endpoint from the ProviderConfig's credentials Secret (validated
+// non-empty by extractCredentials) before constructing the client — this
+// fallback is only ever reached by this package's own white-box unit
+// tests that build clusterExternal/namespacedExternal directly, bypassing
+// Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -109,22 +131,21 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newClient constructs an authenticated ibclient.IBObjectManager and the
-// underlying Connector from the given credentials. The Connector performs
-// HTTP Basic Auth on every request and only validates configuration
-// locally — no network round-trip happens until the first
-// Observe/Create/Update/Delete call. The raw Connector is returned
-// alongside the ObjectManager so Observe can issue a custom GET that
-// requests the is_default field (see getNetworkViewByRef) — the SDK's own
-// GetNetworkViewByRef wrapper does not request it.
-func newClient(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, *ibclient.Connector, error) {
+// newClient constructs an authenticated identity.ManagerAndConnector from
+// the given credentials — the SDK's high-level ObjectManager for the
+// ordinary CRUD calls, and the lower-level Connector the identity ladder
+// needs directly (it operates below ObjectManager's typed methods so it
+// can see search match counts). The Connector performs HTTP Basic Auth on
+// every request and only validates configuration locally — no network
+// round-trip happens until the first Observe/Create/Update/Delete call.
+func newClient(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newClientWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newClientWithScheme is the scheme/port-parameterized variant of
 // newClient used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newClientWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, *ibclient.Connector, error) {
+func newClientWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -154,25 +175,26 @@ func newClientWithScheme(creds *nioCredentials, sslVerify bool, scheme, port str
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, errNewClient)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewClient)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), conn, nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
-// getNetworkViewByRef fetches a NetworkView by its WAPI _ref, extending
-// the SDK's default field set (extattrs, name, comment) to also request
-// is_default. objMgr.GetNetworkViewByRef does not request is_default,
-// which would otherwise leave AtProvider.IsDefault permanently false
-// regardless of the server's actual value — a full-mirror correctness
-// issue since exactly one NetworkView per Grid always has is_default=true.
-func getNetworkViewByRef(conn *ibclient.Connector, ref string) (*ibclient.NetworkView, error) {
+// newEmptyNetworkView builds the query/candidate object the identity
+// ladder issues both the ref-fetch and the identity-EA search through.
+// ibclient.NewEmptyNetworkView's own default return-field set
+// (extattrs, name, comment) omits is_default, which would otherwise
+// leave AtProvider.IsDefault permanently false regardless of the
+// server's actual value — a full-mirror correctness issue since exactly
+// one NetworkView per Grid always has is_default=true. This wrapper
+// extends the field set the same way the pre-identity getNetworkViewByRef
+// helper did, so every identity.Resolve call site (ref-fetch and
+// identity-EA search alike) requests it consistently.
+func newEmptyNetworkView() *ibclient.NetworkView {
 	nv := ibclient.NewEmptyNetworkView()
 	nv.SetReturnFields(append(nv.ReturnFields(), "is_default"))
-	if err := conn.GetObject(nv, ref, ibclient.NewQueryParams(false, nil), nv); err != nil {
-		return nil, err
-	}
-	return nv, nil
+	return nv
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -289,7 +311,10 @@ func isNotFound(err error) bool {
 // NetworkView. is_default is immutable (well-known-default: exactly one
 // NetworkView per Grid always has is_default=true, and it can never be
 // changed via UpdateNetworkView) and is intentionally excluded from this
-// comparison.
+// comparison. The Grid's extattrs map is compared with the provider's own
+// identity stamp stripped out (identity.Strip): the CRD schema never
+// includes that reserved key, so leaving it in would produce a permanent
+// phantom diff.
 func isUpToDate(name, comment *string, extAttrs map[string]string, nv *ibclient.NetworkView) bool {
 	if strOrEmpty(name) != strOrEmpty(nv.Name) {
 		return false
@@ -297,14 +322,17 @@ func isUpToDate(name, comment *string, extAttrs map[string]string, nv *ibclient.
 	if strOrEmpty(comment) != strOrEmpty(nv.Comment) {
 		return false
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(nv.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(nv.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
 // extAttrs) from the observed NetworkView into spec so isUpToDate does not
 // see phantom drift on the next reconcile. Name is never late-initialized
-// — it is a required ForProvider field, always user-supplied. Returns
-// true if any field was changed.
+// — it is a required ForProvider field, always user-supplied. extAttrs is
+// back-filled with the provider's own identity stamp stripped out
+// (identity.Strip) — the CRD schema never includes that reserved key, so
+// late-initializing it into spec.forProvider would fail CEL validation
+// and produce a permanent diff. Returns true if any field was changed.
 func lateInitialize(comment **string, extAttrs *map[string]string, nv *ibclient.NetworkView) bool {
 	changed := false
 
@@ -314,7 +342,7 @@ func lateInitialize(comment **string, extAttrs *map[string]string, nv *ibclient.
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromNV := extAttrsFromEA(nv.Ea); len(fromNV) > 0 {
+		if fromNV := extAttrsFromEA(identity.Strip(nv.Ea)); len(fromNV) > 0 {
 			*extAttrs = fromNV
 			changed = true
 		}
@@ -339,9 +367,13 @@ type observedNetworkView struct {
 
 // observeFromNetworkView extracts the fields mirrored by
 // NetworkViewObservation (the full-mirror AtProvider convention) from a
-// WAPI NetworkView response fetched via getNetworkViewByRef (which
-// explicitly requests is_default in addition to the SDK's default field
-// set).
+// WAPI NetworkView response fetched via the identity ladder (which
+// requests is_default in addition to the SDK's default field set — see
+// newEmptyNetworkView). ExtAttrs intentionally mirrors the Grid's complete
+// extattrs map, including the provider's own identity stamp — unlike
+// isUpToDate and lateInitialize, AtProvider is a read-only status mirror,
+// not compared against spec.forProvider, so surfacing the stamp there is
+// informative rather than a source of phantom drift.
 func observeFromNetworkView(externalID string, nv *ibclient.NetworkView) observedNetworkView {
 	o := observedNetworkView{
 		ID:       externalID,
@@ -363,9 +395,17 @@ func observeFromNetworkView(externalID string, nv *ibclient.NetworkView) observe
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createNetworkView issues the WAPI create call.
-func createNetworkView(objMgr ibclient.IBObjectManager, name, comment *string, extAttrs map[string]string) (*ibclient.NetworkView, error) {
-	return objMgr.CreateNetworkView(strOrEmpty(name), strOrEmpty(comment), buildEA(extAttrs))
+// createNetworkView issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp) — there is no follow-up
+// call, so there is no window in which the object exists without its
+// identity stamp.
+func createNetworkView(objMgr ibclient.IBObjectManager, name, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkView, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.CreateNetworkView(strOrEmpty(name), strOrEmpty(comment), ea)
 }
 
 // updateNetworkView issues the WAPI update call. is_default is never
@@ -373,8 +413,18 @@ func createNetworkView(objMgr ibclient.IBObjectManager, name, comment *string, e
 // field); its internal GET-modify-PUT cycle only requests
 // extattrs/name/comment, so is_default stays at its Go zero value (false)
 // and is omitted from the outbound PUT body by the `omitempty` JSON tag.
-func updateNetworkView(objMgr ibclient.IBObjectManager, ref string, name, comment *string, extAttrs map[string]string) (*ibclient.NetworkView, error) {
-	return objMgr.UpdateNetworkView(ref, strOrEmpty(name), strOrEmpty(comment), buildEA(extAttrs))
+//
+// Every call re-asserts the identity stamp (identity.Stamp) in the
+// extattrs it sends. Live verification against a real NIOS Grid Manager
+// confirmed that a PUT carrying an extattrs object *replaces* the whole
+// map — it is not a per-key merge — so omitting the stamp here would wipe
+// it off the object on the very first field update after create.
+func updateNetworkView(objMgr ibclient.IBObjectManager, ref string, name, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkView, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.UpdateNetworkView(ref, strOrEmpty(name), strOrEmpty(comment), ea)
 }
 
 // deleteNetworkView issues the WAPI delete call. Deleting the Grid's
@@ -386,61 +436,145 @@ func deleteNetworkView(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// isNetworkViewSearchMiss reports whether err is the SDK's own
-// synthesized "not found" error for GetNetworkView. Unlike GetNetwork/
-// GetNetworkContainer/GetHostRecord/GetFixedAddress, GetNetworkView does
-// not wrap a zero-result search in *ibclient.NotFoundError — it returns a
-// plain fmt.Errorf("network view '%s' not found", name) instead, which
-// isNotFound does not classify. This checks for that specific message
-// shape so the natural-key search below can still tell "no match" apart
-// from a genuine transport/server error.
-func isNetworkViewSearchMiss(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not found")
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+//
+// The "Crossplane Internal ID" extensible-attribute definition is an
+// install prerequisite for every resource that stamps or resolves
+// identity through it. Wired into Create() (before the identity stamp),
+// and into observeNetworkView/deleteNetworkViewIdentity's identity-EA
+// search fallback (see the doc on those functions for why the guard is
+// reactive). Not wired into Connect(), which must stay network-lazy — see
+// newClient's doc.
 
-// networkViewExistsByNaturalKey reports whether a live NetworkView still
-// exists under the CR's own name — the same field WAPI uses to compute
-// the _ref. Used by Delete() when the stored _ref 404s: a hit here means
-// the _ref is merely stale, not that the object is gone.
-func networkViewExistsByNaturalKey(objMgr ibclient.IBObjectManager, name *string) (bool, error) {
-	n := strOrEmpty(name)
-	if n == "" {
-		return false, nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	_, err := objMgr.GetNetworkView(n)
-	if err != nil {
-		if isNotFound(err) || isNetworkViewSearchMiss(err) {
-			return false, nil
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
+	}
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
 		}
-		return false, err
-	}
-	return true, nil
-}
-
-// deleteNetworkViewResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live network view, deleting is
-// refused because ownership of that network view cannot be verified
-// from the search alone (see the staleref package doc for the full
-// rationale).
-func deleteNetworkViewResolving404(objMgr ibclient.IBObjectManager, ref string, name *string) error {
-	delErr := deleteNetworkView(objMgr, ref)
-	if delErr == nil {
-		return nil
-	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteNetworkView)
-	}
-	found, searchErr := networkViewExistsByNaturalKey(objMgr, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteNetworkView)
-	}
-	if found {
-		return staleref.RefusalError()
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. When the
+// annotation still holds the framework's NameAsExternalName default (the
+// CR's own Kubernetes name) no real WAPI _ref has ever been assigned, so
+// this reports "" rather than handing the ladder a value that can never
+// resolve — Resolve treats "" as "search by identity attribute only",
+// which is exactly the create-crash-window recovery path.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveNetworkViewIdentity resolves the NetworkView identified by
+// ref/uid through the shared UID-in-EA ladder: the stored reference is
+// trusted only after its stamped identity attribute is confirmed to
+// match uid; a stale or absent reference falls back to a search by that
+// stamp, which is also what locates the object when ref is empty.
+func resolveNetworkViewIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.NetworkView, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.NetworkView](ctx, conn, newEmptyNetworkView, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// NetworkView through the identity ladder during Observe — common to
+// both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	nv           *ibclient.NetworkView
+	obs          observedNetworkView
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeNetworkView runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeNetworkView(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	nv, outcome, err := resolveNetworkViewIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		nv:      nv,
+		obs:     observeFromNetworkView(nv.Ref, nv),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, extAttrs, nv)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = nv.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteNetworkViewIdentity issues the WAPI delete for the NetworkView
+// this managed resource owns, resolving through the identity ladder
+// first so a stale _ref is never mistaken for a deleted object.
+func deleteNetworkViewIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveNetworkViewIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteNetworkView)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteNetworkView(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteNetworkView)
+	default:
+		return errors.New("identity: unresolved NetworkView outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

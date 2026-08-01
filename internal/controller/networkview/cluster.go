@@ -20,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-networkview.infobloxnios.crossplane.io"
@@ -72,88 +72,111 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Netw
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, conn, err := newClient(creds, sslVerify)
+	mc, err := newClient(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr, conn: conn}, nil
+	return &clusterExternal{
+		kube:   c.kube,
+		objMgr: mc.Manager,
+		conn:   mc.Connector,
+		// prober is left nil (defaults to identity.DefaultProber in
+		// ensureIdentityPrerequisite) so every controller in the process
+		// shares one TTL-bounded verdict cache per Grid endpoint.
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.NetworkView].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
-	conn   *ibclient.Connector
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — it needs visibility into search match counts
+	// that objMgr's typed methods hide. See resolveNetworkViewIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
-// Observe fetches the NetworkView from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the NetworkView through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec. See
+// observeNetworkView for the ladder itself.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetObject with the
-	// CR's Kubernetes name (not a real WAPI _ref) would error against the
-	// API on every reconcile until Create() overwrites the annotation
-	// with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	nv, err := getNetworkViewByRef(e.conn, externalID)
+	res, err := observeNetworkView(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := networkViewExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNetworkView)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveNetworkView)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromNetworkView(externalID, nv)
 	cr.Status.AtProvider = clusterv1alpha1.NetworkViewObservation{
-		Name:      o.Name,
-		Comment:   o.Comment,
-		ExtAttrs:  o.ExtAttrs,
-		Ref:       o.Ref,
-		IsDefault: o.IsDefault,
+		Name:      res.obs.Name,
+		Comment:   res.obs.Comment,
+		ExtAttrs:  res.obs.ExtAttrs,
+		Ref:       res.obs.Ref,
+		IsDefault: res.obs.IsDefault,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
 	// above) keeps the server-assigned identifier's provenance obvious at
 	// the call site — it always mirrors the external name used to fetch
 	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Comment, &p.ExtAttrs, nv)
+	// A rotated or previously-unknown reference must be persisted
+	// through a path crossplane-runtime actually writes back to the API
+	// server. res.lateInit is already forced true alongside
+	// res.refreshedRef by observeNetworkView for exactly this reason.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts
+	// the identity stamp (see updateNetworkView).
+	upToDate := isUpToDate(p.Name, p.Comment, p.ExtAttrs, res.nv) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.Comment, p.ExtAttrs, nv),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new NetworkView and records the server-assigned
-// _ref as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalCreation, error) {
+// Create provisions a new NetworkView, stamping the managed resource's
+// own uid into the object's identity extensible attribute in the same
+// request (see createNetworkView), and records the server-assigned _ref
+// as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	nv, err := createNetworkView(e.objMgr, p.Name, p.Comment, p.ExtAttrs)
+	nv, err := createNetworkView(e.objMgr, p.Name, p.Comment, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateNetworkView)
 	}
@@ -162,13 +185,15 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.NetworkV
 	return managed.ExternalCreation{}, nil
 }
 
-// Update patches the mutable NetworkView fields. is_default (immutable) is
-// never sent — see updateNetworkView.
+// Update patches the mutable NetworkView fields. is_default (immutable)
+// is never sent — see updateNetworkView. Every call re-asserts the
+// identity stamp since a WAPI PUT carrying extattrs replaces the whole
+// map rather than merging it — live-verified against a real Grid.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	nv, err := updateNetworkView(e.objMgr, externalID, p.Name, p.Comment, p.ExtAttrs)
+	nv, err := updateNetworkView(e.objMgr, externalID, p.Name, p.Comment, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateNetworkView)
 	}
@@ -186,18 +211,16 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Networ
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the NetworkView. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteNetworkViewResolving404 — because the _ref is a derived handle
-// that rotates whenever an identity field changes, and a stale handle
-// 404s exactly like a genuinely deleted object. Deleting the Grid's
-// default NetworkView is rejected by the server as a terminal error —
-// this controller does not special-case it; the error simply surfaces
-// via the wrapped errDeleteNetworkView.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalDelete, error) {
+// Delete removes the NetworkView, resolving through the shared identity
+// ladder first — see deleteNetworkViewIdentity for the full
+// ownership-verification rules a stale or rotated _ref must satisfy
+// before a delete is issued. Deleting the Grid's default NetworkView is
+// rejected by the server as a terminal error — this controller does not
+// special-case it; the error simply surfaces via the wrapped
+// errDeleteNetworkView.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.NetworkView) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteNetworkViewResolving404(e.objMgr, externalID, p.Name); err != nil {
+	if err := deleteNetworkViewIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
