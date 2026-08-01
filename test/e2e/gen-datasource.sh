@@ -35,19 +35,37 @@
 #               objects, EA definitions, and similar resources whose WAPI
 #               identity is a name, not an address.
 #
-#   netPrefix — a /28 block (16 addresses) carved out of 192.0.2.0/24
-#               (TEST-NET-1, RFC 5737 — the same documentation range this
-#               provider's examples already use for illustrative IPv4Addr
-#               values). The /24 is partitioned into 16 non-overlapping /28
-#               blocks and one is picked deterministically from the seed's
+#   netPrefix — a /24 block carved out of 100.64.0.0/16 (RFC 6598 Shared
+#               Address Space, reserved for exactly this kind of
+#               large-scale, non-routed test partitioning — never expected
+#               to appear in a customer's real network config). The /16 is
+#               partitioned into 256 non-overlapping /24 blocks and one is
+#               picked deterministically from a full byte of the seed's
 #               hash, so concurrent runs land in different blocks. This is
 #               the address-space half of the mechanism for ADDRESSED
 #               objects (Network, NetworkContainer, Range, FixedAddress,
 #               IPv4SharedNetwork), which have no name field at all and
-#               cannot be disambiguated by runToken. The concurrency
-#               ceiling this implies — at most 16 non-colliding runs against
-#               this block before a prefix repeats — is a real, documented
-#               bound (ADR-IN-0007), not one this script tries to eliminate.
+#               cannot be disambiguated by runToken.
+#
+#               This range is deliberately NOT 192.0.2.0/24 (TEST-NET-1):
+#               that block is where several NAMED examples already put
+#               illustrative field values (record-a's ipv4Addr, dtc-server's
+#               host, record-ns's address), so a generated /28 inside it can
+#               literally equal one of those hardcoded literals. It is also
+#               not 198.51.100/101.0/24, 203.0.113.0/24, 10.0.0.0/24 or
+#               172.25/26.0.0/16 — every one of those is already the fixed
+#               CIDR of an existing addressed-object example (network,
+#               ipv4-shared-network, range, fixed-address, host-record,
+#               network-container), so a generated block there would need to
+#               dodge each literal individually and would still be too
+#               narrow: range.yaml's 21-address span alone does not fit a
+#               /28 (16 addresses, 14 usable). A /24 (254 usable) comfortably
+#               holds every existing addressed-object example's span with
+#               room to grow. The concurrency ceiling this implies — at most
+#               256 non-colliding runs against this block before a prefix
+#               repeats — is a real, documented bound (ADR-IN-0007), not one
+#               this script tries to eliminate.
+#
 #               NOTE: this value is generated and plumbed through the
 #               datasource file on every run, but a given resource's example
 #               manifest only consumes it once that resource's identity is
@@ -60,18 +78,16 @@
 # identity out from under an in-flight test), and two different seeds are
 # astronomically unlikely to collide on runToken (2^40 space).
 #
-# Wiring (this repository does not set UPTEST_DATASOURCE_PATH in the
-# Makefile — see the ticket history on IN-E2E-ISO-MECH for why):
+# Wiring: `make e2e.<resource>` generates this file itself, from
+# KIND_CLUSTER_NAME, before invoking uptest — this script is not meant to be
+# hand-invoked as part of the normal E2E flow. See UPTEST_DATASOURCE_PATH
+# and the e2e-datasource target in the Makefile.
 #
-#   CL="e2e-$(basename "$WORKTREE")"
-#   DS_FILE="$WORKTREE/e2e-datasource-${CL}.yaml"
-#   test/e2e/gen-datasource.sh "$CL" "$DS_FILE"
-#   make e2e.record-a KIND_CLUSTER_NAME="$CL" UPTEST_DATASOURCE_PATH="$DS_FILE"
-#
-# Mutation check / disabling the mechanism: simply omit the UPTEST_DATASOURCE_PATH
-# assignment (or pass an empty string). `${data.runToken}` placeholders in the
-# example manifests then stay literal — identical across every run — which
-# reproduces the pre-isolation collision this script exists to prevent.
+# Mutation check / disabling the mechanism: pass UPTEST_DATASOURCE_PATH=
+# (empty) to `make`, or otherwise ensure this script does not run. The
+# `${data.runToken}` placeholders in the example manifests then stay
+# literal — identical across every run — which reproduces the
+# pre-isolation collision this script exists to prevent.
 set -euo pipefail
 
 SEED="${1:?usage: gen-datasource.sh <seed> <output-file>}"
@@ -85,8 +101,8 @@ if ! [[ "${RUN_TOKEN}" =~ ^[0-9a-f]{10}$ ]]; then
   exit 1
 fi
 
-BLOCK_INDEX=$(( 16#${HASH:10:2} % 16 ))
-NET_PREFIX="192.0.2.$(( BLOCK_INDEX * 16 ))/28"
+BLOCK_INDEX=$(( 16#${HASH:10:2} ))
+NET_PREFIX="100.64.${BLOCK_INDEX}.0/24"
 
 mkdir -p "$(dirname "${OUT}")"
 cat > "${OUT}" <<DATASOURCE
