@@ -10,6 +10,14 @@
 #   test/hooks/post-assert-<resource>-namespaced.sh → examples/<resource>/<resource>-namespaced.yaml
 #   test/hooks/post-assert-<resource>-ns.sh         → examples/<resource>/<resource>-namespaced.yaml
 #
+# A resource directory may also hold more than one example pair for the
+# same kind — e.g. an alternate address-family variant such as
+# examples/network/network-v6.yaml sitting alongside network.yaml. When the
+# primary derivation's directory (named after the full slug) doesn't exist,
+# a fallback strips the slug's last hyphenated segment and looks for the
+# full slug's manifest inside THAT (shorter) resource directory instead —
+# so post-assert-network-v6.sh resolves to examples/network/network-v6.yaml.
+#
 # Usage (via symlink):
 #   test/hooks/post-assert-<resource>.sh
 #   test/hooks/post-assert-<resource>-namespaced.sh
@@ -80,6 +88,18 @@ if [ -z "${MANIFEST:-}" ]; then
   else
     RESOURCE="$SLUG"
     MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE.yaml"
+  fi
+
+  # Sibling-variant fallback (see the header comment above). Only engages
+  # when the primary derivation's manifest is missing, so it never changes
+  # behavior for any symlink whose slug already resolves directly.
+  if [ ! -f "$MANIFEST" ] && [[ "$RESOURCE" == *-* ]]; then
+    LEAF="$(basename "$MANIFEST")"
+    PARENT="${RESOURCE%-*}"
+    ALT="$PROVIDER_ROOT/examples/$PARENT/$LEAF"
+    if [ -f "$ALT" ]; then
+      MANIFEST="$ALT"
+    fi
   fi
 fi
 
