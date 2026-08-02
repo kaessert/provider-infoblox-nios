@@ -15,8 +15,17 @@
 // does not include extattrs, and its SDK constructor
 // (ibclient.NewEmptyRecordNS) requests no extattrs in its default return
 // fields (verified against the vendored SDK; every EA-capable record
-// type's constructor does). There is nowhere to stamp identity onto, so
-// there is nothing for identity.Resolve to search on.
+// type's constructor does). This was also confirmed live: a GET
+// record:ns?_schema request against a real Grid (WAPI 2.12) returns
+// eleven fields — addresses, cloud_info, creator, dns_name, last_queried,
+// ms_delegation_name, name, nameserver, policy, view, zone — and extattrs
+// is not among them. At the Go level this shows up as *ibclient.RecordNS
+// having no Ea field at all, unlike every other EA-capable record type in
+// this provider; identity.Resolve hard-errors on that condition by design
+// (it refuses to silently skip the identity check for a type that looks
+// like it should have one) rather than treating the absence as "nothing
+// to verify". There is nowhere to stamp identity onto, so there is
+// nothing for identity.Resolve to search on.
 //
 // This package still reuses identity.ManagerAndConnector purely as
 // connector-bundling infrastructure (newObjectManager below) — that is
@@ -26,9 +35,15 @@
 // search (name+view+nameServer, an exact server-side filter — see
 // nsRecordExistsByNaturalKey) before concluding the object is gone, and
 // Delete refuses when that search still finds a live object under the
-// CR's own identity fields (see the staleref package doc). If NIOS ever
-// adds extattrs support to record:ns, this resource should be migrated
-// onto the shared ladder like the other eight.
+// CR's own identity fields (see the staleref package doc). A natural-key
+// match is only ever provisional evidence — it tells you an object with
+// that name/view/nameserver exists right now, not that it is the same
+// logical object this CR has been managing; another controller or user
+// could have created an unrelated object under the same key since this CR
+// last observed it. That distinction is why a natural-key hit blocks the
+// delete instead of licensing it. If NIOS ever adds extattrs support to
+// record:ns, this resource should be migrated onto the shared ladder like
+// the other eight.
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
