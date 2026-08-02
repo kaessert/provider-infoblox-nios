@@ -6,6 +6,30 @@
 // DeleteNSRecord) instead of a generic HTTP request/response envelope, so
 // there is no internal REST client to compose.
 //
+// NSRecord is deliberately NOT wired to the UID-in-EA object-identity
+// ladder the other eight DNS record types use (see recorda's package doc
+// for that ladder's rationale). The ladder stamps the managed resource's
+// metadata.uid onto the Grid object as an extensible attribute and later
+// resolves it by searching on that attribute — record:ns has no
+// extensible-attribute support at all: the WAPI object type's field list
+// does not include extattrs, and its SDK constructor
+// (ibclient.NewEmptyRecordNS) requests no extattrs in its default return
+// fields (verified against the vendored SDK; every EA-capable record
+// type's constructor does). There is nowhere to stamp identity onto, so
+// there is nothing for identity.Resolve to search on.
+//
+// This package still reuses identity.ManagerAndConnector purely as
+// connector-bundling infrastructure (newObjectManager below) — that is
+// unrelated to the identity ladder itself. Delete/Observe here instead
+// keep the natural-key resolution this provider used before the ladder
+// existed: a 404 on the stored _ref triggers a tightened natural-key
+// search (name+view+nameServer, an exact server-side filter — see
+// nsRecordExistsByNaturalKey) before concluding the object is gone, and
+// Delete refuses when that search still finds a live object under the
+// CR's own identity fields (see the staleref package doc). If NIOS ever
+// adds extattrs support to record:ns, this resource should be migrated
+// onto the shared ladder like the other eight.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordns
