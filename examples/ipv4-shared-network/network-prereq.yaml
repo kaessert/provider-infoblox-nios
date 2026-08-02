@@ -1,0 +1,40 @@
+# network-prereq.yaml — prerequisite member Network for
+# ipv4-shared-network.yaml.
+#
+# IPv4SharedNetwork's `networks` field must match the CIDR of an existing
+# Network object — WAPI validates shared-network membership against real
+# network objects, not arbitrary strings (see ipv4-shared-network.yaml's
+# field docs). A Network can belong to only ONE shared network, so this
+# member must be a per-run object dedicated to this shared network, not a
+# shared/reused one. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_IPV4_SHARED_NETWORK) applies this manifest before
+# ipv4-shared-network.yaml so the member Network exists first.
+#
+# ${data.netSharedMemberCluster}: a per-run /28 reserved specifically for
+# this prerequisite (see test/e2e/gen-datasource.sh's sub-allocation map),
+# disjoint from every other addressed example's sub-block — including
+# examples/network/network.yaml's own ${data.netNetworkCluster} — so this
+# object never collides with the standalone Network example or with
+# another run's shared-network membership, even when both apply in the
+# same E2E run (`make e2e` / CORE tier).
+#
+# This manifest is intentionally not update-tested (no
+# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
+# annotation): ipv4-shared-network.yaml's `networks` reference depends on
+# this object's CIDR staying stable for the whole run, and it is not
+# itself a resource under test — see examples/network/network.yaml for the
+# general-purpose, independently update-tested Network example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-ipv4-shared-network-member
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: default
+    network: ${data.netSharedMemberCluster}
+    comment: "Prerequisite member network for ipv4-shared-network.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default

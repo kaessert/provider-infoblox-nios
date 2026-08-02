@@ -1,0 +1,38 @@
+# network-prereq.yaml — prerequisite parent Network for fixed-address.yaml.
+#
+# FixedAddress's AllocateIP call (see fixed-address.yaml's field docs)
+# unconditionally requires an existing parent Network object covering the
+# address, unlike HostRecord which can bypass the requirement via
+# configureForDns. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_FIXED_ADDRESS) applies this manifest before
+# fixed-address.yaml so the parent Network exists first.
+#
+# ${data.netFixedAddrParentCluster}: a per-run /28 reserved specifically
+# for this prerequisite (see test/e2e/gen-datasource.sh's sub-allocation
+# map), disjoint from every other addressed example's sub-block —
+# including examples/network/network.yaml's own
+# ${data.netNetworkCluster} — so this object never collides with the
+# standalone Network example even when both apply in the same E2E run
+# (`make e2e` / CORE tier). fixed-address.yaml's own
+# ${data.netFixedAddrHostCluster} address is a host inside this /28.
+#
+# This manifest is intentionally not update-tested (no
+# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
+# annotation): fixed-address.yaml's allocation depends on this object's
+# CIDR staying stable for the whole run, and it is not itself a resource
+# under test — see examples/network/network.yaml for the general-purpose,
+# independently update-tested Network example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-fixed-address-network
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: default
+    network: ${data.netFixedAddrParentCluster}
+    comment: "Prerequisite parent network for fixed-address.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default

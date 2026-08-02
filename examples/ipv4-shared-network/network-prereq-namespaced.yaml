@@ -1,0 +1,31 @@
+# network-prereq-namespaced.yaml — namespace-scoped variant of the
+# prerequisite member Network for ipv4-shared-network-namespaced.yaml. See
+# network-prereq.yaml for the full rationale — this file only documents
+# what differs.
+#
+# Distinct identity: ${data.netSharedMemberNamespaced} is a disjoint
+# sub-block from network-prereq.yaml's ${data.netSharedMemberCluster} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) so both scopes'
+# member networks can apply in the same E2E run without colliding on
+# shared-network membership.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+apiVersion: network.infobloxnios.m.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-ipv4-shared-network-member-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: default
+    network: ${data.netSharedMemberNamespaced}
+    comment: "Prerequisite member network for ipv4-shared-network-namespaced.yaml (E2E isolation)"
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
