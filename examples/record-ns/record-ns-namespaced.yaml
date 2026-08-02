@@ -30,7 +30,7 @@ metadata:
       - field: nameserver
         value: "ns2-ns.example.com"
       - field: msDelegationName
-        value: "ms-delegation-ns.example.com"
+        skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses
         skip: "list field of glue address records; not a safe scalar update-test target"
 spec:

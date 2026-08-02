@@ -710,6 +710,74 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	}
 }
 
+// TestClusterObserveIsUpToDateWhenMsDelegationNameNotPersisted covers the
+// silent no-op field: NIOS accepts a PUT/POST that sets ms_delegation_name
+// on a Grid-managed (non-Microsoft/AD-integrated) zone with HTTP 200 but
+// never actually stores it, so the observed record never carries a value
+// no matter what the spec asks for. Before the fix, isUpToDate compared
+// the spec value against this permanently-empty observed value and
+// returned false forever — a silent, unbounded Update loop that still
+// reported ReconcileSuccess. Reverting the isUpToDate fix makes this test
+// fail (mutation check).
+func TestClusterObserveIsUpToDateWhenMsDelegationNameNotPersisted(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		Nameserver: stringPtr("ns1.example.com"),
+		View:       "default",
+		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
+		// MsDelegationName intentionally left nil — the API never
+		// persisted it, simulating a Grid-managed zone.
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", ref)
+	cr.Spec.ForProvider.MsDelegationName = stringPtr("ms-delegation.example.com")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true when the API never echoes msDelegationName back, got false (permanent update loop)")
+	}
+}
+
+// TestClusterObserveIsUpToDateDetectsMsDelegationNameDriftWhenPersisted is
+// the "do not over-correct" counterpart: when the API DOES persist
+// ms_delegation_name (Microsoft/AD-integrated zones return a non-empty
+// value), a real spec/observed mismatch must still be reported as drift.
+func TestClusterObserveIsUpToDateDetectsMsDelegationNameDriftWhenPersisted(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordNS{
+		Name:             "delegated.example.com",
+		Nameserver:       stringPtr("ns1.example.com"),
+		View:             "default",
+		Addresses:        []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
+		MsDelegationName: stringPtr("dc1.example.com"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", ref)
+	cr.Spec.ForProvider.MsDelegationName = stringPtr("dc2.example.com")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for a real msDelegationName drift on a zone where the API persists it, got true")
+	}
+}
+
 // ── cluster: Update ─────────────────────────────────────────────────────
 
 func TestClusterUpdateSuccess(t *testing.T) {
@@ -1377,6 +1445,40 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("Observe: expected error for 403, got nil")
+	}
+}
+
+// TestNamespacedObserveIsUpToDateWhenMsDelegationNameNotPersisted is the
+// namespaced-scope counterpart of
+// TestClusterObserveIsUpToDateWhenMsDelegationNameNotPersisted — both
+// scopes share the same isUpToDate helper, so both must be proven not to
+// loop on a msDelegationName the API silently drops. Reverting the
+// isUpToDate fix makes this test fail (mutation check).
+func TestNamespacedObserveIsUpToDateWhenMsDelegationNameNotPersisted(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordNS{
+		Name:       "delegated.example.com",
+		Nameserver: stringPtr("ns1.example.com"),
+		View:       "default",
+		Addresses:  []*ibclient.ZoneNameServer{{Address: "10.0.0.5", AutoCreatePtr: true}},
+		// MsDelegationName intentionally left nil — the API never
+		// persisted it, simulating a Grid-managed zone.
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", ref, "ProviderConfig")
+	cr.Spec.ForProvider.MsDelegationName = stringPtr("ms-delegation.example.com")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=true when the API never echoes msDelegationName back, got false (permanent update loop)")
 	}
 }
 
