@@ -74,6 +74,19 @@
 #     deliberately target a different CIDR (TEST-NET-2, 198.51.100.0/24)
 #     so their own Create/Delete lifecycle never collides with this
 #     pre-provisioned 10.0.0.0/24/default network.
+#   - IPv6 network 2001:db8:e2e6:5::/64 in the "default" network view — the
+#     IPv6 FixedAddress example manifests (fixed-address-v6.yaml and
+#     fixed-address-v6-namespaced.yaml) allocate literal ipv6addr values
+#     (2001:db8:e2e6:5::50, ::51) via the same AllocateIP path, which
+#     requires a real "ipv6network" object covering the address to already
+#     exist — mirroring the 10.0.0.0/24 prerequisite above for the IPv4
+#     sibling. Created directly via a WAPI POST against the ipv6network
+#     object type (bypassing the Network managed resource so this
+#     prerequisite is not coupled to any single resource's CRUD lifecycle),
+#     guarded by a GET so re-running setup.sh is a no-op once the network
+#     exists. Distinct from every other IPv6 example's sub-block
+#     (network-v6: ::1/::2, network-container-v6: ::3/::4) so it never
+#     collides with a pre-existing (network_view, network) WAPI identity.
 #
 # Usage: test/setup.sh
 #   Requires a running kind cluster with Crossplane installed and
@@ -271,6 +284,30 @@ if [ "${NETWORK_LOOKUP}" = "[]" ]; then
   echo "    Created network 10.0.0.0/24/default."
 else
   echo "    Network 10.0.0.0/24 already exists in view default — skipping."
+fi
+
+echo "==> Ensuring the 2001:db8:e2e6:5::/64 ipv6network exists in the default network view..."
+
+IPV6_NETWORK_LOOKUP=$(curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+  -G --data-urlencode "network=2001:db8:e2e6:5::/64" --data-urlencode "network_view=default" \
+  "${WAPI_BASE}/ipv6network")
+
+if [ "${IPV6_NETWORK_LOOKUP}" = "[]" ]; then
+  echo "    ipv6network 2001:db8:e2e6:5::/64 not found in view default — creating it..."
+  IPV6_NETWORK_CREATE_RESPONSE=$(curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" \
+    -w '\n%{http_code}' \
+    -X POST "${WAPI_BASE}/ipv6network" \
+    -H "Content-Type: application/json" \
+    -d '{"network": "2001:db8:e2e6:5::/64", "network_view": "default"}')
+  IPV6_NETWORK_CREATE_STATUS="${IPV6_NETWORK_CREATE_RESPONSE##*$'\n'}"
+  if [ "${IPV6_NETWORK_CREATE_STATUS}" != "201" ]; then
+    echo "ERROR: failed to create ipv6network 2001:db8:e2e6:5::/64/default (HTTP ${IPV6_NETWORK_CREATE_STATUS}):" >&2
+    echo "${IPV6_NETWORK_CREATE_RESPONSE%$'\n'*}" >&2
+    exit 1
+  fi
+  echo "    Created ipv6network 2001:db8:e2e6:5::/64/default."
+else
+  echo "    ipv6network 2001:db8:e2e6:5::/64 already exists in view default — skipping."
 fi
 
 echo "==> E2E setup complete."
