@@ -127,6 +127,23 @@
 #   half is ever tokenised) and a prefix match on the address half, so it
 #   works whichever half of the mechanism a given resource ends up using.
 #
+# network / IPv6: this script's --net-prefix mode only recognizes IPv4
+#   prefixes inside 100.64.0.0/16 — the block a run's IPv4 network/
+#   network-container/range/fixed-address addresses draw from. It has no
+#   IPv6 equivalent. As of this writing, examples/network/'s IPv6 variants
+#   (network-v6.yaml, network-v6-namespaced.yaml) use fixed literal CIDRs
+#   from the RFC 3849 documentation range (2001:db8::/32), not a per-run
+#   token or prefix — a different, unrelated wave gave them that shape, and
+#   the E2E isolation IPAM wave that tokenises IPv4 network/
+#   network-container addressing has not merged to main at the time this
+#   note was written. Whether IPv6 needs the same per-run scoping this
+#   script gives IPv4 addresses is therefore still open — revisit once that
+#   wave lands: either give this script a v6 prefix mode, or confirm the
+#   RFC 3849 literal is deliberately exempt (a documentation-only block no
+#   real Grid config would ever collide with) and update this note to say
+#   so plainly. Until then, IPv6 network objects are reaped by neither mode
+#   here.
+#
 # ============================================================================
 # THE ONE-SHOT PRE-TOKENISATION SWEEP
 # ============================================================================
@@ -191,6 +208,14 @@
 # target and record-ptr's live `ptrdname` target — neither is record-a's
 # own identity). A whole-tree grep would treat those as false positives and
 # refuse to ever reap record-a's pre-tokenisation orphans.
+#
+# The grep is further scoped to each file's spec.forProvider block, not the
+# whole file, because a WAPI identity can only ever live there. Two families
+# (range-template, extensible-attribute-def) happen to reuse the
+# pre-tokenisation literal as their Crossplane CR's metadata.name — a
+# Kubernetes object name with no relationship to the Grid identity. Without
+# this restriction that coincidence reads as "still live" forever and those
+# families' genuine pre-rollout orphans could never be reaped by this sweep.
 #
 # ============================================================================
 # USAGE
@@ -608,7 +633,25 @@ is_literal_live() {
   pattern="(^|[[:space:]\"'])${escaped}([[:space:]\"']*)\$"
   for f in "${examples_dir}"/*.yaml; do
     [ -f "${f}" ] || continue
-    if grep -v '^[[:space:]]*#' "${f}" | grep -Eq -- "${pattern}"; then
+    # Restrict the search to the spec.forProvider block — the only place a
+    # WAPI identity field can legitimately live. Every example in this repo
+    # follows the same shape: a top-level "spec:" key, a "  forProvider:"
+    # child at 2-space indent, and the provider fields nested under it at
+    # 4+ spaces, terminated by the next 2-space sibling key (providerConfigRef,
+    # writeConnectionSecretToRef, ...). Searching the whole file instead
+    # would also catch metadata.name, which is a Kubernetes object name —
+    # unrelated to the Grid identity — and two families (range-template,
+    # extensible-attribute-def) reuse the pre-tokenisation literal there on
+    # purpose (metadata.name: example-range-template / example-ea-def),
+    # producing a false "still live" match that can never be reaped.
+    local for_provider_block
+    for_provider_block="$(awk '
+      /^  forProvider:/ { in_block=1; next }
+      in_block && /^  [^ ]/ { in_block=0 }
+      in_block { print }
+    ' "${f}")"
+    [ -z "${for_provider_block}" ] && continue
+    if printf '%s\n' "${for_provider_block}" | grep -v '^[[:space:]]*#' | grep -Eq -- "${pattern}"; then
       return 0
     fi
   done
