@@ -17,19 +17,34 @@
 #   startAddr: first address in the DHCP range.
 #   endAddr:   last address in the DHCP range.
 #
+# ${data.netRangeStartCluster} / ${data.netRangeEndCluster}: injected by
+# uptest from the --data-source file (see test/e2e/gen-datasource.sh) so
+# concurrent E2E runs against the shared NIOS Grid never request the same
+# (startAddr, endAddr, networkView) WAPI identity. These resolve to
+# 100.64.<BLOCK_INDEX>.161 through .181 — the cluster-scope's fixed
+# 21-address sub-block, nested inside network-prereq.yaml's
+# ${data.netRangeParentCluster} /27 (see the sub-allocation map in
+# gen-datasource.sh's header comment; range-namespaced.yaml uses the
+# disjoint .192/27 parent and .193-.213 span). Left literal
+# ("${data.netRangeStartCluster}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
 # Optional fields:
 #   networkView: name of the NetworkView the range belongs to. This
 #                example uses the Grid's well-known "default" network view
 #                so it runs standalone without creating a NetworkView
 #                resource first.
-#   network:     CIDR of the parent network. Deliberately omitted here —
-#                CreateNetworkRange requires the addresses to fall within
-#                an already-provisioned Network object when this field (or
-#                an inferred match) is set, and this E2E environment does
-#                not pre-provision one (same class of prerequisite issue as
-#                HostRecord's configureForDns — see host-record.yaml).
-#                Set this to a real CIDR once a matching Network object
-#                exists on the target Grid Manager.
+#   network:     CIDR of the parent network. Deliberately left unset in
+#                this example's spec — like FixedAddress's AllocateIP,
+#                CreateNetworkRange unconditionally requires an already-
+#                provisioned Network object covering the address span
+#                (live-verified on the Grid: WAPI 400 IBDataConflictError
+#                "Cannot find the parent network for the DHCP range ..."
+#                without one); it does not need to be named explicitly in
+#                spec.forProvider.network, WAPI resolves the covering
+#                Network by address. network-prereq.yaml provisions that
+#                per-run parent Network ahead of this example (Makefile
+#                prerequisite-bundling, UPTEST_MANIFESTS_RANGE).
 #   template:    name of a RangeTemplate to pre-populate settings from.
 #                Create-only — UpdateNetworkRange does not accept it, so it
 #                has no atProvider mirror and is excluded from drift
@@ -64,7 +79,7 @@ metadata:
       - field: networkView
         skip: "changing the owning network view alters the range's live identity — not exercised via per-field diff testing"
       - field: network
-        skip: "optional field intentionally omitted from this example (no pre-provisioned Network object in the E2E environment)"
+        skip: "resolved by WAPI from the address span against network-prereq.yaml's per-run parent Network; not set explicitly in this example's spec"
       - field: template
         skip: "create-only parameter — UpdateNetworkRange does not accept it"
       - field: extAttrs
@@ -75,8 +90,8 @@ metadata:
         skip: "reference field resolving to networkView; not exercised via per-field diff testing"
 spec:
   forProvider:
-    startAddr: 203.0.113.100
-    endAddr: 203.0.113.120
+    startAddr: ${data.netRangeStartCluster}
+    endAddr: ${data.netRangeEndCluster}
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:

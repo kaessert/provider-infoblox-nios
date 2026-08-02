@@ -9,6 +9,15 @@
 # annotation. Do not set that annotation manually — the controller
 # populates it.
 #
+# ${data.netContainerCluster}: injected by uptest from the --data-source
+# file (see test/e2e/gen-datasource.sh) so concurrent E2E runs against the
+# shared NIOS Grid never request the same (networkView, cidr) WAPI
+# identity. NetworkContainer has no name field at all — its identity IS
+# the CIDR — so this uses a per-run address-space sub-block rather than a
+# name token. Left literal ("${data.netContainerCluster}") if no
+# datasource is supplied, which is exactly the pre-isolation behavior this
+# guards against.
+#
 # Required fields:
 #   networkView: the NetworkView the container belongs to, by name. Fixed at
 #                creation — absent from the UpdateNetworkContainer SDK
@@ -20,9 +29,10 @@
 #                Crossplane-managed NetworkView instead, set
 #                networkViewRef.name to the NetworkView's metadata.name —
 #                see examples/network-view/network-view.yaml.
-#   network:     CIDR of the container, e.g. "172.25.0.0/16". Fixed at
-#                creation. This example uses a TEST-NET style address —
-#                replace with a real CIDR for a live NIOS Grid Manager.
+#   network:     CIDR of the container. Fixed at creation. This example
+#                uses a per-run /28 carved out of the RFC 6598 Shared
+#                Address Space block reserved for E2E isolation — replace
+#                with a real CIDR for a live NIOS Grid Manager.
 #
 # Optional mutable fields: comment, extAttrs.
 apiVersion: networkcontainer.infobloxnios.crossplane.io/v1alpha1
@@ -56,7 +66,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 172.25.0.0/16
+    network: ${data.netContainerCluster}
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

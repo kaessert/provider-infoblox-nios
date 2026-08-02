@@ -22,6 +22,26 @@
 #
 # Optional mutable fields: aliases, comment, disable, ttl, useTtl,
 # configureForDns, extAttrs.
+#
+# Identity is BOTH name and address — correcting an earlier classification
+# of this resource as purely named. The controller's
+# hostRecordExistsByNaturalKey searches on (networkView, view, name,
+# ipv4Addr, ipv6Addr) together, so two concurrent E2E runs must not share
+# either the name OR the address, or they can converge on the same live
+# record even with the other half of the tuple distinct.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent runs never request the same
+# name. Left literal ("${data.runToken}") if no datasource is supplied,
+# which is exactly the pre-isolation behavior this guards against.
+#
+# ${data.netHostRecordCluster}: this scope's fixed single-address offset
+# inside the run's netPrefix block (100.64.<BLOCK_INDEX>.128 — see the
+# sub-allocation map in gen-datasource.sh's header comment;
+# host-record-namespaced.yaml uses the disjoint .129 offset). HostRecord
+# does not need a prerequisite parent Network object the way FixedAddress
+# and Range do (see configureForDns below), so no network-prereq.yaml
+# exists for this resource.
 apiVersion: hostrecord.infobloxnios.crossplane.io/v1alpha1
 kind: HostRecord
 metadata:
@@ -88,9 +108,9 @@ metadata:
         skip: "only required/applicable when filterParams is set; not used by this example's static-address allocation"
 spec:
   forProvider:
-    name: test-host.example.com
+    name: test-host-${data.runToken}.example.com
     ipv4Addrs:
-      - ipv4Addr: 10.0.0.100
+      - ipv4Addr: ${data.netHostRecordCluster}
     view: default
     # configureForDns must be true: the WAPI Grid Manager rejects Create
     # when DNS is not configured (enable_dns=false) unless the host
@@ -100,7 +120,11 @@ spec:
     # a DNS host under it — omitting this field defaults to false (see
     # controller.go's boolOrFalse helper) and fails Create with
     # IB.Data.Conflict: "At least one host address must belong to an
-    # existing network if DNS is not configured for this host."
+    # existing network if DNS is not configured for this host." This
+    # reasoning is unaffected by ${data.netHostRecordCluster} being a
+    # 100.64.0.0/16 address rather than a fixed literal — DNS
+    # registration is keyed on the example.com zone, not on the address's
+    # network membership.
     configureForDns: true
     comment: Managed by Crossplane
   providerConfigRef:

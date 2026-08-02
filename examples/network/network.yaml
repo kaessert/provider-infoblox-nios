@@ -8,6 +8,14 @@
 # annotation. Do not set that annotation manually — the controller
 # populates it.
 #
+# ${data.netNetworkCluster}: injected by uptest from the --data-source file
+# (see test/e2e/gen-datasource.sh) so concurrent E2E runs against the
+# shared NIOS Grid never request the same (networkView, cidr) WAPI
+# identity. Network has no name field at all — its identity IS the CIDR —
+# so this uses a per-run address-space sub-block rather than a name token.
+# Left literal ("${data.netNetworkCluster}") if no datasource is supplied,
+# which is exactly the pre-isolation behavior this guards against.
+#
 # Required fields:
 #   networkView: the NetworkView the network belongs to, by name. Fixed at
 #                creation — absent from the UpdateNetwork SDK method
@@ -17,8 +25,10 @@
 #   network:     CIDR of the network, e.g. "10.0.0.0/24" (IPv4) or an IPv6
 #                CIDR. Fixed at creation — the WAPI object type (network vs
 #                ipv6network) is selected at runtime from this value's
-#                format. This example uses a TEST-NET-2 address (RFC 5737)
-#                — replace with a real CIDR for a live NIOS Grid Manager.
+#                format. This example uses a per-run /28 carved out of the
+#                RFC 6598 Shared Address Space block reserved for E2E
+#                isolation — replace with a real CIDR for a live NIOS Grid
+#                Manager.
 #
 # Optional mutable fields: comment, extAttrs.
 apiVersion: network.infobloxnios.crossplane.io/v1alpha1
@@ -54,7 +64,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 198.51.100.0/24
+    network: ${data.netNetworkCluster}
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

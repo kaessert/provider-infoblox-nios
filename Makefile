@@ -84,6 +84,13 @@ space := $(empty) $(empty)
 UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
+# record-ptr needs no Makefile prerequisite-bundling: its reverse zone is
+# the pre-existing, shared 10.1.1.0/24 zone_auth (view Internal) that
+# test/setup.sh already provisions convergently, not a per-run object.
+# Isolation is per-run HOST offsets drawn from a second, independently-
+# hashed pool within that shared zone (test/e2e/gen-datasource.sh's
+# ptrHost derivation) — a documented exception, not prerequisite-bundling
+# (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
 UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
@@ -102,15 +109,39 @@ UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/netwo
 UPTEST_MANIFESTS_NETWORK_V6 := examples/network/network-v6.yaml,examples/network/network-v6-namespaced.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
-UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+# IPv4SharedNetwork's `networks` field must reference a real, pre-existing
+# Network object's CIDR, and a Network can belong to only ONE shared
+# network — so its member is a per-run prerequisite, not the general
+# examples/network/network.yaml object (which is independently created and
+# deleted by its own e2e.network run). Prerequisite-bundling: the member
+# Network's manifest is listed BEFORE ipv4-shared-network.yaml's own, so
+# uptest creates it first (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-prereq.yaml,examples/ipv4-shared-network/network-prereq-namespaced.yaml,examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 # NetworkContainer references NetworkView by name (networkViewRef/Selector
 # also available) but both example manifests use the Grid's well-known
 # "default" network view inline, so no NetworkView prerequisite manifest is
 # prepended here — same pattern as UPTEST_MANIFESTS_NETWORK above.
 UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
-UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
-UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespaced.yaml
+# FixedAddress's AllocateIP call unconditionally requires an existing
+# parent Network object covering the address (unlike HostRecord, which
+# bypasses the requirement via configureForDns — see
+# test/e2e/gen-datasource.sh's sub-allocation map comment). Prerequisite-
+# bundling: the parent Network's manifest is listed BEFORE
+# fixed-address.yaml's own, so uptest creates it first (IN-ISO-IPAM-PREREQ;
+# address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
+# Range's CreateNetworkRange call, like FixedAddress's AllocateIP,
+# unconditionally requires an existing parent Network object covering the
+# range's address span, even though the example leaves the Range's own
+# `network` field unset — live-verified on the Grid: WAPI 400
+# IBDataConflictError ("Cannot find the parent network for the DHCP
+# range...") without one. This corrects an earlier assumption that omitting
+# `network` from the spec meant no parent Network was required at all.
+# Prerequisite-bundling: each scope's parent Network manifest is listed
+# BEFORE its own range.yaml/range-namespaced.yaml, so uptest creates it
+# first (IN-ISO-IPAM-PREREQ fix; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml

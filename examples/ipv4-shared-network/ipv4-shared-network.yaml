@@ -13,12 +13,13 @@
 #             network. Each entry must match the `network` (CIDR) field of
 #             an existing Network object on the Grid Manager — WAPI
 #             validates membership against real network objects, not
-#             arbitrary strings. This provider does not yet ship an
-#             IPv4Network managed resource, so the CIDR below must already
-#             exist on the target Grid Manager (created directly via WAPI,
-#             or via a future Network managed resource once available in
-#             this provider). Replace with a real, pre-existing network
-#             CIDR for a live NIOS Grid Manager.
+#             arbitrary strings. This provider's Network managed resource
+#             provisions that prerequisite for this example — see
+#             network-prereq.yaml, applied ahead of this manifest by
+#             Makefile prerequisite-bundling
+#             (UPTEST_MANIFESTS_IPV4_SHARED_NETWORK). For a live NIOS Grid
+#             Manager outside this E2E harness, replace with a real,
+#             pre-existing network CIDR.
 #
 # Optional fields:
 #   networkView: the NetworkView the shared network belongs to. Present in
@@ -31,6 +32,22 @@
 #   comment:     free-text description. Mutable — used as the update-tester
 #                target field below.
 #   extAttrs, disable, useOptions, options: see the CRD schema for details.
+#
+# Identity is (networkView, name) — this resource DOES have a name field,
+# correcting an earlier classification that assumed it had none. The
+# harder isolation problem is that a Network object can belong to only
+# ONE shared network: even with a per-run tokenised name, two concurrent
+# runs whose `networks` list points at the SAME member Network would
+# still contend for exclusive ownership of that member at Create time.
+# network-prereq.yaml resolves this by provisioning a per-run, dedicated
+# member Network (${data.netSharedMemberCluster}) that no other run's
+# shared network also references.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent runs never request the same
+# shared-network name. Left literal ("${data.runToken}") if no datasource
+# is supplied, which is exactly the pre-isolation behavior this guards
+# against.
 apiVersion: ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1
 kind: IPv4SharedNetwork
 metadata:
@@ -69,9 +86,9 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: example-shared-network
+    name: example-shared-network-${data.runToken}
     networks:
-      - 203.0.113.0/25
+      - ${data.netSharedMemberCluster}
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:

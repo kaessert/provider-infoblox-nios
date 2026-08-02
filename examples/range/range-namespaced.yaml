@@ -7,9 +7,15 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the address range below differs from range.yaml's so
-# both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same range identity.
+# Distinct identity: ${data.netRangeStartNamespaced} / ${data.netRangeEndNamespaced}
+# (100.64.<BLOCK_INDEX>.193 through .213, nested inside
+# network-prereq-namespaced.yaml's ${data.netRangeParentNamespaced} /27)
+# are a disjoint 21-address sub-block from range.yaml's
+# ${data.netRangeStartCluster} / ${data.netRangeEndCluster} (.161-.181,
+# inside the .160/27 parent) — see the sub-allocation map in
+# test/e2e/gen-datasource.sh's header comment — so both examples can be
+# applied to the same NIOS Grid Manager (and the same E2E run's netPrefix)
+# at once without colliding on the same range identity.
 apiVersion: range.infobloxnios.m.crossplane.io/v1alpha1
 kind: Range
 metadata:
@@ -31,7 +37,7 @@ metadata:
       - field: networkView
         skip: "changing the owning network view alters the range's live identity — not exercised via per-field diff testing"
       - field: network
-        skip: "optional field intentionally omitted from this example (no pre-provisioned Network object in the E2E environment)"
+        skip: "resolved by WAPI from the address span against network-prereq-namespaced.yaml's per-run parent Network; not set explicitly in this example's spec"
       - field: template
         skip: "create-only parameter — UpdateNetworkRange does not accept it"
       - field: extAttrs
@@ -42,8 +48,8 @@ metadata:
         skip: "reference field resolving to networkView; not exercised via per-field diff testing"
 spec:
   forProvider:
-    startAddr: 203.0.113.160
-    endAddr: 203.0.113.180
+    startAddr: ${data.netRangeStartNamespaced}
+    endAddr: ${data.netRangeEndNamespaced}
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

@@ -8,9 +8,13 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the CIDR below differs from network-container.yaml's
-# so both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same (network_view, network) WAPI identity.
+# Distinct identity: ${data.netContainerNamespaced} is a different,
+# disjoint sub-block of the same per-run address space as
+# network-container.yaml's ${data.netContainerCluster} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) so both examples can be
+# applied to the same NIOS Grid Manager at once — even within the SAME E2E
+# run — without colliding on the same (network_view, network) WAPI
+# identity.
 apiVersion: networkcontainer.infobloxnios.m.crossplane.io/v1alpha1
 kind: NetworkContainer
 metadata:
@@ -37,7 +41,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 172.26.0.0/16
+    network: ${data.netContainerNamespaced}
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig

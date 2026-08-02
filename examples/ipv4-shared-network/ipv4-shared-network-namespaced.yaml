@@ -8,10 +8,12 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the name and CIDR below differ from
-# ipv4-shared-network.yaml's so both examples can be applied to the same
-# NIOS Grid Manager at once without colliding on the same shared-network
-# name or member-network CIDR.
+# Distinct identity: the name and CIDR below both derive from a run-scoped
+# token/offset disjoint from ipv4-shared-network.yaml's, so both examples
+# can be applied to the same NIOS Grid Manager at once without colliding
+# on the same shared-network name or member-network CIDR. See
+# ipv4-shared-network.yaml for the full identity and member-network
+# rationale.
 apiVersion: ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1
 kind: IPv4SharedNetwork
 metadata:
@@ -43,9 +45,9 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: example-shared-network-ns
+    name: example-shared-network-ns-${data.runToken}
     networks:
-      - 203.0.113.128/25
+      - ${data.netSharedMemberNamespaced}
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

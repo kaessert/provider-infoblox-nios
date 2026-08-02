@@ -14,14 +14,24 @@
 # Required fields:
 #   ipv4addr or ipv6addr: exactly one of the two must be set (mutually
 #                          exclusive address families, enforced by a CRD
-#                          validation rule). This example uses ipv4addr with
-#                          a literal address rather than dynamic allocation
-#                          from a network CIDR. AllocateIP unconditionally
+#                          validation rule). AllocateIP unconditionally
 #                          requires a parent Network object covering the
 #                          address (unlike HostRecord, which can bypass
-#                          this via configureForDns) — test/setup.sh
-#                          provisions 10.0.0.0/24 in the default network
-#                          view as a prerequisite before this example runs.
+#                          this via configureForDns) — network-prereq.yaml
+#                          provisions that per-run parent Network ahead of
+#                          this example (Makefile prerequisite-bundling,
+#                          UPTEST_MANIFESTS_FIXED_ADDRESS).
+#
+# ${data.netFixedAddrHostCluster}: injected by uptest from the
+# --data-source file (see test/e2e/gen-datasource.sh) so concurrent E2E
+# runs against the shared NIOS Grid never request the same
+# (networkView, network, ip, MAC) WAPI identity. Resolves to
+# 100.64.<BLOCK_INDEX>.100 — a host address nested inside network-prereq.
+# yaml's ${data.netFixedAddrParentCluster} /28 (see the sub-allocation map
+# in gen-datasource.sh's header comment; fixed-address-namespaced.yaml
+# uses the disjoint .112/28 parent and .120 host). Left literal
+# ("${data.netFixedAddrHostCluster}") if no datasource is supplied, which
+# is exactly the pre-isolation behavior this guards against.
 #
 # Create behavior: synchronous — the WAPI POST (AllocateIP) returns the
 # `_ref` immediately; no async polling is needed.
@@ -51,8 +61,11 @@
 #                MAC_ADDRESS short of also sending an explicit
 #                matchClient=MAC_ADDRESS. This example therefore sets mac
 #                to a real, non-zero placeholder address so Create lands
-#                in MAC_ADDRESS mode and the mac field stays genuinely
-#                update-testable.
+#                in MAC_ADDRESS mode. mac itself is not update-tested
+#                (E2E isolation: it is part of the (networkView, network,
+#                ip, MAC) natural key — see the crossplane.io/update-test
+#                annotation below), but its create-time value still
+#                selects MAC_ADDRESS mode and avoids the zero-MAC trap.
 #   networkView: defaults to "default" when unset.
 #
 # No immutable fields are known for this resource — every Create parameter
@@ -75,13 +88,35 @@ metadata:
     # field-level update testing runs through the post-assert hook wiring
     # and the crossplane.io/update-test annotation below.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address.sh
-    # comment, mac, name, disable, and useOptions are the mutable scalars
-    # exercised here. ipv4addr/ipv6addr are skipped: changing either
-    # changes the record's UNSTABLE `_ref` (ADR-IN-0004) and they are
-    # mutually exclusive. networkView is only safely mutable prior to
-    # first apply (see the field doc above), so it is not exercised
-    # post-create here. network only applies to dynamic CIDR allocation,
-    # which this example does not use (it sets a literal ipv4addr).
+    # comment, name, disable, and useOptions are the mutable scalars
+    # exercised here (still enough to prove the update phase actually
+    # runs on this resource, not just Create/Ready). ipv4addr/ipv6addr are
+    # skipped: changing either changes the record's UNSTABLE `_ref`
+    # (ADR-IN-0004) and they are mutually exclusive. networkView is only
+    # safely mutable prior to first apply (see the field doc above), so it
+    # is not exercised post-create here. network only applies to dynamic
+    # CIDR allocation, which this example does not use (it sets a literal
+    # ipv4addr).
+    #
+    # mac is skipped rather than value-tested: mac is part of this
+    # resource's (networkView, network, ip, MAC) natural key. ipv4addr is
+    # now per-run tokenised (${data.netFixedAddrHostCluster}), but the
+    # update-tester patches the RAW example file's literal value onto the
+    # live resource, and two concurrent runs both patching mac to the same
+    # literal converge that key's last component while networkView and
+    # network stay literal by design (ADR-IN-0007 scope discipline) — an
+    # unnecessary, avoidable narrowing of the isolation margin down to the
+    # ip component alone. comment/disable/useOptions/name (see below)
+    # already exercise the update phase for this resource without
+    # reintroducing that risk.
+    #
+    # name is value-tested (not skipped): it does NOT participate in
+    # FixedAddress's (networkView, network, ip, MAC) natural key — the
+    # generated type doc confirms it is purely a "Display name of the
+    # fixed address", compared only for spec-vs-observed drift
+    # (isUpToDateAddress), never used to resolve or disambiguate the WAPI
+    # object. Two concurrent runs converging on the same literal name
+    # value is therefore safe.
     #
     # matchClient is skipped rather than value-tested: this example sets a
     # real, non-zero mac (see the zero-MAC trap in the field doc above),
@@ -90,14 +125,14 @@ metadata:
     # lateInitializeIdentityMeta). Live-verified on the Grid (WAPI 2.12):
     # every non-MAC_ADDRESS value (RESERVED, CLIENT_ID, CIRCUIT_ID)
     # clears the mac field as a side effect of the mode switch — the
-    # field disappears from a GET that explicitly requests it. Since mac
-    # is independently exercised as its own update-test target above (in
-    # the same cumulative per-field run), any real matchClient transition
-    # would clobber that field's value out from under it. There is no
+    # field disappears from a GET that explicitly requests it. mac itself
+    # is skipped above (natural-key collision risk under concurrent E2E
+    # runs), but the create-time mac value still selects MAC_ADDRESS mode,
+    # and any real matchClient transition away from it would clobber that
+    # value out from under the resource regardless. There is no
     # matchClient value that both differs from MAC_ADDRESS and leaves mac
-    # untouched, so the field is skipped here rather than either breaking
-    # the mac coverage or accepting a known, unavoidable side effect on
-    # every run.
+    # untouched, so the field is skipped here rather than accepting a
+    # known, unavoidable side effect on every run.
     # agentCircuitId/agentRemoteId/dhcpClientIdentifier/
     # clientIdentifierPrependZero are only relevant to the CIRCUIT_ID/
     # REMOTE_ID/CLIENT_ID matchClient modes, which are never entered by
@@ -107,11 +142,11 @@ metadata:
       - field: comment
         value: "Updated by update-tester"
       - field: mac
-        value: "00:00:00:00:00:01"
+        skip: "mac is part of this resource's (networkView, network, ip, MAC) natural key; networkView and network stay literal by design (ADR-IN-0007 scope discipline) and ipv4addr is per-run tokenised, so patching mac to a shared literal across concurrent runs would needlessly narrow the isolation margin down to the ip component alone — comment/disable/useOptions/name already exercise the update phase for this resource"
       - field: name
         value: "updated-fixed-address"
       - field: matchClient
-        skip: "this example sets a real, non-zero mac so Create lands in matchClient=MAC_ADDRESS (the all-zero mac is a Grid trap that silently produces matchClient=RESERVED instead — see the mac field doc above); live-verified on the Grid that every other match_client value clears the mac field as a side effect, which would clobber this example's own mac field coverage tested above in the same cumulative run — no value both differs from MAC_ADDRESS and leaves mac untouched"
+        skip: "this example sets a real, non-zero mac so Create lands in matchClient=MAC_ADDRESS (the all-zero mac is a Grid trap that silently produces matchClient=RESERVED instead — see the mac field doc above); live-verified on the Grid that every other match_client value clears the mac field as a side effect regardless — no value both differs from MAC_ADDRESS and leaves mac untouched"
       - field: disable
         value: true
       - field: useOptions
@@ -138,7 +173,7 @@ metadata:
         skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
-    ipv4addr: 10.0.0.50
+    ipv4addr: ${data.netFixedAddrHostCluster}
     mac: "00:00:00:00:0a:01"
     networkView: default
     comment: Managed by Crossplane

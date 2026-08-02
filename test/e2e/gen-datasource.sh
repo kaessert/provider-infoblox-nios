@@ -23,7 +23,7 @@
 #                UPTEST_DATASOURCE_PATH at this same path before invoking
 #                `make e2e.<resource>` — see "Wiring" below.
 #
-# Two values are generated:
+# ── runToken — NAMED objects ──────────────────────────────────────────────
 #
 #   runToken  — a fixed-length (10 char), lowercase hex token. Safe to embed
 #               in any DNS label: hex is alphanumeric, so splicing it
@@ -35,44 +35,136 @@
 #               objects, EA definitions, and similar resources whose WAPI
 #               identity is a name, not an address.
 #
+# ── netPrefix and its sub-blocks — ADDRESSED objects ────────────────────────
+#
 #   netPrefix — a /24 block carved out of 100.64.0.0/16 (RFC 6598 Shared
 #               Address Space, reserved for exactly this kind of
 #               large-scale, non-routed test partitioning — never expected
 #               to appear in a customer's real network config). The /16 is
 #               partitioned into 256 non-overlapping /24 blocks and one is
 #               picked deterministically from a full byte of the seed's
-#               hash, so concurrent runs land in different blocks. This is
-#               the address-space half of the mechanism for ADDRESSED
-#               objects (Network, NetworkContainer, Range, FixedAddress,
-#               IPv4SharedNetwork), which have no name field at all and
-#               cannot be disambiguated by runToken.
+#               hash (BLOCK_INDEX), so concurrent runs usually land in
+#               different blocks. This is the address-space half of the
+#               mechanism for ADDRESSED objects (Network, NetworkContainer,
+#               Range, FixedAddress, IPv4SharedNetwork, HostRecord,
+#               PTRRecord), which have no name field — or no name field
+#               that is independently sufficient — and cannot be
+#               disambiguated by runToken alone.
 #
 #               This range is deliberately NOT 192.0.2.0/24 (TEST-NET-1):
 #               that block is where several NAMED examples already put
 #               illustrative field values (record-a's ipv4Addr, dtc-server's
-#               host, record-ns's address), so a generated /28 inside it can
-#               literally equal one of those hardcoded literals. It is also
-#               not 198.51.100/101.0/24, 203.0.113.0/24, 10.0.0.0/24 or
+#               host, record-ns's address), so a generated block inside it
+#               can literally equal one of those hardcoded literals. It is
+#               also not 198.51.100/101.0/24, 203.0.113.0/24, 10.0.0.0/24 or
 #               172.25/26.0.0/16 — every one of those is already the fixed
-#               CIDR of an existing addressed-object example (network,
-#               ipv4-shared-network, range, fixed-address, host-record,
-#               network-container), so a generated block there would need to
-#               dodge each literal individually and would still be too
-#               narrow: range.yaml's 21-address span alone does not fit a
-#               /28 (16 addresses, 14 usable). A /24 (254 usable) comfortably
-#               holds every existing addressed-object example's span with
-#               room to grow. The concurrency ceiling this implies — at most
-#               256 non-colliding runs against this block before a prefix
-#               repeats — is a real, documented bound (ADR-IN-0007), not one
+#               CIDR of an existing addressed-object example.
+#
+#               A SINGLE run applies every family in ONE `make e2e` (CORE)
+#               invocation with ONE netPrefix, and WAPI rejects overlapping
+#               Network objects — so netPrefix alone (one CIDR string)
+#               cannot be handed directly to more than one CIDR-shaped
+#               consumer (Network, NetworkContainer, IPv4SharedNetwork's member
+#               networks) or more than one host-shaped consumer
+#               (FixedAddress, HostRecord, Range) without them colliding
+#               with each other WITHIN the same run. This script therefore
+#               also derives fixed, non-overlapping SUB-BLOCK offsets inside
+#               netPrefix — one per (resource, scope) pair — using plain
+#               arithmetic on BLOCK_INDEX (no additional hash draws), so the
+#               offsets never collide with each other by construction and
+#               the only collision risk that remains is netPrefix's own
+#               256-block draw (unchanged from before sub-blocking existed).
+#
+#               Sub-allocation map (all addresses are
+#               100.64.<BLOCK_INDEX>.<offset>; recorded here so every
+#               resource ticket in the IPAM isolation wave consumes the
+#               same layout instead of re-deriving its own):
+#
+#                 .0/28    netNetworkCluster            (Network, cluster)
+#                 .16/28   netNetworkNamespaced          (Network, namespaced)
+#                 .32/28   netContainerCluster           (NetworkContainer, cluster)
+#                 .48/28   netContainerNamespaced        (NetworkContainer, namespaced)
+#                 .64/28   netSharedMemberCluster        (IPv4SharedNetwork member CIDR, cluster)
+#                 .80/28   netSharedMemberNamespaced     (IPv4SharedNetwork member CIDR, namespaced)
+#                 .96/28   netFixedAddrParentCluster     (prerequisite parent Network for FixedAddress, cluster)
+#                 .100     netFixedAddrHostCluster       (FixedAddress ipv4addr, cluster — inside the block above)
+#                 .112/28  netFixedAddrParentNamespaced  (prerequisite parent Network for FixedAddress, namespaced)
+#                 .120     netFixedAddrHostNamespaced    (FixedAddress ipv4addr, namespaced — inside the block above)
+#                 .128     netHostRecordCluster          (HostRecord ipv4Addr, cluster)
+#                 .129     netHostRecordNamespaced       (HostRecord ipv4Addr, namespaced)
+#                 .160/27  netRangeParentCluster         (prerequisite parent Network for Range, cluster)
+#                 .161-181 netRangeStartCluster/netRangeEndCluster          (Range, cluster — 21 addresses, inside the block above)
+#                 .192/27  netRangeParentNamespaced      (prerequisite parent Network for Range, namespaced)
+#                 .193-213 netRangeStartNamespaced/netRangeEndNamespaced    (Range, namespaced — 21 addresses, inside the block above)
+#                 .224-254 reserved / unused — room to grow
+#
+#               HostRecord does not need its own parent Network object (it
+#               bypasses the requirement via configureForDns). FixedAddress
+#               and Range both DO need one: FixedAddress's AllocateIP call
+#               and Range's CreateNetworkRange call each unconditionally
+#               require an existing parent Network covering the address —
+#               live-verified on the Grid for Range (WAPI 400
+#               IBDataConflictError: "Cannot find the parent network for
+#               the DHCP range ..." when no covering Network object
+#               exists), correcting an earlier assumption that Range's
+#               `network` field being omitted from the example meant no
+#               parent was required at all. Each's host/range offset is
+#               therefore nested inside its own per-run parent-Network
+#               sub-block — provisioning that parent (Makefile
+#               prerequisite-bundling ordering, or an equivalent) is a
+#               separate concern from this script, which only reserves
+#               disjoint address space for it. IPv4SharedNetwork's member
+#               CIDR has the same prerequisite shape (WAPI validates
+#               shared-network membership against a real Network object) —
+#               same resolution.
+#
+#               The concurrency ceiling is governed ENTIRELY by BLOCK_INDEX
+#               (one byte, 256 values) — the sub-block offsets are fixed
+#               constants, not additional random draws, so they never add
+#               new collision surface. BLOCK_INDEX is HASHED, not allocated
+#               from a registry, so two runs CAN draw the same block: the
+#               real bound is the birthday bound over 256 values,
+#               P(any collision among k runs) ≈ 1 − exp(−k(k−1)/512):
+#                 k=2  → ~0.4%      k=5  → ~4%
+#                 k=10 → ~16%       k=20 → ~52%
+#               This is a real, documented bound (ADR-IN-0007), not one
 #               this script tries to eliminate.
 #
-#               NOTE: this value is generated and plumbed through the
-#               datasource file on every run, but a given resource's example
-#               manifest only consumes it once that resource's identity is
-#               tokenised (record-a does not — its identity is (view, zone,
-#               name), not an address).
+# ── ptrHost — record-ptr's reverse-zone exception ──────────────────────────
 #
-# Both values are derived deterministically from the seed with sha256, so
+#   ptrHostCluster / ptrHostNamespaced — PTRRecord needs a reverse-mapping
+#               zone (record:ptr's reverse zone_auth) to already exist on
+#               the Grid for its address's network, in the given view. The
+#               only such zone on this test Grid Manager is 10.1.1.0/24 in
+#               DNS view "Internal" — pre-existing Grid state, not created
+#               by test/setup.sh, and setup.sh deliberately stays a
+#               convergent (idempotent, non-mutating-per-run) prerequisite
+#               provisioner rather than creating a per-run reverse zone
+#               (ADR-IN-0007). A netPrefix (100.64.x.0/24) address has no
+#               reverse zone at all, so record-ptr cannot use netPrefix.
+#
+#               Instead, a per-run HOST offset is derived within the
+#               existing shared 10.1.1.0/24 from a second, independent byte
+#               of the seed hash (PTR_OCTET, HASH[12:14]) — kept separate
+#               from BLOCK_INDEX so the two draws are independent rather
+#               than perfectly correlated. The 254-address pool is split
+#               into two fixed, non-overlapping halves so the cluster and
+#               namespaced examples of the SAME run never collide with each
+#               other by construction:
+#                 netPtrHostCluster:    10.1.1.<2 + PTR_OCTET % 126>    (range 2-127)
+#                 netPtrHostNamespaced: 10.1.1.<129 + PTR_OCTET % 126>  (range 129-254)
+#               This is a documented, explicitly accepted exception: the
+#               collision pool here (126 values per scope) is smaller than
+#               netPrefix's 256-block pool, because it is bounded by the
+#               size of the one pre-existing reverse zone rather than by a
+#               dedicated /16 reserved for this mechanism. Expanding it
+#               would require either a second pre-provisioned reverse zone
+#               (a setup.sh change, same objection as above) or a per-run
+#               reverse zone (also a setup.sh change) — both rejected for
+#               the same reason. If record-ptr's E2E concurrency becomes a
+#               real constraint, that is the tradeoff to revisit.
+#
+# Every value is derived deterministically from the seed with sha256, so
 # the same seed always reproduces the same identities within a run
 # (idempotent — re-running this script mid-run does not rotate the
 # identity out from under an in-flight test), and two different seeds are
@@ -104,12 +196,60 @@ fi
 BLOCK_INDEX=$(( 16#${HASH:10:2} ))
 NET_PREFIX="100.64.${BLOCK_INDEX}.0/24"
 
+# netPrefix sub-blocks — fixed offsets inside the run's /24, see the header
+# comment's sub-allocation map for the full layout and rationale.
+NET_NETWORK_CLUSTER="100.64.${BLOCK_INDEX}.0/28"
+NET_NETWORK_NAMESPACED="100.64.${BLOCK_INDEX}.16/28"
+NET_CONTAINER_CLUSTER="100.64.${BLOCK_INDEX}.32/28"
+NET_CONTAINER_NAMESPACED="100.64.${BLOCK_INDEX}.48/28"
+NET_SHARED_MEMBER_CLUSTER="100.64.${BLOCK_INDEX}.64/28"
+NET_SHARED_MEMBER_NAMESPACED="100.64.${BLOCK_INDEX}.80/28"
+NET_FIXEDADDR_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.96/28"
+NET_FIXEDADDR_HOST_CLUSTER="100.64.${BLOCK_INDEX}.100"
+NET_FIXEDADDR_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.112/28"
+NET_FIXEDADDR_HOST_NAMESPACED="100.64.${BLOCK_INDEX}.120"
+NET_HOSTRECORD_CLUSTER="100.64.${BLOCK_INDEX}.128"
+NET_HOSTRECORD_NAMESPACED="100.64.${BLOCK_INDEX}.129"
+NET_RANGE_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.160/27"
+NET_RANGE_START_CLUSTER="100.64.${BLOCK_INDEX}.161"
+NET_RANGE_END_CLUSTER="100.64.${BLOCK_INDEX}.181"
+NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
+NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
+NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
+
+# ptrHost — record-ptr's separate, independently-drawn shared-pool
+# exception. PTR_OCTET is a second, independent byte of the hash so this
+# draw is not perfectly correlated with BLOCK_INDEX.
+PTR_OCTET=$(( 16#${HASH:12:2} ))
+NET_PTRHOST_CLUSTER="10.1.1.$(( 2 + (PTR_OCTET % 126) ))"
+NET_PTRHOST_NAMESPACED="10.1.1.$(( 129 + (PTR_OCTET % 126) ))"
+
 mkdir -p "$(dirname "${OUT}")"
 cat > "${OUT}" <<DATASOURCE
 # Generated by test/e2e/gen-datasource.sh — do not edit by hand.
 # seed: ${SEED}
 runToken: "${RUN_TOKEN}"
 netPrefix: "${NET_PREFIX}"
+netNetworkCluster: "${NET_NETWORK_CLUSTER}"
+netNetworkNamespaced: "${NET_NETWORK_NAMESPACED}"
+netContainerCluster: "${NET_CONTAINER_CLUSTER}"
+netContainerNamespaced: "${NET_CONTAINER_NAMESPACED}"
+netSharedMemberCluster: "${NET_SHARED_MEMBER_CLUSTER}"
+netSharedMemberNamespaced: "${NET_SHARED_MEMBER_NAMESPACED}"
+netFixedAddrParentCluster: "${NET_FIXEDADDR_PARENT_CLUSTER}"
+netFixedAddrHostCluster: "${NET_FIXEDADDR_HOST_CLUSTER}"
+netFixedAddrParentNamespaced: "${NET_FIXEDADDR_PARENT_NAMESPACED}"
+netFixedAddrHostNamespaced: "${NET_FIXEDADDR_HOST_NAMESPACED}"
+netHostRecordCluster: "${NET_HOSTRECORD_CLUSTER}"
+netHostRecordNamespaced: "${NET_HOSTRECORD_NAMESPACED}"
+netRangeParentCluster: "${NET_RANGE_PARENT_CLUSTER}"
+netRangeStartCluster: "${NET_RANGE_START_CLUSTER}"
+netRangeEndCluster: "${NET_RANGE_END_CLUSTER}"
+netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
+netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
+netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
+netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"
+netPtrHostNamespaced: "${NET_PTRHOST_NAMESPACED}"
 DATASOURCE
 
 echo "==> Wrote per-run uptest datasource to ${OUT}"
