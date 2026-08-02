@@ -450,8 +450,9 @@ func (r *Runner) runFieldTest(t UpdateTest, snapshot []byte, kind, name string) 
 	// later delta proves whether Update() executed — a signal that does not
 	// depend on wall-clock convergence timing. A failure here does not abort
 	// the field test (the value-based assertions below are still useful);
-	// it only disables the evidence check for this field. See
-	// countUpdateEvents for the zero-guard on aggregated event counts.
+	// it only disables the evidence check for this field. countUpdateEvents
+	// sums each Event's aggregated .Count field (with a zero-guard treating
+	// an absent/zero .Count as one occurrence) — not a raw Item count.
 	eventsBefore, eventsBeforeErr := r.countUpdateEvents(kind, name)
 
 	if err := r.applyPatchAndReconcile(t); err != nil {
