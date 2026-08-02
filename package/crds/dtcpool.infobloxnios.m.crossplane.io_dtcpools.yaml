@@ -165,7 +165,7 @@ spec:
                     - TOPOLOGY
                     - DYNAMIC_RATIO
                     - GLOBAL_AVAILABILITY
-                    - SOURCE_IP_HASH
+                    - ALL_AVAILABLE
                     type: string
                   lbPreferredTopology:
                     description: Topology ruleset name used when lbPreferredMethod=TOPOLOGY.

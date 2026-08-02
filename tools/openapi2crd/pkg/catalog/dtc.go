@@ -66,7 +66,7 @@ func dtcPool() ResourceDescriptor {
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
 				Required:    true,
-				Enum:        []string{"ROUND_ROBIN", "RATIO", "TOPOLOGY", "DYNAMIC_RATIO", "GLOBAL_AVAILABILITY", "SOURCE_IP_HASH"},
+				Enum:        []string{"ROUND_ROBIN", "RATIO", "TOPOLOGY", "DYNAMIC_RATIO", "GLOBAL_AVAILABILITY", "ALL_AVAILABLE"},
 				Description: "Preferred load balancing method used to select a server from the pool.",
 			},
 			{
