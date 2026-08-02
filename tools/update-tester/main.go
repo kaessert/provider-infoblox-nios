@@ -31,6 +31,7 @@
 //	update-tester run <manifest.yaml> [--timeout 120]
 //	update-tester validate <manifest.yaml> --types-file <path_to_types.go>
 //	update-tester converge <manifest.yaml> [--poll-interval 60s] [--ignore-fields a,b] [--timeout 120s]
+//	update-tester check-external-name-prefix <manifest.yaml> [--timeout 30]
 package main
 
 import (
@@ -63,6 +64,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "check-external-name-prefix":
+		if err := cmdCheckExternalNamePrefix(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -79,12 +85,19 @@ Usage:
   update-tester run <manifest.yaml> [--timeout 120]
   update-tester validate <manifest.yaml> --types-file <types.go>
   update-tester converge <manifest.yaml> [--poll-interval 60s] [--ignore-fields a,b] [--timeout 120s]
+  update-tester check-external-name-prefix <manifest.yaml> [--timeout 30]
 
 Commands:
   run        Execute update tests against a live cluster
   validate   Check annotation coverage against Go type definitions
   converge   Assert the resource reaches steady state after creation
-             with zero spurious Update calls`)
+             with zero spurious Update calls
+  check-external-name-prefix
+             Assert the live resource's crossplane.io/external-name
+             annotation has the prefix declared by the manifest's
+             crossplane.io/expect-external-name-prefix annotation. For
+             dual-object-type resources, where a wrong identity search
+             silently resolves against the other WAPI object type.`)
 }
 
 func cmdRun(args []string) error {
@@ -274,6 +287,53 @@ func cmdConverge(args []string) error {
 	if !result.Passed {
 		os.Exit(1)
 	}
+	return nil
+}
+
+// cmdCheckExternalNamePrefix asserts that the live resource's
+// crossplane.io/external-name annotation has the prefix the manifest
+// declares via crossplane.io/expect-external-name-prefix. This exists for
+// dual-object-type WAPI resources (e.g. Network models both "network" and
+// "ipv6network") where an identity search issued against the wrong type
+// returns zero matches and the reconciler silently creates a duplicate —
+// a failure invisible to a plain Ready assertion. See
+// checkExternalNamePrefix for the underlying (pure, unit-testable) check.
+func cmdCheckExternalNamePrefix(args []string) error {
+	fs := flag.NewFlagSet("check-external-name-prefix", flag.ExitOnError)
+	timeout := fs.Int("timeout", 30, "Timeout in seconds for kubectl calls")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: update-tester check-external-name-prefix <manifest.yaml> [--timeout 30]")
+	}
+	manifestPath := fs.Arg(0)
+
+	m, err := ParseManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+	if m.ExpectExternalNamePrefix == "" {
+		return fmt.Errorf("manifest has no %s annotation — nothing to check", expectExternalNamePrefixKey)
+	}
+
+	runner := NewRunner(manifestPath, *timeout)
+	if err := runner.ResolveResource(m); err != nil {
+		return err
+	}
+
+	name, err := runner.ExternalName()
+	if err != nil {
+		return err
+	}
+
+	ok, reason := checkExternalNamePrefix(name, m.ExpectExternalNamePrefix)
+	fmt.Printf("External-name prefix check: %s/%s\n", m.Kind, m.Name)
+	if !ok {
+		fmt.Printf("  ✗ %s\n", reason)
+		os.Exit(1)
+	}
+	fmt.Printf("  ✓ external-name %q has expected prefix %q\n", name, m.ExpectExternalNamePrefix)
 	return nil
 }
 

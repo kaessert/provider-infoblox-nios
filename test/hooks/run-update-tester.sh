@@ -109,6 +109,20 @@ fi
 echo "==> run-update-tester: converge $MANIFEST"
 "$UPDATE_TESTER" converge "$MANIFEST"
 
+# A2. External-name object-type check — only when the manifest declares an
+# expectation via crossplane.io/expect-external-name-prefix. Guards against
+# the dual-object-type silent-duplicate hazard some WAPI resources have
+# (e.g. Network models both "network" and "ipv6network"): an identity
+# search issued against the wrong object type returns zero matches and the
+# reconciler creates a duplicate while still reporting Ready — invisible to
+# a plain Ready assertion. Runs right after Create (before the per-field
+# update tests below) because object type is fixed at Create and should
+# never need re-checking after. See examples/network-v6/network-v6.yaml.
+if grep -q 'crossplane.io/expect-external-name-prefix:' "$MANIFEST"; then
+  echo "==> run-update-tester: check-external-name-prefix $MANIFEST"
+  "$UPDATE_TESTER" check-external-name-prefix "$MANIFEST"
+fi
+
 # B. Per-field update tests.
 echo "==> run-update-tester: run $MANIFEST"
 "$UPDATE_TESTER" run "$MANIFEST"

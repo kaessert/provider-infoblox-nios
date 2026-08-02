@@ -1,0 +1,48 @@
+# Network (IPv6) is the namespace-scoped variant of the dual-object-type
+# guard example. See network-v6.yaml for the cluster-scoped variant, the
+# full dual-object-type hazard writeup, and field documentation — this
+# file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the CIDR below differs from network-v6.yaml's so both
+# examples can be applied to the same NIOS Grid Manager at once without
+# colliding on the same (network_view, network) WAPI identity.
+apiVersion: network.infobloxnios.m.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-v6-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network-v6
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # network-v6.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-v6-namespaced.sh
+    # See network-v6.yaml for the dual-object-type guard rationale.
+    crossplane.io/expect-external-name-prefix: "ipv6network/"
+    # See network-v6.yaml for the field coverage rationale.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced)"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: allocatePrefixLen
+        skip: "only required when parentCidr or filterParams is set; not used by this example's static CIDR"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: object
+        skip: "only valid when filterParams is set; not used by this example's static CIDR"
+spec:
+  forProvider:
+    networkView: default
+    network: 2001:db8:9f89::/64
+    comment: Managed by Crossplane (IPv6, namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
