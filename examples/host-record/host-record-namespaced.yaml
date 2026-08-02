@@ -33,9 +33,9 @@ metadata:
       - field: disable
         value: true
       - field: name
-        skip: "renaming changes the record's _ref; identity changes aren't exercised via per-field diff testing"
+        skip: "_ref-mutating identity field for HostRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on host-record.yaml's view field instead"
       - field: view
-        skip: "changing view moves the record between DNS views and changes its _ref"
+        skip: "_ref-mutating identity field for HostRecord; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on host-record.yaml's view field instead"
       - field: configureForDns
         skip: "toggling DNS registration can remove the record from DNS entirely, altering derived zone/dnsName atProvider fields"
       - field: ipv4Addrs
