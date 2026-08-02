@@ -24,6 +24,11 @@ type Manifest struct {
 	Namespace    string
 	Tests        []UpdateTest
 	ConvergeSkip string
+	// ExpectExternalNamePrefix is the value of the
+	// crossplane.io/expect-external-name-prefix annotation, when present.
+	// Empty means the manifest declares no external-name-prefix
+	// expectation — see expectExternalNamePrefixKey.
+	ExpectExternalNamePrefix string
 }
 
 // manifestDoc is the intermediate YAML structure for parsing.
@@ -38,6 +43,14 @@ type manifestDoc struct {
 }
 
 const annotationKey = "crossplane.io/update-test"
+
+// expectExternalNamePrefixKey names the manifest annotation that declares
+// the required prefix of the live resource's crossplane.io/external-name
+// annotation (e.g. "ipv6network/" for a dual-object-type resource whose
+// identity search could silently resolve against the wrong WAPI object
+// type — see cmdCheckExternalNamePrefix). Optional: manifests that do not
+// need this guard simply omit it.
+const expectExternalNamePrefixKey = "crossplane.io/expect-external-name-prefix"
 
 // ParseManifest reads a YAML manifest file and extracts metadata and update
 // test annotations.
@@ -71,6 +84,8 @@ func ParseManifestBytes(data []byte) (*Manifest, error) {
 		Name:       doc.Metadata.Name,
 		Namespace:  doc.Metadata.Namespace,
 	}
+
+	m.ExpectExternalNamePrefix = doc.Metadata.Annotations[expectExternalNamePrefixKey]
 
 	annotation, ok := doc.Metadata.Annotations[annotationKey]
 	if !ok {

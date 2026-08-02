@@ -10,6 +10,14 @@
 #   test/hooks/post-assert-<resource>-namespaced.sh → examples/<resource>/<resource>-namespaced.yaml
 #   test/hooks/post-assert-<resource>-ns.sh         → examples/<resource>/<resource>-namespaced.yaml
 #
+# A resource directory may also hold more than one example pair for the
+# same kind — e.g. an alternate address-family variant such as
+# examples/network/network-v6.yaml sitting alongside network.yaml. When the
+# primary derivation's directory (named after the full slug) doesn't exist,
+# a fallback strips the slug's last hyphenated segment and looks for the
+# full slug's manifest inside THAT (shorter) resource directory instead —
+# so post-assert-network-v6.sh resolves to examples/network/network-v6.yaml.
+#
 # Usage (via symlink):
 #   test/hooks/post-assert-<resource>.sh
 #   test/hooks/post-assert-<resource>-namespaced.sh
@@ -81,6 +89,18 @@ if [ -z "${MANIFEST:-}" ]; then
     RESOURCE="$SLUG"
     MANIFEST="$PROVIDER_ROOT/examples/$RESOURCE/$RESOURCE.yaml"
   fi
+
+  # Sibling-variant fallback (see the header comment above). Only engages
+  # when the primary derivation's manifest is missing, so it never changes
+  # behavior for any symlink whose slug already resolves directly.
+  if [ ! -f "$MANIFEST" ] && [[ "$RESOURCE" == *-* ]]; then
+    LEAF="$(basename "$MANIFEST")"
+    PARENT="${RESOURCE%-*}"
+    ALT="$PROVIDER_ROOT/examples/$PARENT/$LEAF"
+    if [ -f "$ALT" ]; then
+      MANIFEST="$ALT"
+    fi
+  fi
 fi
 
 if [ ! -f "$MANIFEST" ]; then
@@ -108,6 +128,34 @@ fi
 # resource.
 echo "==> run-update-tester: converge $MANIFEST"
 "$UPDATE_TESTER" converge "$MANIFEST"
+
+# A2. External-name object-type check — only when the manifest declares an
+# expectation via crossplane.io/expect-external-name-prefix. Guards against
+# the dual-object-type silent-duplicate hazard some WAPI resources have
+# (e.g. Network models both "network" and "ipv6network"): an identity
+# search issued against the wrong object type returns zero matches and the
+# reconciler creates a duplicate while still reporting Ready — invisible to
+# a plain Ready assertion. Runs right after Create (before the per-field
+# update tests below) because object type is fixed at Create and should
+# never need re-checking after. See examples/network/network-v6.yaml.
+if grep -q 'crossplane.io/expect-external-name-prefix:' "$MANIFEST"; then
+  echo "==> run-update-tester: check-external-name-prefix $MANIFEST"
+  "$UPDATE_TESTER" check-external-name-prefix "$MANIFEST"
+
+  # A3. Ref-less identity-resolve recovery check — same gate, same manifest
+  # annotation. A2 above only proves the object type resolved correctly at
+  # CREATE time; it can never fail, because create-time object-type
+  # selection is independent of the identity-search hazard entirely (see
+  # the file header). This step drives the hazard's actual code path: it
+  # pauses reconciliation, strips crossplane.io/external-name, unpauses,
+  # and asserts the controller recovers to the SAME backend object
+  # (exactly one CreatedExternalResource event across the resource's
+  # lifecycle) instead of silently creating a duplicate. Runs before the
+  # per-field update tests below so its own patch/pause machinery never
+  # interleaves with theirs.
+  echo "==> run-update-tester: resolve-recover $MANIFEST"
+  "$UPDATE_TESTER" resolve-recover "$MANIFEST"
+fi
 
 # B. Per-field update tests.
 echo "==> run-update-tester: run $MANIFEST"

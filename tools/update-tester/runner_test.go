@@ -12,6 +12,12 @@ import (
 // the runFieldTest no-op/negative-case tests below.
 const testFieldNotifyDelay = "notifyDelay"
 
+// testIPv6NetworkPrefix is the WAPI object-type prefix a dual-object-type
+// resource's external-name must carry when it resolved against the IPv6
+// object type — shared across the external-name-prefix tests in this file
+// and in config_test.go.
+const testIPv6NetworkPrefix = "ipv6network/"
+
 // fakeCluster is an in-memory stand-in for a live cluster's view of a single
 // managed resource. It implements the subset of kubectl behaviour Runner
 // depends on (get -o json, get -o jsonpath=..., get events, patch, wait) so
@@ -20,6 +26,12 @@ type fakeCluster struct {
 	forProvider map[string]interface{}
 	atProvider  map[string]interface{}
 	generation  int64
+	// externalName, when non-empty, is surfaced as the live resource's
+	// crossplane.io/external-name annotation — exercised by
+	// TestExternalName*. Left empty, metadata carries no annotations map at
+	// all (matching a resource observed before Create ever ran), which is
+	// the pre-existing default every other test in this file relies on.
+	externalName string
 
 	// kind and name identify the resource for event-evidence lookups
 	// (kubectl get events ... involvedObject matching). Tests exercising
@@ -85,8 +97,14 @@ func (f *fakeCluster) handleGet(args []string) (string, error) {
 			return string(b), nil
 		}
 	}
+	metadata := map[string]interface{}{"generation": f.generation}
+	if f.externalName != "" {
+		metadata["annotations"] = map[string]interface{}{
+			externalNameAnnotation: f.externalName,
+		}
+	}
 	obj := map[string]interface{}{
-		"metadata":    map[string]interface{}{"generation": f.generation},
+		"metadata":    metadata,
 		"spec":        map[string]interface{}{"forProvider": f.forProvider},
 		jsonKeyStatus: map[string]interface{}{jsonKeyAtProvider: f.atProvider},
 	}
@@ -518,6 +536,92 @@ func TestNavigateJSONPath(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("%s: got %v, want %v", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExternalName covers Runner.ExternalName's two observable states: the
+// annotation present with a value, and absent entirely (a resource observed
+// before Create has ever populated it).
+func TestExternalName(t *testing.T) {
+	cases := map[string]struct {
+		reason       string
+		externalName string
+		want         string
+	}{
+		"AnnotationPresent": {
+			reason:       "the live crossplane.io/external-name annotation value is returned verbatim",
+			externalName: testIPv6NetworkPrefix + "ZG5z...:2001:db8:9f88::/64/default",
+			want:         testIPv6NetworkPrefix + "ZG5z...:2001:db8:9f88::/64/default",
+		},
+		"AnnotationAbsent": {
+			reason: "a resource with no external-name annotation yet returns an empty string, not an error",
+			want:   "",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeCluster{externalName: tc.externalName}
+			r := newFakeRunner(f)
+
+			got, err := r.ExternalName()
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", tc.reason, err)
+			}
+			if got != tc.want {
+				t.Errorf("%s: ExternalName() = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckExternalNamePrefix proves the dual-object-type identity guard is
+// a real gate, not a check that can only ever pass: the mismatch and
+// empty-name cases below must both be classified as failures, not silently
+// accepted. This is deliberately a pure-function unit test (no live
+// cluster, no deliberately-broken controller build required) — see
+// checkExternalNamePrefix's doc comment for why that is sufficient proof.
+func TestCheckExternalNamePrefix(t *testing.T) {
+	cases := map[string]struct {
+		reason         string
+		name           string
+		expectedPrefix string
+		wantOK         bool
+		wantReasonHas  string
+	}{
+		"MatchingPrefix": {
+			reason:         "an external-name that starts with the expected object-type prefix passes",
+			name:           testIPv6NetworkPrefix + "ZG5z...:2001:db8:9f88::/64/default",
+			expectedPrefix: testIPv6NetworkPrefix,
+			wantOK:         true,
+		},
+		"WrongObjectType": {
+			reason:         "an external-name resolved against the sibling IPv4 object type (network/) must fail an ipv6network/ expectation — this is the exact silent-duplicate hazard the check exists to catch",
+			name:           "network/ZG5z...:2001:db8:9f88::/64/default",
+			expectedPrefix: testIPv6NetworkPrefix,
+			wantOK:         false,
+			wantReasonHas:  "does not have expected prefix",
+		},
+		"EmptyExternalName": {
+			reason:         "a resource with no resolved external-name yet cannot satisfy any prefix expectation",
+			name:           "",
+			expectedPrefix: testIPv6NetworkPrefix,
+			wantOK:         false,
+			wantReasonHas:  "absent or empty",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ok, reason := checkExternalNamePrefix(tc.name, tc.expectedPrefix)
+			if ok != tc.wantOK {
+				t.Fatalf("%s: checkExternalNamePrefix(%q, %q) ok = %v, want %v (reason: %s)",
+					tc.reason, tc.name, tc.expectedPrefix, ok, tc.wantOK, reason)
+			}
+			if !tc.wantOK && !strings.Contains(reason, tc.wantReasonHas) {
+				t.Errorf("%s: reason = %q, want substring %q", tc.reason, reason, tc.wantReasonHas)
 			}
 		})
 	}

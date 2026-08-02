@@ -152,6 +152,24 @@ func (r *Runner) GetGeneration() (int64, error) {
 	return extractGeneration(obj)
 }
 
+// externalNameAnnotation is the well-known crossplane-runtime annotation
+// that carries a managed resource's resolved external identifier.
+const externalNameAnnotation = "crossplane.io/external-name"
+
+// ExternalName reads the crossplane.io/external-name annotation from the
+// live resource. Returns an empty string (no error) if the annotation is
+// absent — the caller decides whether that is meaningful.
+func (r *Runner) ExternalName() (string, error) {
+	obj, err := r.GetObject()
+	if err != nil {
+		return "", fmt.Errorf("reading external-name: %w", err)
+	}
+	metadata, _ := obj["metadata"].(map[string]interface{})
+	annotations, _ := metadata["annotations"].(map[string]interface{})
+	name, _ := annotations[externalNameAnnotation].(string)
+	return name, nil
+}
+
 // ReadField reads a single field from status.atProvider via kubectl get -o json
 // and Go JSON parsing. For complex types (maps, arrays), it returns canonical
 // JSON — avoiding the Go-format output that kubectl jsonpath emits for nested
@@ -671,6 +689,24 @@ func (r *Runner) exec(args ...string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// checkExternalNamePrefix classifies a live external-name annotation value
+// against the prefix a manifest declares it must have (via the
+// crossplane.io/expect-external-name-prefix annotation). It is a pure
+// function — no kubectl calls — so the negative path (mismatch, empty
+// name) is exercised by a plain unit test rather than requiring a live
+// cluster or a deliberately broken controller build to prove the check can
+// actually fail. See cmdCheckExternalNamePrefix for the CLI wrapper that
+// calls this against a live resource's ExternalName().
+func checkExternalNamePrefix(name, expectedPrefix string) (ok bool, reason string) {
+	if name == "" {
+		return false, "external-name annotation is absent or empty"
+	}
+	if !strings.HasPrefix(name, expectedPrefix) {
+		return false, fmt.Sprintf("external-name %q does not have expected prefix %q", name, expectedPrefix)
+	}
+	return true, ""
 }
 
 // buildMergePatch constructs a JSON merge patch for a dot-separated field path

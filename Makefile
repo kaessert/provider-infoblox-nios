@@ -94,6 +94,12 @@ UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/reco
 UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,examples/network-view/network-view-namespaced.yaml
 UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml
 UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml
+# IPv6 variant of Network — WAPI resolves this to the ipv6network object
+# type at runtime instead of network. Kept as a separate target (not
+# folded into UPTEST_MANIFESTS_NETWORK/e2e.network) so a regression on
+# either address family fails independently. Core tier: needs only NIOS
+# Grid Manager API credentials, same as its IPv4 sibling.
+UPTEST_MANIFESTS_NETWORK_V6 := examples/network/network-v6.yaml,examples/network/network-v6-namespaced.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
 UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
@@ -115,12 +121,12 @@ UPTEST_MANIFESTS_DTC_LBDN := examples/dtc-lbdn/dtc-lbdn.yaml,examples/dtc-lbdn/d
 # CORE: resources that only need NIOS Grid Manager API credentials
 # (INFOBLOX_HOST, INFOBLOX_USER, INFOBLOX_PASS) — no additional external
 # infrastructure to provision. This is the full core-tier set: all record
-# types, HostRecord, Network(View/Container), RangeTemplate, ZoneAuth,
-# ZoneDelegated, ZoneForward, IPv4SharedNetwork, FixedAddress, Range,
-# DTCServer, DTCPool, DTCLBDN, NSRecord, and ExtensibleAttributeDef. DTCPool and
-# DTCLBDN need no external prerequisites — their `servers`/`pools`/
-# `authZones` fields are optional.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
+# types, HostRecord, Network(View/Container), NetworkV6 (IPv6 sibling of
+# Network), RangeTemplate, ZoneAuth, ZoneDelegated, ZoneForward,
+# IPv4SharedNetwork, FixedAddress, Range, DTCServer, DTCPool, DTCLBDN,
+# NSRecord, and ExtensibleAttributeDef. DTCPool and DTCLBDN need no external
+# prerequisites — their `servers`/`pools`/`authZones` fields are optional.
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_NETWORK_V6),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -240,6 +246,9 @@ e2e.host-record: e2e
 e2e.network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK)
 e2e.network: e2e
 
+e2e.network-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_V6)
+e2e.network-v6: e2e
+
 e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
 e2e.range-template: e2e
 
@@ -280,7 +289,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.network-v6 e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
