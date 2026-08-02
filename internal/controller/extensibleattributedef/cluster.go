@@ -192,6 +192,12 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.Extensib
 	if isReservedIdentityDefinitionName(p.Name) {
 		return managed.ExternalCreation{}, errors.New(errReservedName)
 	}
+	// See refuseIfResolvedRefIsReserved: the annotation may already point
+	// at the reserved definition's _ref even though the spec name above
+	// checked out — resolve it before creating anything under its alias.
+	if err := refuseIfResolvedRefIsReserved(e.conn, meta.GetExternalName(cr), cr.GetName()); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 
 	def, err := createEADefinition(e.conn, p.Name, p.Type, p.Comment, p.DefaultValue, p.Min, p.Max, p.Flags,
 		toSDKListValues(listValuesToStrings(p.ListValues)), p.AllowedObjectTypes, descendantsActionToSDK(p.DescendantsAction))
@@ -212,6 +218,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Extens
 	}
 
 	externalID := meta.GetExternalName(cr)
+
+	// The spec-name check above only sees spec.forProvider.name. Resolve
+	// what externalID actually addresses before issuing the PUT — see
+	// refuseIfResolvedRefIsReserved.
+	if err := refuseIfResolvedRefIsReserved(e.conn, externalID, cr.GetName()); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
 
 	newRef, err := updateEADefinition(e.conn, externalID, p.Name, p.Comment, p.DefaultValue, p.Flags,
 		toSDKListValues(listValuesToStrings(p.ListValues)), p.AllowedObjectTypes, descendantsActionToSDK(p.DescendantsAction))
@@ -240,6 +253,14 @@ func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.Extensib
 	}
 
 	externalID := meta.GetExternalName(cr)
+
+	// The spec-name check above only sees spec.forProvider.name. Resolve
+	// what externalID actually addresses before issuing the DELETE — see
+	// refuseIfResolvedRefIsReserved.
+	if err := refuseIfResolvedRefIsReserved(e.conn, externalID, cr.GetName()); err != nil {
+		return managed.ExternalDelete{}, err
+	}
+
 	if err := deleteEADefinitionResolving404(e.conn, externalID, cr.Spec.ForProvider.Name); err != nil {
 		return managed.ExternalDelete{}, err
 	}
