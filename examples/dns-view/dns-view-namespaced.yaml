@@ -10,6 +10,10 @@
 # Distinct identity: the view name below differs from dns-view.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same DNS view name.
+#
+# ${data.runToken}: see dns-view.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
 apiVersion: dnsview.infobloxnios.m.crossplane.io/v1alpha1
 kind: DNSView
 metadata:
@@ -179,7 +183,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: crossplane-test-view-ns
+    name: crossplane-test-view-ns-${data.runToken}
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig

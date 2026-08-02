@@ -14,6 +14,14 @@
 # creates a distinct custom view instead of trying to re-create one of
 # those, so it never collides with a fresh Grid Manager's built-in views.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same view name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against. This resource creates the
+# view itself (unlike most other examples, which only reference an
+# existing view by name, e.g. "default" — those stay literal).
+#
 # Required fields:
 #   name: name of the DNS view. Renaming an existing view changes its
 #         `_ref` — the controller re-reads `_ref` from the PUT response
@@ -230,7 +238,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: crossplane-test-view
+    name: crossplane-test-view-${data.runToken}
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

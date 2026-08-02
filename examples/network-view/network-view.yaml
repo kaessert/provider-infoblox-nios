@@ -17,6 +17,14 @@
 # The Grid always has a well-known "default" network view (is_default=true)
 # that cannot be deleted or un-defaulted. This example creates an
 # additional, ordinary network view — standard CRUD applies to it.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same network view name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against. This resource creates the
+# network view itself (unlike most other examples, which only reference
+# an existing network view by name, e.g. "default" — those stay literal).
 apiVersion: networkview.infobloxnios.crossplane.io/v1alpha1
 kind: NetworkView
 metadata:
@@ -43,7 +51,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: "test-network-view"
+    name: "test-network-view-${data.runToken}"
     comment: "Test network view created by Crossplane"
   providerConfigRef:
     name: default
