@@ -11,6 +11,12 @@
 # Distinct identity: the name/host below differ from dtc-server.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same DTC Server display name.
+#
+# ${data.runToken}: see dtc-server.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling. host
+# stays a literal TEST-NET-1 address for the same reason given there —
+# the tokenised name already satisfies the (name, host) natural key.
 apiVersion: dtcserver.infobloxnios.m.crossplane.io/v1alpha1
 kind: DTCServer
 metadata:
@@ -44,7 +50,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: example-server-ns.example.com
+    name: example-server-ns-${data.runToken}.example.com
     host: 192.0.2.31
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

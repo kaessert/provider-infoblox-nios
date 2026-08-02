@@ -24,6 +24,12 @@
 # quorum, comment, disable, ttl, useTtl, extAttrs, and more advanced
 # dynamic-ratio/topology settings — see the DTCPool CRD schema for the
 # full list.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same DTC Pool display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
 apiVersion: dtcpool.infobloxnios.crossplane.io/v1alpha1
 kind: DTCPool
 metadata:
@@ -36,14 +42,42 @@ metadata:
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-pool.sh
     # comment, lbPreferredMethod, lbAlternateMethod, availability,
-    # quorum, disable, useTtl, and ttl are the mutable scalars exercised
-    # here. lbPreferredMethod moves to SOURCE_IP_HASH and lbAlternateMethod
-    # to ROUND_ROBIN — both need no companion topology/dynamic-ratio
-    # settings (unlike TOPOLOGY or DYNAMIC_RATIO). availability moves to
-    # QUORUM so quorum becomes meaningful alongside it (quorum is
-    # otherwise a no-op). useTtl is tested before ttl (same use-flag-then-
-    # value ordering as the DNS record TTL fields — see record-cname.yaml).
-    # name is also mutable, but renaming a DTC Pool may change its WAPI
+    # disable, useTtl, and ttl are the mutable scalars exercised here.
+    # lbPreferredMethod moves to ALL_AVAILABLE and lbAlternateMethod to
+    # ROUND_ROBIN — both need no companion topology/dynamic-ratio settings
+    # (unlike TOPOLOGY or DYNAMIC_RATIO). ALL_AVAILABLE replaces an
+    # earlier SOURCE_IP_HASH target: the generated CRD schema lists
+    # SOURCE_IP_HASH as a legal lb_preferred_method enum value, but a
+    # live-Grid WAPI update rejected it with 400 ("valid values are:
+    # GLOBAL_AVAILABILITY, RATIO, ROUND_ROBIN, TOPOLOGY, ALL_AVAILABLE,
+    # DYNAMIC_RATIO") — this Grid's WAPI version does not accept it for
+    # this field, so ALL_AVAILABLE is used instead. availability moves to
+    # ANY, not QUORUM: a live-Grid WAPI update confirmed QUORUM requires
+    # the pool to already have at least one associated health monitor
+    # ("Pool ... contains only 0 effective monitors but requires at least
+    # 1 for its availability"), which this standalone example intentionally
+    # has none of (see the monitors skip rationale below) — ANY carries no
+    # such requirement and updates cleanly with zero monitors. quorum is
+    # therefore skipped too (see below), since it is only meaningful under
+    # availability=QUORUM. ttl carries a literal baseline (1800) in
+    # spec.forProvider below rather than being left unset: a live-Grid
+    # WAPI Create/Update confirmed that submitting a ttl value with no
+    # use_ttl key implicitly turns use_ttl on ("Enter a TTL value" is only
+    # raised when use_ttl is set true with no ttl ever having been given).
+    # Baking ttl into Create means useTtl is already true by the time the
+    # update-test steps run (back-filled from the observed object by
+    # lateInitialize), so the update-test only needs to change ttl's VALUE
+    # (a real, observable drift) and then flip useTtl to false (the
+    # reverse transition) — both of which a live-Grid PUT confirmed work
+    # standalone. Testing useTtl=true as its own step was tried first and
+    # doesn't work here: the controller's own isUpToDate skips comparing
+    # ttl whenever useTtl is false (deliberately, to avoid phantom drift
+    # against WAPI's zone-default ttl — see the controller's
+    # scalarFieldsUpToDate), so a ttl-then-useTtl step order never issues
+    # the Update that would set ttl, and a useTtl-then-ttl order hits the
+    # "Enter a TTL value" rejection instead; baking ttl into Create is the
+    # only ordering that avoids both failure modes with this tool's
+    # one-field-per-step model. name is also mutable, but renaming a DTC Pool may change its WAPI
     # _ref; that rotation is already exercised by controller unit tests,
     # so it is skipped here. lbPreferredTopology/lbAlternateTopology and
     # lbDynamicRatioPreferred/lbDynamicRatioAlternate are only meaningful
@@ -56,39 +90,40 @@ metadata:
       - field: comment
         value: "Updated by update-tester"
       - field: lbPreferredMethod
-        value: "SOURCE_IP_HASH"
+        value: "ALL_AVAILABLE"
       - field: lbAlternateMethod
         value: "ROUND_ROBIN"
       - field: availability
-        value: "QUORUM"
-      - field: quorum
-        value: 1
+        value: "ANY"
       - field: disable
-        value: true
-      - field: useTtl
         value: true
       - field: ttl
         value: 3600
+      - field: useTtl
+        value: false
       - field: name
         skip: "renaming a DTC Pool may change its WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
+      - field: quorum
+        skip: "only meaningful when availability=QUORUM; this example exercises availability=ANY (see the availability rationale above), so quorum has no effect to observe"
       - field: lbPreferredTopology
-        skip: "only meaningful when lbPreferredMethod=TOPOLOGY; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbPreferredMethod=TOPOLOGY; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbAlternateTopology
-        skip: "only meaningful when lbAlternateMethod=TOPOLOGY; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbAlternateMethod=TOPOLOGY; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbDynamicRatioPreferred
-        skip: "only meaningful when lbPreferredMethod=DYNAMIC_RATIO; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbPreferredMethod=DYNAMIC_RATIO; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbDynamicRatioAlternate
-        skip: "only meaningful when lbAlternateMethod=DYNAMIC_RATIO; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbAlternateMethod=DYNAMIC_RATIO; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: servers
         skip: "references DTCServer resources, intentionally omitted from this standalone example"
       - field: monitors
-        skip: "list field of health monitors, not a scalar update-test target"
+        skip: "list field of health monitors, not a scalar update-test target; also the reason availability=QUORUM is not exercised here, see above"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-pool
+    name: test-dtc-pool-${data.runToken}
     lbPreferredMethod: ROUND_ROBIN
     comment: Managed by Crossplane
+    ttl: 1800
   providerConfigRef:
     name: default

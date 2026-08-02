@@ -10,6 +10,10 @@
 # Distinct identity: the name below differs from dtc-pool.yaml's so both
 # examples can be applied to the same NIOS Grid Manager at once without
 # colliding on the same DTC Pool display name.
+#
+# ${data.runToken}: see dtc-pool.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
 apiVersion: dtcpool.infobloxnios.m.crossplane.io/v1alpha1
 kind: DTCPool
 metadata:
@@ -26,40 +30,41 @@ metadata:
       - field: comment
         value: "Updated by update-tester (namespaced)"
       - field: lbPreferredMethod
-        value: "SOURCE_IP_HASH"
+        value: "ALL_AVAILABLE"
       - field: lbAlternateMethod
         value: "ROUND_ROBIN"
       - field: availability
-        value: "QUORUM"
-      - field: quorum
-        value: 1
+        value: "ANY"
       - field: disable
-        value: true
-      - field: useTtl
         value: true
       - field: ttl
         value: 3600
+      - field: useTtl
+        value: false
       - field: name
         skip: "renaming a DTC Pool may change its WAPI _ref; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
+      - field: quorum
+        skip: "only meaningful when availability=QUORUM; this example exercises availability=ANY — see dtc-pool.yaml for the live-Grid finding that QUORUM requires at least one associated health monitor, which this standalone example intentionally has none of"
       - field: lbPreferredTopology
-        skip: "only meaningful when lbPreferredMethod=TOPOLOGY; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbPreferredMethod=TOPOLOGY; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbAlternateTopology
-        skip: "only meaningful when lbAlternateMethod=TOPOLOGY; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbAlternateMethod=TOPOLOGY; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbDynamicRatioPreferred
-        skip: "only meaningful when lbPreferredMethod=DYNAMIC_RATIO; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbPreferredMethod=DYNAMIC_RATIO; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: lbDynamicRatioAlternate
-        skip: "only meaningful when lbAlternateMethod=DYNAMIC_RATIO; not used by this example's SOURCE_IP_HASH/ROUND_ROBIN methods"
+        skip: "only meaningful when lbAlternateMethod=DYNAMIC_RATIO; not used by this example's ALL_AVAILABLE/ROUND_ROBIN methods"
       - field: servers
         skip: "references DTCServer resources, intentionally omitted from this standalone example"
       - field: monitors
-        skip: "list field of health monitors, not a scalar update-test target"
+        skip: "list field of health monitors, not a scalar update-test target; also the reason availability=QUORUM is not exercised here, see dtc-pool.yaml"
       - field: extAttrs
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-pool-ns
+    name: test-dtc-pool-ns-${data.runToken}
     lbPreferredMethod: ROUND_ROBIN
     comment: Managed by Crossplane (namespaced)
+    ttl: 1800
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
