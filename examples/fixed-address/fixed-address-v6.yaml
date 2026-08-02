@@ -14,17 +14,16 @@
 # (examples/network/network-v6.yaml) and NetworkContainer
 # (examples/network-container/network-container-v6.yaml).
 #
-# PREREQUISITE NOT CREATED BY THIS EXAMPLE: like the IPv4 sibling, WAPI's
-# AllocateIP call unconditionally requires a parent Network object covering
-# the address (see fixed-address.yaml's ipv4addr field doc) — for an IPv6
-# address this means a real "ipv6network" object covering
-# 2001:db8:e2e6:5::/64 must already exist on the Grid before this example's
-# Create can succeed. This example does NOT provision that network itself
-# (mirroring how fixed-address.yaml relies on test/setup.sh's prior
-# creation of 10.0.0.0/24 rather than inventing a Network resource inline).
-# The IPv6 equivalent has not been added to test/setup.sh by this ticket —
-# a live E2E run of this example requires that prerequisite to be bundled
-# in first (either into test/setup.sh or into this resource's e2e target).
+# PREREQUISITE: like the IPv4 sibling, WAPI's AllocateIP call unconditionally
+# requires a parent Network object covering the address (see
+# fixed-address.yaml's ipv4addr field doc) — for an IPv6 address this means a
+# real "ipv6network" object covering 2001:db8:e2e6:5::/64 must already exist
+# on the Grid before this example's Create can succeed. This example does
+# NOT provision that network itself (mirroring how fixed-address.yaml relies
+# on test/setup.sh's prior creation of 10.0.0.0/24 rather than inventing a
+# Network resource inline). test/setup.sh creates the ipv6network directly
+# via a GET-guarded WAPI POST, decoupled from any managed resource's CRUD
+# lifecycle, before every E2E run.
 #
 # CIDR: uses the IPv6 documentation range reserved by RFC 3849
 # (2001:db8::/32), distinct from every other IPv6 example's sub-block
@@ -39,7 +38,13 @@
 # requests the `duid` field back, never `mac` — the controller's up-to-date
 # comparison accounts for this and compares the spec value against the
 # observed DUID for the IPv6 family, so this field round-trips correctly
-# and is safe to value-test below.
+# and is safe to value-test below. The DUID is unique per network — the
+# create-time value here (`...44:55`), this example's update-test target
+# (`...44:77`), and the namespaced sibling's create-time value (`...44:66`)
+# and update-test target (`...44:99`) are all four distinct so no two
+# FixedAddress objects sharing the 2001:db8:e2e6:5::/64 network ever
+# collide on the same DUID (WAPI rejects a duplicate DUID within one
+# network with IB.Data.Conflict).
 #
 # The assertion that makes this example meaningful: the post-assert hook
 # (crossplane.io/expect-external-name-prefix below) checks that the
@@ -77,7 +82,7 @@ metadata:
       - field: comment
         value: "Updated by update-tester (IPv6)"
       - field: mac
-        value: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:66"
+        value: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:77"
       - field: name
         value: "updated-fixed-address-v6"
       - field: matchClient
