@@ -26,6 +26,15 @@
 // as a real signal and check the controller logs for repeated Update calls
 // rather than assuming it is a benign propagation delay.
 //
+// The `run` command also proactively restarts the controller Deployment
+// partway through a long field list to earn back a fresh event-spam-filter
+// burst (client-go silently drops events beyond a per-process ceiling). If
+// that restart fails, every field tested afterward has its evidence check
+// marked UNTRUSTED rather than being allowed to report a clean PASS or
+// NOT-EVIDENCED: with the burst state unknown, neither outcome can be
+// trusted to prove or disprove that Update() ran, so the run's summary line
+// can never read "0 not-evidenced" while masking an unreliable result.
+//
 // Usage:
 //
 //	update-tester run <manifest.yaml> [--timeout 120]
@@ -152,11 +161,11 @@ func cmdRun(args []string) error {
 		return err
 	}
 
-	passed, failed, noop, notEvidenced := printResults(results)
+	passed, failed, noop, notEvidenced, untrusted := printResults(results)
 
 	total := passed + failed
-	fmt.Printf("%s: %d/%d tested, %d/%d skipped, %d no-op, %d not-evidenced\n",
-		verdict(failed == 0), passed, total, skipped, len(m.Tests), noop, notEvidenced)
+	fmt.Printf("%s: %d/%d tested, %d/%d skipped, %d no-op, %d not-evidenced, %d untrusted\n",
+		verdict(failed == 0), passed, total, skipped, len(m.Tests), noop, notEvidenced, untrusted)
 
 	if failed > 0 {
 		os.Exit(1)
@@ -165,13 +174,19 @@ func cmdRun(args []string) error {
 }
 
 // printResults prints one line per test result (plus any side effects) and
-// returns the passed/failed counts, plus the no-op and not-evidenced counts
-// (both subsets of failed, reported separately so each distinct failure mode
-// is easy to spot in the summary line without being confused with a genuine
-// PASS or SKIP). A PASS whose field converged at or above slowObserveThreshold
-// is annotated "slow-observe" inline — it is still a PASS backed by positive
-// update-event evidence, not a reason for a reviewer to suspect the result.
-func printResults(results []TestResult) (passed, failed, noop, notEvidenced int) {
+// returns the passed/failed counts, plus the no-op, not-evidenced, and
+// untrusted counts (all subsets of failed, reported separately so each
+// distinct failure mode is easy to spot in the summary line without being
+// confused with a genuine PASS or SKIP). A PASS whose field converged at or
+// above slowObserveThreshold is annotated "slow-observe" inline — it is
+// still a PASS backed by positive update-event evidence, not a reason for a
+// reviewer to suspect the result. An UNTRUSTED result is reported and
+// counted as a failure regardless of the field's own Passed/NotEvidenced
+// value: it ran after a burst-reset failure earlier in the same run, so
+// neither outcome can be trusted to prove or disprove that Update() ran —
+// the run's summary line must not be able to read a clean "0 not-evidenced"
+// in that case.
+func printResults(results []TestResult) (passed, failed, noop, notEvidenced, untrusted int) {
 	var hasSideFx bool
 	for _, r := range results {
 		switch {
@@ -182,6 +197,11 @@ func printResults(results []TestResult) (passed, failed, noop, notEvidenced int)
 			fmt.Printf("  ⦸ %s: NO-OP (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
 			failed++
 			noop++
+		case r.EvidenceUntrusted:
+			fmt.Printf("  ‽ %s: UNTRUSTED (evidence check unreliable — an earlier event-burst reset failed mid-run) (%s)\n",
+				r.Field, fmtDuration(r.Duration))
+			failed++
+			untrusted++
 		case r.NotEvidenced:
 			fmt.Printf("  ⚡ %s: NOT-EVIDENCED (%v) (%s)\n", r.Field, r.Error, fmtDuration(r.Duration))
 			failed++
@@ -213,7 +233,7 @@ func printResults(results []TestResult) (passed, failed, noop, notEvidenced int)
 		fmt.Println("  Differential: all non-target fields stable ✓")
 		fmt.Println()
 	}
-	return passed, failed, noop, notEvidenced
+	return passed, failed, noop, notEvidenced, untrusted
 }
 
 // printSideEffects prints the fields that changed unexpectedly alongside a

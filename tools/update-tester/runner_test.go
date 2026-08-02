@@ -18,6 +18,11 @@ const testFieldNotifyDelay = "notifyDelay"
 // and in config_test.go.
 const testIPv6NetworkPrefix = "ipv6network/"
 
+// kubectlGetSubcommand is the kubectl "get" subcommand name, shared across
+// this file's fakeCluster dispatcher and the restartControllerDeployment
+// argv assertions so the literal isn't repeated enough to trip goconst.
+const kubectlGetSubcommand = "get"
+
 // fakeCluster is an in-memory stand-in for a live cluster's view of a single
 // managed resource. It implements the subset of kubectl behaviour Runner
 // depends on (get -o json, get -o jsonpath=..., get events, patch, wait) so
@@ -90,7 +95,7 @@ func (f *fakeCluster) exec(args []string) (string, error) {
 		return "", fmt.Errorf("fakeCluster: no args")
 	}
 	switch args[0] {
-	case "get":
+	case kubectlGetSubcommand:
 		return f.handleGet(args)
 	case "patch":
 		return f.handlePatch(args)
@@ -846,7 +851,12 @@ func TestRunTestsBelowCeilingNeverRestarts(t *testing.T) {
 // TestRunTestsRestartFailureDoesNotAbortRun confirms a failed burst reset
 // degrades gracefully: the run continues (later fields may lose evidence,
 // but the whole test suite must not abort) rather than the tool crashing or
-// silently swallowing the rest of the manifest.
+// silently swallowing the rest of the manifest. It also asserts the
+// degraded-state signal a reviewer depends on: every field tested from the
+// point of the failed reset onward must come back EvidenceUntrusted (not a
+// clean, silently-trusted PASS or NotEvidenced), while fields tested before
+// the failure are unaffected. This is what stops "0 not-evidenced" from
+// ever printing as a clean verdict once a reset has failed mid-run.
 func TestRunTestsRestartFailureDoesNotAbortRun(t *testing.T) {
 	const numFields = eventBurstCeiling + 2
 	f := &fakeCluster{
@@ -871,4 +881,151 @@ func TestRunTestsRestartFailureDoesNotAbortRun(t *testing.T) {
 	if len(results) != numFields {
 		t.Fatalf("got %d results, want %d — a failed restart must not abort the run", len(results), numFields)
 	}
+
+	// The proactive reset attempt fires immediately before the field at
+	// index eventBurstCeiling (the (eventBurstCeiling+1)th field). Every
+	// field before that index ran while the burst was still trusted; every
+	// field from that index onward ran after the failed reset.
+	for i, res := range results {
+		wantUntrusted := i >= eventBurstCeiling
+		if res.EvidenceUntrusted != wantUntrusted {
+			t.Errorf("field %d (%s): got EvidenceUntrusted=%v, want %v", i, res.Field, res.EvidenceUntrusted, wantUntrusted)
+		}
+	}
+
+	untrusted := 0
+	for _, res := range results {
+		if res.EvidenceUntrusted {
+			untrusted++
+		}
+	}
+	wantUntrustedCount := numFields - eventBurstCeiling
+	if untrusted != wantUntrustedCount {
+		t.Errorf("got %d EvidenceUntrusted results, want %d", untrusted, wantUntrustedCount)
+	}
+
+	// printResults must fail the run outright when any result is
+	// EvidenceUntrusted, regardless of what each field's own Passed/
+	// NotEvidenced value happened to be — a reset failure must not be
+	// something a lucky run can print a clean PASS through.
+	_, failed, _, _, gotUntrustedCount := printResults(results)
+	if failed == 0 {
+		t.Error("printResults: got failed=0, want failed>0 — a run containing an untrusted result must never report a clean pass")
+	}
+	if gotUntrustedCount != wantUntrustedCount {
+		t.Errorf("printResults: got untrusted=%d, want %d", gotUntrustedCount, wantUntrustedCount)
+	}
+}
+
+// TestRestartControllerDeploymentResolvesViaPodLabel exercises
+// restartControllerDeployment's actual kubectl argv through execFunc,
+// simulating a fake kubectl that mirrors a live Crossplane v2.2.1 cluster:
+// `kubectl get deploy -l pkg.crossplane.io/revision` never matches anything
+// (the label is absent from the Deployment's own metadata.labels), while
+// `kubectl get pods -l pkg.crossplane.io/revision` resolves the controller
+// Pod and its pkg.crossplane.io/revision label carries the exact Deployment
+// name. This is the regression test for the bug the rest of this file's
+// restartFunc-injected tests could never catch, because they bypass
+// restartControllerDeployment entirely.
+func TestRestartControllerDeploymentResolvesViaPodLabel(t *testing.T) {
+	const deploymentName = "provider-infobloxnios-000000000000"
+	var gotArgs [][]string
+	r := &Runner{
+		execFunc: func(args []string) (string, error) {
+			gotArgs = append(gotArgs, append([]string(nil), args...))
+			switch {
+			case len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "deploy":
+				// A selector against the Deployment's own metadata.labels
+				// never matches on a live cluster — mirror kubectl's
+				// real "index out of bounds" failure for an empty list
+				// rather than returning an empty string, so a caller that
+				// mistakenly still queries "get deploy -l ..." is caught
+				// by an error, not a silently-empty name.
+				return "", fmt.Errorf("array index out of bounds: index 0, length 0")
+			case len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "pods":
+				return deploymentName + "\n", nil
+			case args[0] == "rollout" && args[1] == "restart":
+				return "", nil
+			case args[0] == "rollout" && args[1] == "status":
+				return "", nil
+			default:
+				return "", fmt.Errorf("unexpected kubectl invocation: %v", args)
+			}
+		},
+	}
+
+	if err := r.restartControllerDeployment(); err != nil {
+		t.Fatalf("restartControllerDeployment: unexpected error: %v", err)
+	}
+
+	var sawPodSelector, sawDeploymentLabelSelector, sawRolloutRestart, sawRolloutStatus bool
+	for _, args := range gotArgs {
+		if len(args) < 2 {
+			continue
+		}
+		switch {
+		case args[0] == kubectlGetSubcommand && args[1] == "pods":
+			sawPodSelector = true
+			if !containsArg(args, providerDeploymentSelector) {
+				t.Errorf("get pods argv missing selector %q: %v", providerDeploymentSelector, args)
+			}
+		case args[0] == kubectlGetSubcommand && args[1] == "deploy":
+			sawDeploymentLabelSelector = true
+		case args[0] == "rollout" && args[1] == "restart":
+			sawRolloutRestart = true
+			if !containsArg(args, "deploy/"+deploymentName) {
+				t.Errorf("rollout restart argv missing target %q: %v", "deploy/"+deploymentName, args)
+			}
+		case args[0] == "rollout" && args[1] == "status":
+			sawRolloutStatus = true
+			if !containsArg(args, "deploy/"+deploymentName) {
+				t.Errorf("rollout status argv missing target %q: %v", "deploy/"+deploymentName, args)
+			}
+		}
+	}
+	if !sawPodSelector {
+		t.Error("expected restartControllerDeployment to resolve the Deployment name via `kubectl get pods -l ...`")
+	}
+	if sawDeploymentLabelSelector {
+		t.Error("restartControllerDeployment must not query `kubectl get deploy -l ...` — that selector never matches on a live cluster (see providerDeploymentSelector)")
+	}
+	if !sawRolloutRestart {
+		t.Error("expected a `kubectl rollout restart deploy/<name>` call")
+	}
+	if !sawRolloutStatus {
+		t.Error("expected a `kubectl rollout status deploy/<name>` call")
+	}
+}
+
+// TestRestartControllerDeploymentPodResolutionFailure asserts that a
+// resolution failure (no matching Pod — the exact live symptom the
+// underlying bug produced) is surfaced as an error rather than silently
+// treated as a no-op restart.
+func TestRestartControllerDeploymentPodResolutionFailure(t *testing.T) {
+	r := &Runner{
+		execFunc: func(args []string) (string, error) {
+			if len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "pods" {
+				return "", fmt.Errorf("array index out of bounds: index 0, length 0")
+			}
+			return "", fmt.Errorf("unexpected kubectl invocation: %v", args)
+		},
+	}
+
+	err := r.restartControllerDeployment()
+	if err == nil {
+		t.Fatal("expected an error when no controller Pod can be resolved, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolving provider deployment") {
+		t.Errorf("error %q does not indicate deployment resolution failed", err.Error())
+	}
+}
+
+// containsArg reports whether want appears anywhere in args.
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
