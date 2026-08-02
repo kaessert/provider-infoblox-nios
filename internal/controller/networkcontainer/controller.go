@@ -8,24 +8,30 @@
 // compose.
 //
 // WAPI represents IPv4 and IPv6 network containers as two distinct object
-// types (`networkcontainer` and `ipv6networkcontainer`); this provider
-// exposes both through a single NetworkContainer MR and selects the wire
-// object type at runtime from the CIDR family of spec.forProvider.network
-// (see isIPv6CIDR). Once created, the resource's `_ref` already encodes
-// the object type, so Observe/Update/Delete (all ref-scoped calls) never
-// need to re-derive it.
+// types (`networkcontainer` and `ipv6networkcontainer`) — a
+// DUAL-OBJECT-TYPE resource. This provider exposes both through a single
+// NetworkContainer MR and selects the wire object type at runtime from
+// the CIDR family of whichever spec field carries CIDR information (see
+// networkContainerFamily). The family is unknown only on the
+// filterParams-only allocation path (no CIDR anywhere in spec) — that
+// case is never silently assumed to be v4; see
+// resolveNetworkContainerIdentityUnknownFamily.
 //
 // networkView and network (the CIDR) are immutable identity fields —
 // both are absent from UpdateNetworkContainer's parameter list, and WAPI
 // rejects attempts to move a container between network views or resize
 // it in place.
 //
+// NetworkContainer is wired to the UID-in-EA object-identity ladder (see
+// the internal/clients/identity package doc): the WAPI _ref every create
+// call returns is a derived handle, not a stable backend-assigned ID —
+// so this controller stamps the managed resource's own metadata.uid onto
+// the Grid object as an extensible attribute and resolves every
+// Observe/Delete through the shared identity.Resolve ladder instead of
+// trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
-//
-// This provider has no shared internal/clients package — each resource
-// controller package defines its own credential bridge (mirrors the
-// ARecord/recorda controller package).
 package networkcontainer
 
 import (
@@ -48,7 +54,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkcontainer/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkcontainer/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -73,7 +79,18 @@ const (
 	errParentCidrAndFilterParams = "parentCidr and filterParams are mutually exclusive"
 	errAllocatePrefixLenRequired = "allocatePrefixLen is required when parentCidr or filterParams is set"
 	errMissingAllocationInput    = "one of network, parentCidr, or filterParams is required"
+
+	errEmptyUID                  = "cannot stamp NetworkContainer identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// See the doc on this constant in the recorda package for the full
+// rationale — production code always goes through Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -126,18 +143,21 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
+// newObjectManager constructs an authenticated identity.ManagerAndConnector
+// from the given credentials — the SDK's high-level ObjectManager for the
+// ordinary CRUD calls, and the lower-level Connector the identity ladder
+// needs directly (it operates below ObjectManager's typed methods so it
+// can see search match counts). The Connector performs HTTP Basic Auth on
 // every request and only validates configuration locally — no network
 // round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -167,10 +187,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -308,12 +328,15 @@ func isNotFound(err error) bool {
 // (comment, extAttrs) against the observed NetworkContainer. parentCidr,
 // allocatePrefixLen, and filterParams are also excluded — they are
 // create-time-only inputs to the allocation call, never echoed back by
-// the WAPI response, so there is nothing to compare them against.
+// the WAPI response, so there is nothing to compare them against. The
+// Grid's extattrs map is compared with the provider's own identity stamp
+// stripped out (identity.Strip): the CRD schema never includes that
+// reserved key, so leaving it in would produce a permanent phantom diff.
 func isUpToDate(comment *string, extAttrs map[string]string, nc *ibclient.NetworkContainer) bool {
 	if strOrEmpty(comment) != nc.Comment {
 		return false
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(nc.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(nc.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (network,
@@ -324,7 +347,11 @@ func isUpToDate(comment *string, extAttrs map[string]string, nc *ibclient.Networ
 // paths — this back-fills it with the server-allocated CIDR so it
 // becomes the stable identity for future Observe/Update cycles.
 // networkView (required, immutable) is always user-supplied and never
-// late-initialized. Returns true if any field was changed.
+// late-initialized. extAttrs is back-filled with the provider's own
+// identity stamp stripped out (identity.Strip) — the CRD schema never
+// includes that reserved key, so late-initializing it into
+// spec.forProvider would fail CEL validation and produce a permanent
+// diff. Returns true if any field was changed.
 func lateInitialize(network, comment **string, extAttrs *map[string]string, nc *ibclient.NetworkContainer) bool {
 	changed := false
 
@@ -339,7 +366,7 @@ func lateInitialize(network, comment **string, extAttrs *map[string]string, nc *
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromNC := extAttrsFromEA(nc.Ea); len(fromNC) > 0 {
+		if fromNC := extAttrsFromEA(identity.Strip(nc.Ea)); len(fromNC) > 0 {
 			*extAttrs = fromNC
 			changed = true
 		}
@@ -364,9 +391,14 @@ type observedNetworkContainer struct {
 
 // observeFromNetworkContainer extracts the fields mirrored by
 // NetworkContainerObservation (the full-mirror AtProvider convention)
-// from a WAPI NetworkContainer response fetched via
-// GetNetworkContainerByRef (which requests extattrs, network,
-// network_view, and comment by default — see ibclient.NewNetworkContainer).
+// from a WAPI NetworkContainer response fetched via the identity ladder
+// (which requests extattrs, network, network_view, and comment by
+// default — see ibclient.NewNetworkContainer). ExtAttrs intentionally
+// mirrors the Grid's complete extattrs map, including the provider's own
+// identity stamp — unlike isUpToDate and lateInitialize, AtProvider is a
+// read-only status mirror, not compared against spec.forProvider, so
+// surfacing the stamp there is informative rather than a source of
+// phantom drift.
 func observeFromNetworkContainer(externalID string, nc *ibclient.NetworkContainer) observedNetworkContainer {
 	o := observedNetworkContainer{
 		ID:       externalID,
@@ -395,10 +427,16 @@ func observeFromNetworkContainer(externalID string, nc *ibclient.NetworkContaine
 
 // createNetworkContainer issues the WAPI create call for the static-CIDR
 // path, selecting the networkcontainer/ipv6networkcontainer object type
-// from the CIDR family of network.
-func createNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, comment *string, extAttrs map[string]string) (*ibclient.NetworkContainer, error) {
+// from the CIDR family of network. Stamps the owning managed resource's
+// uid into the object's extensible attributes in the same request that
+// creates it (identity.Stamp).
+func createNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	cidr := strOrEmpty(network)
-	return objMgr.CreateNetworkContainer(strOrEmpty(networkView), cidr, isIPv6CIDR(cidr), strOrEmpty(comment), buildEA(extAttrs))
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.CreateNetworkContainer(strOrEmpty(networkView), cidr, isIPv6CIDR(cidr), strOrEmpty(comment), ea)
 }
 
 // createOrAllocateNetworkContainer routes NetworkContainer creation across
@@ -415,28 +453,42 @@ func createNetworkContainer(objMgr ibclient.IBObjectManager, networkView, networ
 // AllocateNetworkContainerByEA has no parent CIDR to infer the address
 // family from, so isIPv6 is always passed as false for that path —
 // EA-based allocation of an IPv6 container would require an explicit
-// ipVersion field on the CRD, which this catalog does not define.
-func createOrAllocateNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, parentCidr, comment *string, allocatePrefixLen *uint, filterParams, extAttrs map[string]string) (*ibclient.NetworkContainer, error) {
+// ipVersion field on the CRD, which this catalog does not define. This is
+// a CREATE-time decision only; it does NOT extend to the identity SEARCH
+// step during Observe/Delete for objects created this way — see
+// resolveNetworkContainerIdentityUnknownFamily, which searches both
+// object types rather than assuming this create-time convention still
+// holds.
+//
+// Every leaf SDK call stamps the owning managed resource's uid into the
+// object's extensible attributes in the same request that creates it
+// (identity.Stamp).
+func createOrAllocateNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, parentCidr, comment *string, allocatePrefixLen *uint, filterParams, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	if strOrEmpty(parentCidr) != "" && len(filterParams) > 0 {
 		return nil, errors.New(errParentCidrAndFilterParams)
 	}
 
 	switch {
 	case strOrEmpty(network) != "":
-		return createNetworkContainer(objMgr, networkView, network, comment, extAttrs)
+		return createNetworkContainer(objMgr, networkView, network, comment, extAttrs, uid)
 
 	case strOrEmpty(parentCidr) != "":
 		if allocatePrefixLen == nil {
 			return nil, errors.New(errAllocatePrefixLenRequired)
 		}
 		cidr := strOrEmpty(parentCidr)
-		return objMgr.AllocateNetworkContainer(strOrEmpty(networkView), cidr, isIPv6CIDR(cidr), *allocatePrefixLen, strOrEmpty(comment), buildEA(extAttrs))
+		ea := identity.Stamp(buildEA(extAttrs), uid)
+		return objMgr.AllocateNetworkContainer(strOrEmpty(networkView), cidr, isIPv6CIDR(cidr), *allocatePrefixLen, strOrEmpty(comment), ea)
 
 	case len(filterParams) > 0:
 		if allocatePrefixLen == nil {
 			return nil, errors.New(errAllocatePrefixLenRequired)
 		}
-		return objMgr.AllocateNetworkContainerByEA(strOrEmpty(networkView), false, strOrEmpty(comment), buildEA(extAttrs), filterParams, *allocatePrefixLen)
+		ea := identity.Stamp(buildEA(extAttrs), uid)
+		return objMgr.AllocateNetworkContainerByEA(strOrEmpty(networkView), false, strOrEmpty(comment), ea, filterParams, *allocatePrefixLen)
 
 	default:
 		// Unreachable in practice — the CRD's XValidation rule requires one
@@ -450,13 +502,17 @@ func createOrAllocateNetworkContainer(objMgr ibclient.IBObjectManager, networkVi
 // UpdateNetworkContainer has no parameters for them; its internal
 // GET-modify-PUT cycle only requests extattrs/comment, and explicitly
 // clears NetviewName before sending so it never leaks into the PUT body.
-func updateNetworkContainer(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string) (*ibclient.NetworkContainer, error) {
-	return objMgr.UpdateNetworkContainer(ref, buildEA(extAttrs), strOrEmpty(comment))
-}
-
-// getNetworkContainerByRef issues the WAPI get-by-ref call.
-func getNetworkContainerByRef(objMgr ibclient.IBObjectManager, ref string) (*ibclient.NetworkContainer, error) {
-	return objMgr.GetNetworkContainerByRef(ref)
+// Every call re-asserts the identity stamp (identity.Stamp) in the
+// extattrs it sends. Live verification against a real NIOS Grid Manager
+// confirmed that a PUT carrying an extattrs object *replaces* the whole
+// map — it is not a per-key merge — so omitting the stamp here would wipe
+// it off the object on the very first field update after create.
+func updateNetworkContainer(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.UpdateNetworkContainer(ref, ea, strOrEmpty(comment))
 }
 
 // deleteNetworkContainer issues the WAPI delete call.
@@ -465,55 +521,219 @@ func deleteNetworkContainer(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// networkContainerExistsByNaturalKey reports whether a live
-// NetworkContainer still exists under the CR's own (networkView, cidr)
-// identity — the same fields WAPI uses to compute the _ref. Used by
-// Delete() when the stored _ref 404s: a hit here means the _ref is
-// merely stale, not that the object is gone. The search is skipped
-// (found=false) when either networkView or cidr is empty — there is no
-// way to re-discover the object in that case. eaSearch is always passed
-// as nil — it is an optional additional filter; omitting it still
-// filters correctly on networkView+cidr alone.
-func networkContainerExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, cidr *string) (bool, error) {
-	nv := strOrEmpty(networkView)
-	c := strOrEmpty(cidr)
-	if nv == "" || c == "" {
-		return false, nil
-	}
-	_, err := objMgr.GetNetworkContainer(nv, c, isIPv6CIDR(c), nil)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteNetworkContainerResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live network container, deleting is
-// refused because ownership of that container cannot be verified from
-// the search alone (see the staleref package doc for the full
-// rationale).
-func deleteNetworkContainerResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, cidr *string) error {
-	delErr := deleteNetworkContainer(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteNetworkContainer)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := networkContainerExistsByNaturalKey(objMgr, networkView, cidr)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteNetworkContainer)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. See recorda's doc
+// for the full rationale.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// newEmptyNetworkContainer builds the query/candidate object the identity
+// ladder issues both the ref-fetch and the identity-EA search through,
+// selecting the correct WAPI object type ("networkcontainer" vs
+// "ipv6networkcontainer") for the given family. There is no
+// NewEmptyNetworkContainer constructor in the SDK — NewNetworkContainer
+// with empty netview/cidr/comment/nil ea is used purely to obtain a
+// correctly-typed candidate object (it still sets objectType and
+// ReturnFields as if constructing a real one). A bare
+// &ibclient.NetworkContainer{} would leave the unexported objectType
+// field at its zero value (""), which is the dual-object-type hazard this
+// wrapper exists to close — see the newEmpty correctness test.
+func newEmptyNetworkContainer(isIPv6 bool) func() *ibclient.NetworkContainer {
+	return func() *ibclient.NetworkContainer {
+		return ibclient.NewNetworkContainer("", "", isIPv6, "", nil)
+	}
+}
+
+// networkContainerFamily derives the address family an identity search
+// should target from whichever spec field carries CIDR information:
+// network (static-CIDR path) or parentCidr (allocate-from-parent path) —
+// both are always present in spec for their respective creation paths, so
+// the family is derivable from either. The filterParams-only allocation
+// path has no CIDR anywhere in spec: ok=false signals that case, and the
+// caller must NOT guess — see resolveNetworkContainerIdentityUnknownFamily.
+func networkContainerFamily(network, parentCidr *string) (isIPv6, ok bool) {
+	if c := strOrEmpty(network); c != "" {
+		return isIPv6CIDR(c), true
+	}
+	if c := strOrEmpty(parentCidr); c != "" {
+		return isIPv6CIDR(c), true
+	}
+	return false, false
+}
+
+// resolveNetworkContainerIdentity resolves the NetworkContainer
+// identified by ref/uid through the shared UID-in-EA ladder, selecting
+// the correct WAPI object type for the identity-EA search from whichever
+// spec field carries CIDR information (networkContainerFamily). Family
+// only matters for the search step: a fetch by ref addresses the object
+// directly (BuildUrl ignores objType whenever ref is non-empty), so a
+// resolving ref never touches the family logic at all — see the ref!=""
+// branch below, which tries the ref with an arbitrary family and only
+// consults networkContainerFamily's "unknown" fallback if that ref-fetch
+// itself falls through to a (necessarily family-scoped) search and finds
+// nothing.
+func resolveNetworkContainerIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string, network, parentCidr *string) (*ibclient.NetworkContainer, identity.Outcome, error) {
+	if isIPv6, ok := networkContainerFamily(network, parentCidr); ok {
+		return identity.Resolve[*ibclient.NetworkContainer](ctx, conn, newEmptyNetworkContainer(isIPv6), ref, uid)
+	}
+	if ref != "" {
+		obj, outcome, err := identity.Resolve[*ibclient.NetworkContainer](ctx, conn, newEmptyNetworkContainer(false), ref, uid)
+		if err != nil || outcome != identity.OutcomeNotFound {
+			return obj, outcome, err
+		}
+		// ref 404'd and family is unknown — fall through to the dual
+		// search below rather than trusting the (arbitrarily v4-scoped)
+		// NotFound this ref-fetch attempt produced.
+	}
+	return resolveNetworkContainerIdentityUnknownFamily(ctx, conn, uid)
+}
+
+// resolveNetworkContainerIdentityUnknownFamily handles the
+// filterParams-only allocation case: no CIDR anywhere in spec to derive
+// a family from. Both object types are searched and the results are
+// unioned — a match under both types is refused as ambiguous rather than
+// resolved by picking one, and a match under neither means the object
+// genuinely does not exist. This function does NOT default to v4: doing
+// so would silently miss an IPv6 object stamped with this uid, which is
+// exactly the duplicate-creation hazard the identity ladder exists to
+// close.
+func resolveNetworkContainerIdentityUnknownFamily(ctx context.Context, conn ibclient.IBConnector, uid string) (*ibclient.NetworkContainer, identity.Outcome, error) {
+	v4, outV4, errV4 := identity.Resolve[*ibclient.NetworkContainer](ctx, conn, newEmptyNetworkContainer(false), "", uid)
+	if errV4 != nil {
+		return nil, identity.OutcomeNotFound, errV4
+	}
+	v6, outV6, errV6 := identity.Resolve[*ibclient.NetworkContainer](ctx, conn, newEmptyNetworkContainer(true), "", uid)
+	if errV6 != nil {
+		return nil, identity.OutcomeNotFound, errV6
+	}
+
+	foundV4 := outV4 == identity.OutcomeFoundByUID
+	foundV6 := outV6 == identity.OutcomeFoundByUID
+	switch {
+	case foundV4 && foundV6:
+		return nil, identity.OutcomeNotFound, &identity.AmbiguousMatchError{ObjectType: "networkcontainer/ipv6networkcontainer", UID: uid, Count: 2}
+	case foundV4:
+		return v4, identity.OutcomeFoundByUID, nil
+	case foundV6:
+		return v6, identity.OutcomeFoundByUID, nil
+	default:
+		return nil, identity.OutcomeNotFound, nil
+	}
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// NetworkContainer through the identity ladder during Observe — common to
+// both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	nc           *ibclient.NetworkContainer
+	obs          observedNetworkContainer
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeNetworkContainer runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeNetworkContainer(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, network, comment **string, parentCidr *string, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	nc, outcome, err := resolveNetworkContainerIdentity(ctx, conn, ref, uid, *network, parentCidr)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		nc:      nc,
+		obs:     observeFromNetworkContainer(nc.Ref, nc),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(network, comment, extAttrs, nc)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = nc.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteNetworkContainerIdentity issues the WAPI delete for the
+// NetworkContainer this managed resource owns, resolving through the
+// identity ladder first so a stale _ref is never mistaken for a deleted
+// object.
+func deleteNetworkContainerIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string, network, parentCidr *string) error {
+	obj, outcome, err := resolveNetworkContainerIdentity(ctx, conn, ref, uid, network, parentCidr)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteNetworkContainer)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteNetworkContainer(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteNetworkContainer)
+	default:
+		return errors.New("identity: unresolved NetworkContainer outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

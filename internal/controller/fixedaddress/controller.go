@@ -10,6 +10,20 @@
 // object type is runtime-selected between "fixedaddress" (IPv4) and
 // "ipv6fixedaddress" (IPv6) based on which of ipv4addr/ipv6addr is set.
 //
+// Unlike Network/NetworkContainer, the address family here is ALWAYS
+// derivable directly from spec: the CRD's CEL rule guarantees exactly one
+// of ipv4addr/ipv6addr is set for the lifetime of the object, so there is
+// no "unknown family" identity-search case to handle — see
+// fixedAddressFields.isIPv6.
+//
+// FixedAddress is wired to the UID-in-EA object-identity ladder (see the
+// internal/clients/identity package doc): the WAPI _ref every create
+// call returns is a derived handle, not a stable backend-assigned ID —
+// so this controller stamps the managed resource's own metadata.uid onto
+// the Grid object as an extensible attribute and resolves every
+// Observe/Delete through the shared identity.Resolve ladder instead of
+// trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package fixedaddress
@@ -34,28 +48,38 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveFixedAddress = "cannot observe FixedAddress"
-	errCreateFixedAddress  = "cannot create FixedAddress"
-	errUpdateFixedAddress  = "cannot update FixedAddress"
-	errDeleteFixedAddress  = "cannot delete FixedAddress"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveFixedAddress       = "cannot observe FixedAddress"
+	errCreateFixedAddress        = "cannot create FixedAddress"
+	errUpdateFixedAddress        = "cannot update FixedAddress"
+	errDeleteFixedAddress        = "cannot delete FixedAddress"
+	errEmptyUID                  = "cannot stamp FixedAddress identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// See the doc on this constant in the recorda package for the full
+// rationale — production code always goes through Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -118,18 +142,21 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
+// newObjectManager constructs an authenticated identity.ManagerAndConnector
+// from the given credentials — the SDK's high-level ObjectManager for the
+// ordinary CRUD calls, and the lower-level Connector the identity ladder
+// needs directly (it operates below ObjectManager's typed methods so it
+// can see search match counts). The Connector performs HTTP Basic Auth on
 // every request and only validates configuration locally — no network
 // round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -159,10 +186,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── Scope-agnostic field model ──────────────────────────────────────────
@@ -525,7 +552,7 @@ func isUpToDateAddress(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
 	if strOrEmpty(f.Comment) != fa.Comment {
 		return false
 	}
-	return extAttrsEqual(f.ExtAttrs, extAttrsFromEA(fa.Ea))
+	return extAttrsEqual(f.ExtAttrs, extAttrsFromEA(identity.Strip(fa.Ea)))
 }
 
 // isUpToDateDHCP compares the DHCP-relay and options fields.
@@ -648,7 +675,7 @@ func lateInitializeIdentityMeta(f *fixedAddressFields, fa *ibclient.FixedAddress
 		changed = true
 	}
 	if len(f.ExtAttrs) == 0 {
-		if fromFA := extAttrsFromEA(fa.Ea); len(fromFA) > 0 {
+		if fromFA := extAttrsFromEA(identity.Strip(fa.Ea)); len(fromFA) > 0 {
 			f.ExtAttrs = fromFA
 			changed = true
 		}
@@ -802,13 +829,20 @@ func observeFromFixedAddress(externalID string, fa *ibclient.FixedAddress) obser
 
 // createFixedAddress issues the WAPI create call. NON-STANDARD: the WAPI
 // create wrapper is AllocateIP, not a Create<Resource>-named method — see
-// the package doc comment.
-func createFixedAddress(objMgr ibclient.IBObjectManager, f fixedAddressFields) (*ibclient.FixedAddress, error) {
+// the package doc comment. Stamps the owning managed resource's uid into
+// the object's extensible attributes in the same request that creates it
+// (identity.Stamp) — there is no follow-up call, so there is no window in
+// which the object exists without its identity stamp.
+func createFixedAddress(objMgr ibclient.IBObjectManager, f fixedAddressFields, uid string) (*ibclient.FixedAddress, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	isIPv6 := f.isIPv6()
 	ipAddr := strOrEmpty(f.IPv4Addr)
 	if isIPv6 {
 		ipAddr = strOrEmpty(f.IPv6Addr)
 	}
+	ea := identity.Stamp(buildEA(f.ExtAttrs), uid)
 	return objMgr.AllocateIP(
 		strOrEmpty(f.NetworkView),
 		strOrEmpty(f.Network),
@@ -817,7 +851,7 @@ func createFixedAddress(objMgr ibclient.IBObjectManager, f fixedAddressFields) (
 		strOrEmpty(f.MAC),
 		strOrEmpty(f.Name),
 		strOrEmpty(f.Comment),
-		buildEA(f.ExtAttrs),
+		ea,
 		strOrEmpty(f.MatchClient),
 		strOrEmpty(f.AgentCircuitID),
 		strOrEmpty(f.AgentRemoteID),
@@ -849,14 +883,23 @@ func matchClientForUpdate(desired, observed *string, isIPv6 bool) string {
 	return matchClientDefault
 }
 
-// updateFixedAddress issues the WAPI update call.
-func updateFixedAddress(objMgr ibclient.IBObjectManager, ref string, f fixedAddressFields, observedMatchClient *string) (*ibclient.FixedAddress, error) {
+// updateFixedAddress issues the WAPI update call. Every call re-asserts
+// the identity stamp (identity.Stamp) in the extattrs it sends. Live
+// verification against a real NIOS Grid Manager confirmed that a PUT
+// carrying an extattrs object *replaces* the whole map — it is not a
+// per-key merge — so omitting the stamp here would wipe it off the
+// object on the very first field update after create.
+func updateFixedAddress(objMgr ibclient.IBObjectManager, ref string, f fixedAddressFields, observedMatchClient *string, uid string) (*ibclient.FixedAddress, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	isIPv6 := f.isIPv6()
 	ipAddr := strOrEmpty(f.IPv4Addr)
 	if isIPv6 {
 		ipAddr = strOrEmpty(f.IPv6Addr)
 	}
 	matchClient := matchClientForUpdate(f.MatchClient, observedMatchClient, isIPv6)
+	ea := identity.Stamp(buildEA(f.ExtAttrs), uid)
 	return objMgr.UpdateFixedAddress(
 		ref,
 		strOrEmpty(f.NetworkView),
@@ -866,7 +909,7 @@ func updateFixedAddress(objMgr ibclient.IBObjectManager, ref string, f fixedAddr
 		matchClient,
 		strOrEmpty(f.MAC),
 		strOrEmpty(f.Comment),
-		buildEA(f.ExtAttrs),
+		ea,
 		strOrEmpty(f.AgentCircuitID),
 		strOrEmpty(f.AgentRemoteID),
 		f.ClientIdentifierPrependZero,
@@ -883,62 +926,144 @@ func deleteFixedAddress(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// fixedAddressExistsByNaturalKey reports whether a live FixedAddress
-// still exists under the CR's own (networkView, network, ipAddr, isIPv6,
-// mac/duid) identity — the same fields WAPI uses to compute the _ref.
-// Used by Delete() when the stored _ref 404s: a hit here means the _ref
-// is merely stale, not that the object is gone. GetFixedAddress always
-// filters on network_view and network regardless of emptiness, so this
-// search is skipped (found=false) when any of network view, network, or
-// the IP address is empty — there is no way to re-discover the object in
-// that case. GetFixedAddress itself returns (nil, nil) — not a
-// *NotFoundError — when the search matches nothing, so both a nil
-// result and a classified-404 error are treated as "not found".
-func fixedAddressExistsByNaturalKey(objMgr ibclient.IBObjectManager, f fixedAddressFields) (bool, error) {
-	isIPv6 := f.isIPv6()
-	ipAddr := strOrEmpty(f.IPv4Addr)
-	if isIPv6 {
-		ipAddr = strOrEmpty(f.IPv6Addr)
-	}
-	if strOrEmpty(f.NetworkView) == "" || strOrEmpty(f.Network) == "" || ipAddr == "" {
-		return false, nil
-	}
-	rec, err := objMgr.GetFixedAddress(strOrEmpty(f.NetworkView), strOrEmpty(f.Network), ipAddr, isIPv6, strOrEmpty(f.MAC))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	if rec == nil {
-		return false, nil
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteFixedAddressResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteFixedAddressResolving404(objMgr ibclient.IBObjectManager, ref string, f fixedAddressFields) error {
-	delErr := deleteFixedAddress(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteFixedAddress)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := fixedAddressExistsByNaturalKey(objMgr, f)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteFixedAddress)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. See recorda's doc
+// for the full rationale.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// newEmptyFixedAddress builds the query/candidate object the identity
+// ladder issues both the ref-fetch and the identity-EA search through,
+// selecting the correct WAPI object type ("fixedaddress" vs
+// "ipv6fixedaddress") for the given family. Unlike Network/
+// NetworkContainer, FixedAddress's family is always known from spec (see
+// the package doc comment), so there is no dual-search fallback to write.
+func newEmptyFixedAddress(isIPv6 bool) func() *ibclient.FixedAddress {
+	return func() *ibclient.FixedAddress {
+		return ibclient.NewEmptyFixedAddress(isIPv6)
+	}
+}
+
+// resolveFixedAddressIdentity resolves the FixedAddress identified by
+// ref/uid through the shared UID-in-EA ladder, using the given address
+// family to select the correct WAPI object type for the search step (see
+// newEmptyFixedAddress).
+func resolveFixedAddressIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string, isIPv6 bool) (*ibclient.FixedAddress, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.FixedAddress](ctx, conn, newEmptyFixedAddress(isIPv6), ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// FixedAddress through the identity ladder during Observe — common to
+// both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	fa           *ibclient.FixedAddress
+	obs          observedFixedAddress
+	refreshedRef string
+	adopted      bool
+}
+
+// observeFixedAddress runs the identity ladder for Observe. Unlike the
+// simpler resources, FixedAddress's late-init step needs scope-specific
+// type conversion (fixedAddressFields <-> the generated CRD type), so the
+// caller (cluster.go / namespaced.go) performs lateInitialize itself
+// using the returned observeResult.fa — this function only resolves
+// identity and builds the observation snapshot.
+func observeFixedAddress(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, isIPv6 bool) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	fa, outcome, err := resolveFixedAddressIdentity(ctx, conn, ref, uid, isIPv6)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		fa:      fa,
+		obs:     observeFromFixedAddress(fa.Ref, fa),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = fa.Ref
+	}
+
+	return res, nil
+}
+
+// deleteFixedAddressIdentity issues the WAPI delete for the FixedAddress
+// this managed resource owns, resolving through the identity ladder first
+// so a stale _ref is never mistaken for a deleted object.
+func deleteFixedAddressIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string, isIPv6 bool) error {
+	obj, outcome, err := resolveFixedAddressIdentity(ctx, conn, ref, uid, isIPv6)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteFixedAddress)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteFixedAddress(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteFixedAddress)
+	default:
+		return errors.New("identity: unresolved FixedAddress outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

@@ -20,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-ipv4sharednetwork.infobloxnios.crossplane.io"
@@ -75,12 +75,17 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.IPv4
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{
+		kube:     c.kube,
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements
@@ -88,43 +93,38 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.IPv4
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveIPv4SharedNetworkIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
-// Observe fetches the IPv4SharedNetwork from the WAPI by its _ref external
-// name and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the IPv4SharedNetwork through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec. See
+// observeIPv4SharedNetwork for the ladder itself.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling
-	// GetIpv4SharedNetworkByRef with the CR's Kubernetes name (not a real
-	// WAPI _ref) would error against the API on every reconcile until
-	// Create() overwrites the annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	sn, err := e.objMgr.GetIpv4SharedNetworkByRef(externalID)
+	res, err := observeIPv4SharedNetwork(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.NetworkView, &p.Comment, &p.Disable, &p.UseOptions, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := ipv4SharedNetworkExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.NetworkView, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveIPv4SharedNet)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveIPv4SharedNet)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromIPv4SharedNetwork(externalID, sn)
+	o := res.obs
 	cr.Status.AtProvider = clusterv1alpha1.IPv4SharedNetworkObservation{
 		Name:                  o.Name,
 		Networks:              o.Networks,
@@ -148,8 +148,7 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.IPv4Sha
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.NetworkView, &p.Comment, &p.Disable, &p.UseOptions, &p.ExtAttrs, o)
+	lateInit := res.lateInit
 	// Only back-fill options when useOptions is on (post-backfill value
 	// above). When it is off, the observed options are WAPI's own
 	// default set, not values implied by the user's config.
@@ -158,22 +157,47 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.IPv4Sha
 		lateInit = true
 	}
 
+	// A rotated or previously-unknown reference must be persisted
+	// through a path crossplane-runtime actually writes back to the API
+	// server. res.lateInit is already forced true alongside
+	// res.refreshedRef by observeIPv4SharedNetwork for exactly this
+	// reason.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
+
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts
+	// the identity stamp (see updateIPv4SharedNetwork).
+	upToDate := isUpToDate(p.Name, p.Networks, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options), res.sn) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.Networks, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options), sn),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
-// Create provisions a new IPv4SharedNetwork and records the
+// Create provisions a new IPv4SharedNetwork, stamping the managed
+// resource's own uid into the object's identity extensible attribute in
+// the same request (see createIPv4SharedNetwork), and records the
 // server-assigned _ref as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalCreation, error) {
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	sn, err := createIPv4SharedNetwork(e.objMgr, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options))
+	sn, err := createIPv4SharedNetwork(e.objMgr, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options), uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateIPv4SharedNet)
 	}
@@ -185,22 +209,23 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.IPv4Shar
 // Update patches the mutable IPv4SharedNetwork fields (name, networks,
 // comment, extattrs, disable, useOptions, options). networkView is
 // immutable and is never sent as the top-level network_view key — see
-// updateIPv4SharedNetwork.
+// updateIPv4SharedNetwork. Every call re-asserts the identity stamp since
+// a WAPI PUT carrying extattrs replaces the whole map rather than merging
+// it — live-verified against a real Grid.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	sn, err := updateIPv4SharedNetwork(e.objMgr, externalID, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options))
+	sn, err := updateIPv4SharedNetwork(e.objMgr, externalID, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromCluster(p.Options), string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateIPv4SharedNet)
 	}
 
 	// UpdateIpv4SharedNetwork always returns the object's current _ref.
-	// Name is mutable for this resource (per the external-name strategy
-	// table), and the WAPI _ref for a shared network embeds its name — so
-	// the external-name annotation must be refreshed here whenever the
-	// server returns a different _ref (renaming plays the same role it
-	// does for ARecord).
+	// Name is mutable for this resource, and the WAPI _ref for a shared
+	// network embeds its name — so the external-name annotation must be
+	// refreshed here whenever the server returns a different _ref
+	// (renaming plays the same role it does for ARecord).
 	if sn.Ref != "" && sn.Ref != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, sn.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
@@ -209,15 +234,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.IPv4Sh
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the IPv4SharedNetwork. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteIPv4SharedNetworkResolving404 — because the _ref is a derived
-// handle that rotates whenever an identity field changes, and a stale
-// handle 404s exactly like a genuinely deleted object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
+// Delete removes the IPv4SharedNetwork, resolving through the shared
+// identity ladder first — see deleteIPv4SharedNetworkIdentity for the
+// full ownership-verification rules a stale or rotated _ref must satisfy
+// before a delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteIPv4SharedNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Name); err != nil {
+	if err := deleteIPv4SharedNetworkIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

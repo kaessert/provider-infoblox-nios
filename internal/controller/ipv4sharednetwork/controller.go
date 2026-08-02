@@ -7,6 +7,15 @@
 // HTTP request/response envelope, so there is no internal REST client to
 // compose.
 //
+// IPv4SharedNetwork is wired to the UID-in-EA object-identity ladder (see
+// the internal/clients/identity package doc): the WAPI _ref every create
+// call returns is a derived handle — a rendering of the object's own
+// name, not a stable backend-assigned ID — so this controller stamps the
+// managed resource's own metadata.uid onto the Grid object as an
+// extensible attribute and resolves every Observe/Delete through the
+// shared identity.Resolve ladder instead of trusting the stored _ref
+// alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package ipv4sharednetwork
@@ -30,28 +39,38 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/ipv4sharednetwork/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage         = "cannot track ProviderConfig usage"
-	errPersistExternalName  = "cannot persist refreshed external name"
-	errGetPC                = "cannot get ProviderConfig"
-	errGetClusterPC         = "cannot get ClusterProviderConfig"
-	errUnsupportedKind      = "unsupported provider config kind"
-	errGetSecret            = "cannot get credentials secret"
-	errNoSecretRef          = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds     = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey       = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager     = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveIPv4SharedNet = "cannot observe IPv4SharedNetwork"
-	errCreateIPv4SharedNet  = "cannot create IPv4SharedNetwork"
-	errUpdateIPv4SharedNet  = "cannot update IPv4SharedNetwork"
-	errDeleteIPv4SharedNet  = "cannot delete IPv4SharedNetwork"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveIPv4SharedNet      = "cannot observe IPv4SharedNetwork"
+	errCreateIPv4SharedNet       = "cannot create IPv4SharedNetwork"
+	errUpdateIPv4SharedNet       = "cannot update IPv4SharedNetwork"
+	errDeleteIPv4SharedNet       = "cannot delete IPv4SharedNetwork"
+	errEmptyUID                  = "cannot stamp IPv4SharedNetwork identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+// See the doc on this constant in the recorda package for the full
+// rationale — production code always goes through Connect().
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -104,18 +123,18 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
+// newObjectManager constructs an authenticated identity.ManagerAndConnector
 // from the given credentials. The Connector performs HTTP Basic Auth on
 // every request and only validates configuration locally — no network
 // round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -145,10 +164,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -295,10 +314,7 @@ func isNotFound(err error) bool {
 // sharedNetworkDhcpOption is the scope-agnostic intermediate
 // representation of a WAPI Dhcpoption. Each scope's controller converts
 // its own generated IPv4SharedNetworkDhcpOption type to/from this
-// intermediate at the call site — see observedNetworkMember in the
-// network package for why an intermediate type is used instead of a
-// direct struct conversion (the cluster and namespaced DHCP option types
-// are structurally similar but are distinct named types).
+// intermediate at the call site.
 type sharedNetworkDhcpOption struct {
 	Name        *string
 	Num         *uint32
@@ -479,7 +495,10 @@ func networksFromSDK(networks []*ibclient.Ipv4Network) []string {
 
 // isUpToDate compares the desired mutable IPv4SharedNetwork fields against
 // the observed ibclient.SharedNetwork. networkView is intentionally
-// excluded — it is immutable.
+// excluded — it is immutable. The Grid's extattrs map is compared with
+// the provider's own identity stamp stripped out (identity.Strip): the
+// CRD schema never includes that reserved key, so leaving it in would
+// produce a permanent phantom diff.
 func isUpToDate(name *string, networks []string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption, sn *ibclient.SharedNetwork) bool {
 	if strOrEmpty(name) != strOrEmpty(sn.Name) {
 		return false
@@ -490,7 +509,7 @@ func isUpToDate(name *string, networks []string, comment *string, extAttrs map[s
 	if strOrEmpty(comment) != strOrEmpty(sn.Comment) {
 		return false
 	}
-	if !extAttrsEqual(extAttrs, extAttrsFromEA(sn.Ea)) {
+	if !extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(sn.Ea))) {
 		return false
 	}
 	if boolOrFalse(disable) != boolOrFalse(sn.Disable) {
@@ -540,7 +559,11 @@ type observedIPv4SharedNetwork struct {
 
 // observeFromIPv4SharedNetwork extracts the fields mirrored by
 // IPv4SharedNetworkObservation (the full-mirror AtProvider convention)
-// from a WAPI SharedNetwork response.
+// from a WAPI SharedNetwork response. ExtAttrs intentionally mirrors the
+// Grid's complete extattrs map, including the provider's own identity
+// stamp — unlike isUpToDate and lateInitialize, AtProvider is a read-only
+// status mirror, not compared against spec.forProvider, so surfacing the
+// stamp there is informative rather than a source of phantom drift.
 func observeFromIPv4SharedNetwork(externalID string, sn *ibclient.SharedNetwork) observedIPv4SharedNetwork {
 	o := observedIPv4SharedNetwork{
 		ID:         externalID,
@@ -590,8 +613,11 @@ func observeFromIPv4SharedNetwork(externalID string, sn *ibclient.SharedNetwork)
 // the next reconcile. The required fields (name, networks) are always
 // user-supplied and never late-initialized. Options requires
 // scope-specific type conversion and is handled separately by each
-// scope's Observe (see optionsToCluster/optionsToNamespaced). Returns true
-// if any field was changed.
+// scope's Observe (see optionsToCluster/optionsToNamespaced). extAttrs is
+// back-filled with the provider's own identity stamp stripped out
+// (identity.Strip) — the CRD schema never includes that reserved key, so
+// late-initializing it into spec.forProvider would fail CEL validation
+// and produce a permanent diff. Returns true if any field was changed.
 func lateInitialize(networkView, comment **string, disable, useOptions **bool, extAttrs *map[string]string, o observedIPv4SharedNetwork) bool {
 	changed := false
 
@@ -612,8 +638,8 @@ func lateInitialize(networkView, comment **string, disable, useOptions **bool, e
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if len(o.ExtAttrs) > 0 {
-			*extAttrs = o.ExtAttrs
+		if fromRec := stripIdentityKey(o.ExtAttrs); len(fromRec) > 0 {
+			*extAttrs = fromRec
 			changed = true
 		}
 	}
@@ -621,11 +647,42 @@ func lateInitialize(networkView, comment **string, disable, useOptions **bool, e
 	return changed
 }
 
+// stripIdentityKey returns a copy of extAttrs (the CRD's simplified
+// string-valued extensible-attributes map, as extracted by
+// observeFromIPv4SharedNetwork) with the provider's own identity stamp
+// removed — the CRD schema never includes that reserved key, so
+// late-initializing it into spec.forProvider would fail CEL validation
+// and produce a permanent diff. Operates on the already-stringified map
+// rather than the raw ibclient.EA (identity.Strip's usual input) because
+// observedIPv4SharedNetwork.ExtAttrs is the only form available by the
+// time lateInitialize runs.
+func stripIdentityKey(extAttrs map[string]string) map[string]string {
+	if len(extAttrs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(extAttrs))
+	for k, v := range extAttrs {
+		if k == identity.EAKey {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createIPv4SharedNetwork issues the WAPI create call.
-func createIPv4SharedNetwork(objMgr ibclient.IBObjectManager, name *string, networks []string, networkView *string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption) (*ibclient.SharedNetwork, error) {
-	return objMgr.CreateIpv4SharedNetwork(strOrEmpty(name), networks, strOrEmpty(networkView), buildEA(extAttrs), strOrEmpty(comment), boolOrFalse(disable), boolOrFalse(useOptions), optionsToSDK(options))
+// createIPv4SharedNetwork issues the WAPI create call, stamping the
+// owning managed resource's uid into the object's extensible attributes
+// in the same request that creates it (identity.Stamp) — there is no
+// follow-up call, so there is no window in which the object exists
+// without its identity stamp.
+func createIPv4SharedNetwork(objMgr ibclient.IBObjectManager, name *string, networks []string, networkView *string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption, uid string) (*ibclient.SharedNetwork, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.CreateIpv4SharedNetwork(strOrEmpty(name), networks, strOrEmpty(networkView), ea, strOrEmpty(comment), boolOrFalse(disable), boolOrFalse(useOptions), optionsToSDK(options))
 }
 
 // updateIPv4SharedNetwork issues the WAPI update call. networkView is
@@ -635,8 +692,18 @@ func createIPv4SharedNetwork(objMgr ibclient.IBObjectManager, name *string, netw
 // SharedNetwork.NetworkView field, so the immutable network_view key is
 // never present in the outgoing PUT body regardless of the value passed
 // here.
-func updateIPv4SharedNetwork(objMgr ibclient.IBObjectManager, ref string, name *string, networks []string, networkView *string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption) (*ibclient.SharedNetwork, error) {
-	return objMgr.UpdateIpv4SharedNetwork(ref, strOrEmpty(name), networks, strOrEmpty(networkView), strOrEmpty(comment), buildEA(extAttrs), boolOrFalse(disable), boolOrFalse(useOptions), optionsToSDK(options))
+//
+// Every call re-asserts the identity stamp (identity.Stamp) in the
+// extattrs it sends. Live verification against a real NIOS Grid Manager
+// confirmed that a PUT carrying an extattrs object *replaces* the whole
+// map — it is not a per-key merge — so omitting the stamp here would wipe
+// it off the object on the very first field update after create.
+func updateIPv4SharedNetwork(objMgr ibclient.IBObjectManager, ref string, name *string, networks []string, networkView *string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption, uid string) (*ibclient.SharedNetwork, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
+	return objMgr.UpdateIpv4SharedNetwork(ref, strOrEmpty(name), networks, strOrEmpty(networkView), strOrEmpty(comment), ea, boolOrFalse(disable), boolOrFalse(useOptions), optionsToSDK(options))
 }
 
 // deleteIPv4SharedNetwork issues the WAPI delete call (hard delete — a
@@ -646,59 +713,132 @@ func deleteIPv4SharedNetwork(objMgr ibclient.IBObjectManager, ref string) error 
 	return err
 }
 
-// ipv4SharedNetworkExistsByNaturalKey reports whether a live
-// IPv4SharedNetwork still exists under the CR's own (networkView, name)
-// identity — the same tuple WAPI uses to compute the _ref (a shared
-// network name is only unique within a network view). Used by Delete()
-// when the stored _ref 404s: a hit here means the _ref is merely stale,
-// not that the object is gone. IPv4SharedNetwork has no single-object
-// natural-key getter, so this searches via GetAllIpv4SharedNetwork (a
-// list call) with a server-side query filter instead. Both fields are
-// required non-empty; when either is missing there is no way to
-// re-discover the object, so the search is skipped (found=false) rather
-// than treated as an error.
-func ipv4SharedNetworkExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, name *string) (bool, error) {
-	if strOrEmpty(networkView) == "" || strOrEmpty(name) == "" {
-		return false, nil
-	}
-	sf := map[string]string{
-		"network_view": strOrEmpty(networkView),
-		"name":         strOrEmpty(name),
-	}
-	res, err := objMgr.GetAllIpv4SharedNetwork(ibclient.NewQueryParams(false, sf))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteIPv4SharedNetworkResolving404 issues the WAPI delete and, on a
-// 404 against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live shared network, deleting is
-// refused because ownership of that shared network cannot be verified
-// from the search alone (see the staleref package doc for the full
-// rationale).
-func deleteIPv4SharedNetworkResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, name *string) error {
-	delErr := deleteIPv4SharedNetwork(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object (identity.Stamp). A *identity.PrerequisiteError is returned
+// verbatim — its Error() text is the operator-facing remediation, naming
+// the exact WAPI call an administrator should run — so the caller's
+// Synced=False condition carries it directly. Any other error (a
+// transient failure probing or creating the definition) is wrapped like
+// any other WAPI error and is retriable.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteIPv4SharedNet)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := ipv4SharedNetworkExistsByNaturalKey(objMgr, networkView, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteIPv4SharedNet)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. See recorda's
+// doc for the full rationale.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveIPv4SharedNetworkIdentity resolves the IPv4SharedNetwork
+// identified by ref/uid through the shared UID-in-EA ladder.
+func resolveIPv4SharedNetworkIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.SharedNetwork, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.SharedNetwork](ctx, conn, ibclient.NewEmptyIpv4SharedNetwork, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting an
+// IPv4SharedNetwork through the identity ladder during Observe — common
+// to both scopes, which differ only in their concrete CRD types.
+type observeResult struct {
+	exists       bool
+	sn           *ibclient.SharedNetwork
+	obs          observedIPv4SharedNetwork
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeIPv4SharedNetwork runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeIPv4SharedNetwork(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, networkView, comment **string, disable, useOptions **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	sn, outcome, err := resolveIPv4SharedNetworkIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	obs := observeFromIPv4SharedNetwork(sn.Ref, sn)
+	res := observeResult{
+		exists:  true,
+		sn:      sn,
+		obs:     obs,
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(networkView, comment, disable, useOptions, extAttrs, obs)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = sn.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteIPv4SharedNetworkIdentity issues the WAPI delete for the
+// IPv4SharedNetwork this managed resource owns, resolving through the
+// identity ladder first so a stale _ref is never mistaken for a deleted
+// object.
+func deleteIPv4SharedNetworkIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveIPv4SharedNetworkIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteIPv4SharedNet)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteIPv4SharedNetwork(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteIPv4SharedNet)
+	default:
+		return errors.New("identity: unresolved IPv4SharedNetwork outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

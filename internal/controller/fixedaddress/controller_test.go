@@ -24,50 +24,22 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/fixedaddress/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
-// recordingKubeClient is a minimal client.Client stub used to verify that
-// Update() persists a rotated external-name annotation via a real kube
-// client call, not merely an in-memory meta.SetExternalName mutation that
-// crossplane-runtime's managed reconciler would silently discard after a
-// successful external Update(). Only Update is exercised by these tests;
-// every other client.Client method is unused here and left to the
-// embedded nil interface (calling one would panic, which is the correct
-// failure mode for an accidental, untested dependency).
-type recordingKubeClient struct {
-	client.Client
-	updated client.Object
-}
-
-func (k *recordingKubeClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
-	k.updated = obj
-	return nil
-}
-
-// Patch mirrors Update. The fix for this ticket persists the refreshed
-// external-name annotation via a conflict-safe JSON merge Patch instead
-// of a whole-object Update, so this stub must record Patch calls the
-// same way for the existing assertions on k.updated to keep working.
-func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
-	k.updated = obj
-	return nil
-}
-
-// ── generic helpers ─────────────────────────────────────────────────────────
+const (
+	testUIDCluster    = "test-uid-cluster"
+	testUIDNamespaced = "test-uid-namespaced"
+)
 
 func stringPtr(s string) *string { return &s }
-func int64Ptr(i int64) *int64    { return &i }
-func boolPtr(b bool) *bool       { return &b }
 
-// newTestScheme returns a scheme with corev1 (for Secrets) and the
-// provider's API types registered.
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -85,8 +57,6 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// credentialsSecret returns a Secret carrying the host/username/password
-// keys the credential bridge expects.
 func credentialsSecret(ns, name, host, username, password string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -98,23 +68,16 @@ func credentialsSecret(ns, name, host, username, password string) *corev1.Secret
 	}
 }
 
-// newClusterFixedAddress builds a minimal cluster-scoped IPv4 FixedAddress
-// CR. When externalName is empty, the external-name annotation is left
-// unset. When it equals crName it simulates the framework's
-// NameAsExternalName initializer (the pre-create state); any other value
-// simulates a Create()-assigned server ref.
 func newClusterFixedAddress(crName, externalName string) *clusterv1alpha1.FixedAddress {
 	cr := &clusterv1alpha1.FixedAddress{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: testUIDCluster},
 		Spec: clusterv1alpha1.FixedAddressSpec{
 			ResourceSpec: xpv1.ResourceSpec{
 				ProviderConfigReference: &xpv1.Reference{Name: "default"},
 			},
 			ForProvider: clusterv1alpha1.FixedAddressParameters{
-				IPv4Addr:    stringPtr("10.0.0.5"),
-				MAC:         stringPtr("00:11:22:33:44:55"),
-				NetworkView: stringPtr("default"),
-				MatchClient: stringPtr("MAC_ADDRESS"),
+				IPv4Addr: stringPtr("10.0.0.10"),
+				MAC:      stringPtr("00:11:22:33:44:55"),
 			},
 		},
 	}
@@ -124,18 +87,15 @@ func newClusterFixedAddress(crName, externalName string) *clusterv1alpha1.FixedA
 	return cr
 }
 
-// newClusterFixedAddressIPv6 is the IPv6 variant of newClusterFixedAddress.
 func newClusterFixedAddressIPv6(crName, externalName string) *clusterv1alpha1.FixedAddress {
 	cr := &clusterv1alpha1.FixedAddress{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster-v6"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: testUIDCluster},
 		Spec: clusterv1alpha1.FixedAddressSpec{
 			ResourceSpec: xpv1.ResourceSpec{
 				ProviderConfigReference: &xpv1.Reference{Name: "default"},
 			},
 			ForProvider: clusterv1alpha1.FixedAddressParameters{
-				IPv6Addr:    stringPtr("2001:db8::5"),
-				MAC:         stringPtr("00:11:22:33:44:66"), // carries the DUID for IPv6
-				NetworkView: stringPtr("default"),
+				IPv6Addr: stringPtr("2001:db8::10"),
 			},
 		},
 	}
@@ -145,20 +105,16 @@ func newClusterFixedAddressIPv6(crName, externalName string) *clusterv1alpha1.Fi
 	return cr
 }
 
-// newNamespacedFixedAddress is the namespaced variant of
-// newClusterFixedAddress.
 func newNamespacedFixedAddress(ns, crName, externalName, pcKind string) *namespacedv1alpha1.FixedAddress {
 	cr := &namespacedv1alpha1.FixedAddress{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: testUIDNamespaced},
 		Spec: namespacedv1alpha1.FixedAddressSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
 				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
 			},
 			ForProvider: namespacedv1alpha1.FixedAddressParameters{
-				IPv4Addr:    stringPtr("10.0.0.5"),
-				MAC:         stringPtr("00:11:22:33:44:55"),
-				NetworkView: stringPtr("default"),
-				MatchClient: stringPtr("MAC_ADDRESS"),
+				IPv4Addr: stringPtr("10.0.0.10"),
+				MAC:      stringPtr("00:11:22:33:44:55"),
 			},
 		},
 	}
@@ -170,63 +126,54 @@ func newNamespacedFixedAddress(ns, crName, externalName, pcKind string) *namespa
 
 // ── mock WAPI server ─────────────────────────────────────────────────────
 //
-// mockWapiServer emulates the subset of NIOS WAPI fixedaddress /
-// ipv6fixedaddress endpoints exercised by the FixedAddress controller
-// (POST create via AllocateIP, GET/PUT/DELETE by _ref). Records are
-// marshaled/unmarshaled using the real ibclient.FixedAddress type so the
-// wire format (including the EA {"value": ...} envelope) exactly matches
-// what the SDK sends and expects. PUT mints a new _ref whenever the
-// address field (ipv4addr/ipv6addr) changes, mirroring the UNSTABLE _ref
-// behavior documented for this resource (ADR-IN-0004).
-
+// FixedAddress is dual-object-type: WAPI models IPv4 fixed addresses as
+// "fixedaddress" and IPv6 as "ipv6fixedaddress". Both share a single
+// backing map here (keyed by ref) since the mock never needs to
+// distinguish family for storage — only for routing search/create
+// requests to the right URL path.
 type mockWapiServer struct {
-	mu      sync.Mutex
-	records map[string]*ibclient.FixedAddress
-	nextRef int
+	mu          sync.Mutex
+	addrs       map[string]*ibclient.FixedAddress
+	nextRef     int
+	searchCalls int
 
-	// lastUpdateBody captures the raw JSON body of the most recent PUT
-	// request, for tests that assert on outbound field values.
-	lastUpdateBody []byte
+	eaDefExists       bool
+	eaDefCreateStatus int
+	eaDefCreateBody   string
+	eaDefSearchCalls  int
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
-	return &mockWapiServer{records: map[string]*ibclient.FixedAddress{}}
+	return &mockWapiServer{
+		addrs:       map[string]*ibclient.FixedAddress{},
+		eaDefExists: true,
+	}
 }
 
-func (m *mockWapiServer) seed(objectType string, fa *ibclient.FixedAddress) string {
+func (m *mockWapiServer) seed(fa *ibclient.FixedAddress, isIPv6 bool) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextRef++
 	if fa.Ref == "" {
-		fa.Ref = m.newRefLocked(objectType, fa)
+		objType := "fixedaddress"
+		if isIPv6 {
+			objType = "ipv6fixedaddress"
+		}
+		fa.Ref = objType + "/test" + itoa(m.nextRef) + ":x"
 	}
-	m.records[fa.Ref] = fa
+	m.addrs[fa.Ref] = fa
 	return fa.Ref
-}
-
-func (m *mockWapiServer) newRefLocked(objectType string, fa *ibclient.FixedAddress) string {
-	addr := fa.IPv4Address
-	if objectType == "ipv6fixedaddress" {
-		addr = fa.IPv6Address
-	}
-	return objectType + "/test" + itoa(m.nextRef) + ":" + addr
 }
 
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
 	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
 	var b []byte
 	for i > 0 {
 		b = append([]byte{byte('0' + i%10)}, b...)
 		i /= 10
-	}
-	if neg {
-		b = append([]byte{'-'}, b...)
 	}
 	return string(b)
 }
@@ -242,86 +189,109 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_, _ = w.Write(body)
 }
 
-// handler returns an http.Handler implementing the fixedaddress /
-// ipv6fixedaddress WAPI surface.
 func (m *mockWapiServer) handler() http.Handler {
 	mux := http.NewServeMux()
 
-	create := func(objectType string) http.HandlerFunc {
+	createHandler := func(isIPv6 bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			var fa ibclient.FixedAddress
 			if err := json.NewDecoder(r.Body).Decode(&fa); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			ref := m.seed(objectType, &fa)
+			ref := m.seed(&fa, isIPv6)
 			writeJSON(w, http.StatusOK, ref)
 		}
 	}
-	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/fixedaddress", create("fixedaddress"))
-	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/ipv6fixedaddress", create("ipv6fixedaddress"))
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/fixedaddress", createHandler(false))
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/ipv6fixedaddress", createHandler(true))
 
-	// Search endpoint (GetFixedAddress): a GET with no _ref path segment,
-	// filtered by network_view/network/ipv4addr(+mac) or
-	// ipv6addr(+duid) query params depending on address family.
-	// Registered as an exact literal path so Go's ServeMux prefers it
-	// over the {ref...} wildcard below for requests to precisely
-	// "fixedaddress"/"ipv6fixedaddress" (real _refs always carry
-	// additional path segments).
-	search := func(objectType string) http.HandlerFunc {
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefSearchCalls++
+		exists := m.eaDefExists
+		m.mu.Unlock()
+		if !exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+			return
+		}
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		m.mu.Lock()
+		m.eaDefExists = true
+		m.mu.Unlock()
+		writeJSON(w, http.StatusOK, "extensibleattributedef/test:"+url.QueryEscape(identity.EAKey))
+	})
+
+	searchHandler := func(objType string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			m.mu.Lock()
+			m.searchCalls++
+			m.mu.Unlock()
+
 			q := r.URL.Query()
-			networkView := q.Get("network_view")
-			network := q.Get("network")
+			eaFilters := map[string]string{}
+			for k, vals := range q {
+				if strings.HasPrefix(k, "*") && len(vals) > 0 {
+					eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
+				}
+			}
+
+			m.mu.Lock()
+			undefinedEA := m.undefinedEASearch
+			m.mu.Unlock()
+			if len(eaFilters) > 0 && undefinedEA {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+				return
+			}
 
 			m.mu.Lock()
 			var matches []ibclient.FixedAddress
-			for ref, fa := range m.records {
-				isIPv6 := strings.HasPrefix(ref, "ipv6fixedaddress/")
-				if isIPv6 && objectType != "ipv6fixedaddress" {
+			for _, fa := range m.addrs {
+				if !strings.HasPrefix(fa.Ref, objType+"/") {
 					continue
 				}
-				if !isIPv6 && objectType != "fixedaddress" {
-					continue
+				mismatch := false
+				for k, v := range eaFilters {
+					got, ok := fa.Ea[k]
+					if !ok {
+						mismatch = true
+						break
+					}
+					if s, ok := got.(string); !ok || s != v {
+						mismatch = true
+						break
+					}
 				}
-				if networkView != "" && fa.NetviewName != networkView {
+				if mismatch {
 					continue
-				}
-				if network != "" && fa.Cidr != network {
-					continue
-				}
-				if objectType == "ipv6fixedaddress" {
-					if ipv6addr := q.Get("ipv6addr"); ipv6addr != "" && fa.IPv6Address != ipv6addr {
-						continue
-					}
-					if duid := q.Get("duid"); duid != "" && fa.Duid != duid {
-						continue
-					}
-				} else {
-					if ipv4addr := q.Get("ipv4addr"); ipv4addr != "" && fa.IPv4Address != ipv4addr {
-						continue
-					}
-					if mac := q.Get("mac"); mac != "" && (fa.Mac == nil || *fa.Mac != mac) {
-						continue
-					}
 				}
 				matches = append(matches, *fa)
 			}
 			m.mu.Unlock()
-
-			// Always respond 200 — WAPI search semantics report
-			// "not found" via an empty array, never an HTTP error
-			// status.
 			writeJSON(w, http.StatusOK, matches)
 		}
 	}
-	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/fixedaddress", search("fixedaddress"))
-	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/ipv6fixedaddress", search("ipv6fixedaddress"))
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/fixedaddress", searchHandler("fixedaddress"))
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/ipv6fixedaddress", searchHandler("ipv6fixedaddress"))
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
-		fa, ok := m.records[ref]
+		fa, ok := m.addrs[ref]
 		m.mu.Unlock()
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -333,73 +303,50 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
-		existing, ok := m.records[ref]
+		existing, ok := m.addrs[ref]
 		m.mu.Unlock()
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-
-		body, err := readAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
 		var incoming ibclient.FixedAddress
-		if err := json.Unmarshal(body, &incoming); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-
-		objectType := "fixedaddress"
-		isIPv6 := strings.HasPrefix(ref, "ipv6fixedaddress/")
-		if isIPv6 {
-			objectType = "ipv6fixedaddress"
-		}
-
 		m.mu.Lock()
-		m.lastUpdateBody = body
-
-		// UNSTABLE _ref: changing the address family's literal value
-		// mints a new _ref — mirrors live NIOS Grid Manager behavior
-		// (ADR-IN-0004).
-		refMutated := existing.IPv4Address != incoming.IPv4Address || existing.IPv6Address != incoming.IPv6Address
-
-		existing.NetviewName = incoming.NetviewName
-		existing.Cidr = incoming.Cidr
-		existing.IPv4Address = incoming.IPv4Address
-		existing.IPv6Address = incoming.IPv6Address
-		existing.Mac = incoming.Mac
-		existing.Name = incoming.Name
-		existing.MatchClient = incoming.MatchClient
+		// UNSTABLE _ref: changing a fixed address's IP mints a new _ref —
+		// mirrors live NIOS Grid Manager behavior (the _ref encodes the
+		// address). ADR-IN-0004 documents ipv4addr specifically as
+		// _ref-mutating for this resource.
+		renamed := existing.IPv4Address != incoming.IPv4Address || existing.IPv6Address != incoming.IPv6Address
 		existing.Comment = incoming.Comment
 		existing.Ea = incoming.Ea
-		existing.Disable = incoming.Disable
-		existing.AgentCircuitId = incoming.AgentCircuitId
-		existing.AgentRemoteId = incoming.AgentRemoteId
-		existing.ClientIdentifierPrependZero = incoming.ClientIdentifierPrependZero
-		existing.DhcpClientIdentifier = incoming.DhcpClientIdentifier
-		existing.Options = incoming.Options
-		existing.UseOptions = incoming.UseOptions
-
-		newRef := ref
-		if refMutated {
+		existing.MatchClient = incoming.MatchClient
+		existing.Mac = incoming.Mac
+		existing.IPv4Address = incoming.IPv4Address
+		existing.IPv6Address = incoming.IPv6Address
+		respRef := ref
+		if renamed {
+			delete(m.addrs, ref)
 			m.nextRef++
-			newRef = m.newRefLocked(objectType, existing)
-			delete(m.records, ref)
-			existing.Ref = newRef
+			objType := "fixedaddress"
+			if existing.IPv6Address != "" {
+				objType = "ipv6fixedaddress"
+			}
+			respRef = objType + "/test" + itoa(m.nextRef) + ":x"
+			existing.Ref = respRef
+			m.addrs[respRef] = existing
 		}
-		m.records[newRef] = existing
 		m.mu.Unlock()
-
-		writeJSON(w, http.StatusOK, newRef)
+		writeJSON(w, http.StatusOK, respRef)
 	})
 
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
-		_, ok := m.records[ref]
-		delete(m.records, ref)
+		_, ok := m.addrs[ref]
+		delete(m.addrs, ref)
 		m.mu.Unlock()
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -411,123 +358,44 @@ func (m *mockWapiServer) handler() http.Handler {
 	return mux
 }
 
-func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
-	buf := make([]byte, 0, 512)
-	tmp := make([]byte, 512)
-	for {
-		n, err := rc.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			if err.Error() == "EOF" {
-				return buf, nil
-			}
-			return buf, err
-		}
-	}
-}
-
-// fixedStatusHandler always responds with the given HTTP status — used to
-// exercise the generic (non-404) error classification paths.
-func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"Error":"boom"}`))
-	})
-}
-
-// newTestObjectManager builds an ibclient.IBObjectManager pointed at the
-// given httptest.Server via plain HTTP (no TLS needed — the
-// WapiRequestBuilder only switches to HTTPS when hostCfg.Scheme !=
-// "http").
-func newTestObjectManager(t *testing.T, srv *httptest.Server) ibclient.IBObjectManager {
+func newTestClient(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	objMgr, err := newObjectManagerWithScheme(&nioCredentials{
+	mc, err := newObjectManagerWithScheme(&nioCredentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
 	}, true, "http", u.Port())
 	if err != nil {
-		t.Fatalf("cannot build test object manager: %v", err)
+		t.Fatalf("cannot build test client: %v", err)
 	}
-	return objMgr
+	return mc
 }
 
-// ── cluster: Observe ────────────────────────────────────────────────────
+// ── Observe ──────────────────────────────────────────────────────────────
 
-func TestClusterObserveSuccess(t *testing.T) {
+func TestClusterObserveResolvedUpToDate(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     "hello",
-		Ea:          ibclient.EA{"env": "prod"},
-	})
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(fa, false)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("hello")
-	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
+	cr := newClusterFixedAddress("my-addr", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true, got false")
-	}
-	if !got.ResourceUpToDate {
-		t.Error("Observe: want ResourceUpToDate=true, got false")
-	}
-	if cr.Status.AtProvider.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
-	}
-	if cr.Status.AtProvider.IPv4Addr == nil || *cr.Status.AtProvider.IPv4Addr != "10.0.0.5" {
-		t.Errorf("AtProvider.IPv4Addr = %v, want 10.0.0.5", cr.Status.AtProvider.IPv4Addr)
-	}
-	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
-		t.Errorf("condition Ready = %v, want True", cond.Status)
-	}
-}
-
-// TestClusterObserveNotUpToDate verifies Observe() reports
-// ResourceUpToDate=false when the desired spec drifts from the observed
-// server state (as opposed to TestClusterObserveSuccess, which pins the
-// matching case).
-func TestClusterObserveNotUpToDate(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     "old comment",
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("new comment") // drifted from server
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if !got.ResourceExists {
-		t.Fatal("Observe: want ResourceExists=true, got false")
-	}
-	if got.ResourceUpToDate {
-		t.Error("Observe: want ResourceUpToDate=false for a comment drift, got true")
+	if !obs.ResourceExists || !obs.ResourceUpToDate {
+		t.Fatalf("expected exists+up-to-date, got %+v", obs)
 	}
 }
 
@@ -535,1370 +403,416 @@ func TestClusterObserveNotFound(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5")
+	cr := newClusterFixedAddress("my-addr", "fixedaddress/doesnotexist:x")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false for 404, got true")
+	if obs.ResourceExists {
+		t.Fatalf("expected ResourceExists=false, got %+v", obs)
 	}
 }
 
-// TestClusterObserveMinimalResponse pins nil-safety in Observe: a WAPI
-// response carrying only the object's _ref (the resource identifier) and
-// every other field at its Go zero value (empty strings, nil pointers, a
-// nil Ea map, a nil Options slice) must not panic and must produce a
-// valid observation with nil-safe AtProvider fields.
-func TestClusterObserveMinimalResponse(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
-	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true for minimal response, got false")
-	}
-
-	ap := cr.Status.AtProvider
-	if ap.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
-	}
-	if ap.IPv4Addr != nil {
-		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
-	}
-	if ap.IPv6Addr != nil {
-		t.Errorf("AtProvider.IPv6Addr = %v, want nil", ap.IPv6Addr)
-	}
-	if ap.MAC != nil {
-		t.Errorf("AtProvider.MAC = %v, want nil", ap.MAC)
-	}
-	if ap.NetworkView != nil {
-		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
-	}
-	if ap.Comment != nil {
-		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
-	}
-	if ap.ExtAttrs != nil {
-		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
-	}
-	if ap.Options != nil {
-		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
-	}
-	if ap.CloudInfo != nil {
-		t.Errorf("AtProvider.CloudInfo = %v, want nil", ap.CloudInfo)
-	}
-}
-
-// TestObservePreCreateState verifies that Observe short-circuits (no HTTP
-// call) when the external-name still equals the CR's Kubernetes name —
-// the pre-create state for a server-assigned external-name strategy.
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "") // external-name unset
-	meta.SetExternalName(cr, cr.GetName())              // simulate NameAsExternalName initializer
+	cr := newClusterFixedAddress("my-addr", "my-addr")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	got, err := e.Observe(context.Background(), cr)
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	if obs.ResourceExists {
+		t.Fatalf("expected ResourceExists=false, got %+v", obs)
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Fatal("expected the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
-func TestClusterObserveServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+func TestClusterObserveAdoptsUnstampedObjectAndForcesUpdate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	ref := m.seed(fa, false)
+
+	cr := newClusterFixedAddress("my-addr", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceExists {
+		t.Fatalf("expected exists, got %+v", obs)
+	}
+	if obs.ResourceUpToDate {
+		t.Fatal("adopted object must never report up to date")
+	}
+}
+
+func TestClusterObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, testUIDCluster)
+	realRef := m.seed(fa, false)
+
+	cr := newClusterFixedAddress("my-addr", "fixedaddress/stale:x")
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceExists {
+		t.Fatalf("expected exists, got %+v", obs)
+	}
+	if meta.GetExternalName(cr) != realRef {
+		t.Fatalf("expected external-name refreshed to %q, got %q", realRef, meta.GetExternalName(cr))
+	}
+}
+
+func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, "someone-elses-uid")
+	ref := m.seed(fa, false)
+
+	cr := newClusterFixedAddress("my-addr", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 500, got nil")
+		t.Fatal("expected an error for foreign identity")
 	}
 }
 
-func TestClusterObserveForbidden(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
-
-	if _, err := e.Observe(context.Background(), cr); err == nil {
-		t.Fatal("Observe: expected error for 403, got nil")
-	}
-}
-
-// ── cluster: Create ─────────────────────────────────────────────────────
-
-func TestClusterCreateSuccess(t *testing.T) {
+// TestObserveFindsIPv6Object proves the identity ladder searches under
+// the correct WAPI object type ("ipv6fixedaddress") when the managed
+// resource's family is IPv6 — the dual-object-type hazard this ladder
+// must not fall into (see the package doc comment). No external-name is
+// set (pre-create state), forcing the identity-EA search step — the
+// only step whose WAPI endpoint depends on the candidate object's
+// assumed type (a resolving _ref fetches by literal path and would mask
+// a wrong-type newEmpty entirely).
+func TestObserveFindsIPv6Object(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "") // no external-name yet
+	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::10"}
+	fa.Ea = identity.Stamp(nil, testUIDCluster)
+	m.seed(fa, true)
 
-	_, err := e.Create(context.Background(), cr)
+	cr := newClusterFixedAddressIPv6("my-addr", "")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	got := meta.GetExternalName(cr)
-	if got == "" || got == cr.GetName() {
-		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
-	}
-	if !strings.HasPrefix(got, "fixedaddress/") {
-		t.Errorf("Create: external-name = %q, want fixedaddress/... (IPv4 object type)", got)
+	if !obs.ResourceExists {
+		t.Fatalf("expected the IPv6 object to be found, got %+v", obs)
 	}
 }
 
-// TestClusterCreateCapturesServerAssignedRef asserts the external-name
-// annotation is set exactly to the _ref returned by the WAPI create
-// response (server-assigned external-name strategy) via AllocateIP
-// (NON-STANDARD — no CreateFixedAddress method exists).
-func TestClusterCreateCapturesServerAssignedRef(t *testing.T) {
+// ── Create ───────────────────────────────────────────────────────────────
+
+func TestClusterCreateStampsIdentity(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "")
+	cr := newClusterFixedAddress("my-addr", "my-addr")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meta.GetExternalName(cr) == "my-addr" {
+		t.Fatal("expected external-name to be set to the server _ref")
 	}
 
-	got := meta.GetExternalName(cr)
 	m.mu.Lock()
-	_, exists := m.records[got]
-	m.mu.Unlock()
-	if !exists {
-		t.Errorf("Create: external-name %q does not match any server-side record", got)
+	defer m.mu.Unlock()
+	for _, fa := range m.addrs {
+		got, ok := fa.Ea[identity.EAKey]
+		if !ok || got != testUIDCluster {
+			t.Fatalf("expected identity stamp %q, got %v", testUIDCluster, fa.Ea)
+		}
 	}
 }
 
-// TestClusterCreateIPv6 exercises the IPv6 object-type path (creation
-// selects "ipv6fixedaddress" instead of "fixedaddress" based on which of
-// ipv4addr/ipv6addr is set).
-func TestClusterCreateIPv6(t *testing.T) {
+func TestCreateFixedAddressRefusesEmptyUID(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddressIPv6("my-fixedaddress-v6", "")
-
-	if _, err := e.Create(context.Background(), cr); err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
-	}
-
-	got := meta.GetExternalName(cr)
-	if !strings.HasPrefix(got, "ipv6fixedaddress/") {
-		t.Errorf("Create: external-name = %q, want ipv6fixedaddress/... (IPv6 object type)", got)
+	f := fixedAddressFields{IPv4Addr: stringPtr("10.0.0.10"), MAC: stringPtr("00:11:22:33:44:55")}
+	if _, err := createFixedAddress(mc.Manager, f, ""); err == nil {
+		t.Fatal("expected an error for empty uid")
 	}
 }
 
-// TestClusterCreateServerError verifies Create() surfaces a wrapped error
-// (rather than a panic or silent success) when the WAPI backend rejects
-// the POST request.
-func TestClusterCreateServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
+// ── Update ───────────────────────────────────────────────────────────────
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "")
-
-	if _, err := e.Create(context.Background(), cr); err == nil {
-		t.Fatal("Create: want error for a 500 WAPI response, got nil")
-	}
-
-	if got := meta.GetExternalName(cr); got != "" {
-		t.Errorf("Create: external-name = %q after a failed create, want unset", got)
-	}
-}
-
-// ── cluster: Update ─────────────────────────────────────────────────────
-
-func TestClusterUpdateSuccess(t *testing.T) {
+func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     "old comment",
-	})
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(fa, false)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+	cr := newClusterFixedAddress("my-addr", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("updated")
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	m.mu.Lock()
-	stored := m.records[ref]
-	m.mu.Unlock()
-	if stored.Comment != "new comment" {
-		t.Errorf("Update: stored comment = %q, want %q", stored.Comment, "new comment")
-	}
-	if got := meta.GetExternalName(cr); got != ref {
-		t.Errorf("Update: external-name changed to %q for a comment-only update, want unchanged %q", got, ref)
+	defer m.mu.Unlock()
+	updated := m.addrs[ref]
+	if updated.Ea[identity.EAKey] != testUIDCluster {
+		t.Fatalf("expected identity stamp to survive update, got %v", updated.Ea)
 	}
 }
 
-// TestClusterUpdateRefreshesUnstableRef verifies the UNSTABLE _ref
-// contract (ADR-IN-0004): when ipv4addr changes, Update() picks up the
-// new _ref from the PUT response and refreshes the external-name
-// annotation so subsequent reconciles use the correct reference.
-func TestClusterUpdateRefreshesUnstableRef(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	oldRef := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", oldRef)
-	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.9")
-
-	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
-	}
-
-	got := meta.GetExternalName(cr)
-	if got == oldRef {
-		t.Errorf("Update: external-name unchanged at %q after an ipv4addr-mutating update, want a new _ref", got)
-	}
-	m.mu.Lock()
-	_, oldStillExists := m.records[oldRef]
-	stored, newExists := m.records[got]
-	m.mu.Unlock()
-	if oldStillExists {
-		t.Errorf("Update: old ref %q still present after _ref-mutating update", oldRef)
-	}
-	if !newExists || stored.IPv4Address != "10.0.0.9" {
-		t.Errorf("Update: record at new ref %q = %+v, want ipv4addr 10.0.0.9", got, stored)
-	}
-}
-
-// TestClusterUpdateDefaultsMatchClientForIPv4 pins the SDK quirk
-// documented for this resource: UpdateFixedAddress rejects an empty
-// match_client for IPv4 objects, so Update() must always send a concrete
-// value even when spec.forProvider.matchClient is unset and
-// status.atProvider.matchClient hasn't been populated yet (e.g. the very
-// first Update immediately following Create, before any Observe has run).
-func TestClusterUpdateDefaultsMatchClientForIPv4(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		MatchClient: stringPtr("MAC_ADDRESS"),
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-	cr.Spec.ForProvider.MatchClient = nil // unset — no AtProvider state populated either
-	cr.Spec.ForProvider.Comment = stringPtr("triggers update")
-
-	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	stored := m.records[ref]
-	m.mu.Unlock()
-	if stored.MatchClient == nil || *stored.MatchClient != matchClientDefault {
-		t.Errorf("Update: stored match_client = %v, want default %q", stored.MatchClient, matchClientDefault)
-	}
-}
-
-// TestClusterUpdateServerError verifies Update() surfaces a wrapped error
-// (rather than a panic or a silently unchanged external-name) when the
-// WAPI backend rejects the PUT request.
-func TestClusterUpdateServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	ref := "fixedaddress/test1:10.0.0.5"
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-	cr.Spec.ForProvider.Comment = stringPtr("triggers update")
-
-	if _, err := e.Update(context.Background(), cr); err == nil {
-		t.Fatal("Update: want error for a 500 WAPI response, got nil")
-	}
-
-	if got := meta.GetExternalName(cr); got != ref {
-		t.Errorf("Update: external-name changed to %q after a failed update, want unchanged %q", got, ref)
-	}
-}
-
-// ── cluster: Delete ──────────────────────────────────────────────────────
+// ── Delete ───────────────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{IPv4Address: "10.0.0.5", NetviewName: "default"})
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(fa, false)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", ref)
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.records[ref]
-	m.mu.Unlock()
-	if stillExists {
-		t.Error("Delete: record still present after Delete")
-	}
-}
-
-func TestClusterDeleteNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5")
+	cr := newClusterFixedAddress("my-addr", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-// TestClusterDeleteServerError verifies that a 5xx response from the WAPI
-// delete endpoint is propagated (wrapped, not swallowed) rather than being
-// treated as a not-found/already-deleted success.
-func TestClusterDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/test1:10.0.0.5")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected error for 500, got nil")
-	}
-	if got := err.Error(); !strings.Contains(got, errDeleteFixedAddress) {
-		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteFixedAddress)
-	}
-}
-
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// core defect fix: a 404 against the stored _ref must not be treated as
-// "already deleted" when a natural-key search finds the same identity
-// still live under a different _ref. Deleting that record would be
-// unverifiable ownership, so Delete() must refuse and leave the record
-// in place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-	})
-
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
-	}
-
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	defer m.mu.Unlock()
+	if _, ok := m.addrs[ref]; ok {
+		t.Fatal("expected the object to be deleted")
 	}
 }
 
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
-func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+func TestClusterDeleteNotFoundIsSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+	cr := newClusterFixedAddress("my-addr", "fixedaddress/gone:x")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("expected nil error for already-gone object, got %v", err)
 	}
 }
 
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+func TestClusterDeleteRefusesUnverifiedOwnership(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
+	mc := newTestClient(t, srv)
 
-	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-	})
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	ref := m.seed(fa, false)
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newClusterFixedAddress("my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
+	cr := newClusterFixedAddress("my-addr", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	if _, err := e.Delete(context.Background(), cr); err == nil {
+		t.Fatal("expected delete to be refused for an unstamped object")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
-	}
-
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	defer m.mu.Unlock()
+	if _, ok := m.addrs[ref]; !ok {
+		t.Fatal("object must not be deleted when ownership cannot be verified")
 	}
 }
 
-// ── cluster: Disconnect ──────────────────────────────────────────────────
-
-func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
-	if err := e.Disconnect(context.Background()); err != nil {
-		t.Errorf("Disconnect: unexpected error: %v", err)
-	}
-}
-
-// ── cluster: Connect ─────────────────────────────────────────────────────
-
-func TestClusterConnectSuccess(t *testing.T) {
-	const (
-		ns     = "crossplane-system"
-		secret = "infobloxnios-api-key"
-	)
-
-	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&clusterpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
-				Spec: clusterpcv1alpha1.ProviderConfigSpec{
-					Credentials: clusterpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
-				},
-			},
-		).Build()
-
-	conn := &clusterConnector{
-		kube:  kube,
-		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newClusterFixedAddress("my-fixedaddress", "")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
-	}
-}
+// ── Connect ──────────────────────────────────────────────────────────────
 
 func TestClusterConnectProviderConfigNotFound(t *testing.T) {
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := &clusterConnector{kube: kube, usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{})}
+	cr := newClusterFixedAddress("my-addr", "")
 
-	conn := &clusterConnector{
-		kube:  kube,
-		usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newClusterFixedAddress("my-fixedaddress", "")
-	if _, err := conn.Connect(context.Background(), cr); err == nil {
-		t.Fatal("Connect: expected error for missing ProviderConfig, got nil")
+	if _, err := c.Connect(context.Background(), cr); err == nil {
+		t.Fatal("expected an error when ProviderConfig is missing")
 	}
 }
 
-// ── namespaced: Observe ──────────────────────────────────────────────────
-
-func TestNamespacedObserveSuccess(t *testing.T) {
+func TestClusterConnectSuccess(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		MatchClient: stringPtr("MAC_ADDRESS"),
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true, got false")
-	}
-	if !got.ResourceUpToDate {
-		t.Error("Observe: want ResourceUpToDate=true, got false")
-	}
-	if cr.Status.AtProvider.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
-	}
-}
-
-func TestNamespacedObserveNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5", "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false for 404, got true")
-	}
-}
-
-// TestNamespacedObserveMinimalResponse is the namespaced-scope counterpart
-// of TestClusterObserveMinimalResponse: pins nil-safety in Observe when a
-// WAPI response carries only the object's _ref and every other field at
-// its Go zero value.
-func TestNamespacedObserveMinimalResponse(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error on minimal response: %v", err)
-	}
-	if !got.ResourceExists {
-		t.Error("Observe: want ResourceExists=true for minimal response, got false")
-	}
-
-	ap := cr.Status.AtProvider
-	if ap.ID != ref {
-		t.Errorf("AtProvider.ID = %q, want %q", ap.ID, ref)
-	}
-	if ap.IPv4Addr != nil {
-		t.Errorf("AtProvider.IPv4Addr = %v, want nil", ap.IPv4Addr)
-	}
-	if ap.IPv6Addr != nil {
-		t.Errorf("AtProvider.IPv6Addr = %v, want nil", ap.IPv6Addr)
-	}
-	if ap.MAC != nil {
-		t.Errorf("AtProvider.MAC = %v, want nil", ap.MAC)
-	}
-	if ap.NetworkView != nil {
-		t.Errorf("AtProvider.NetworkView = %v, want nil", ap.NetworkView)
-	}
-	if ap.Comment != nil {
-		t.Errorf("AtProvider.Comment = %v, want nil", ap.Comment)
-	}
-	if ap.ExtAttrs != nil {
-		t.Errorf("AtProvider.ExtAttrs = %v, want nil", ap.ExtAttrs)
-	}
-	if ap.Options != nil {
-		t.Errorf("AtProvider.Options = %v, want nil", ap.Options)
-	}
-	if ap.CloudInfo != nil {
-		t.Errorf("AtProvider.CloudInfo = %v, want nil", ap.CloudInfo)
-	}
-}
-
-func TestNamespacedObservePreCreateState(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
-	meta.SetExternalName(cr, cr.GetName())
-
-	got, err := e.Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: unexpected error: %v", err)
-	}
-	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
-	}
-}
-
-// ── namespaced: Create ────────────────────────────────────────────────────
-
-func TestNamespacedCreateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
-
-	if _, err := e.Create(context.Background(), cr); err != nil {
-		t.Fatalf("Create: unexpected error: %v", err)
-	}
-
-	got := meta.GetExternalName(cr)
-	if got == "" || got == cr.GetName() {
-		t.Errorf("Create: external-name not set to server-assigned ref, got %q", got)
-	}
-}
-
-func TestNamespacedCreateServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "ProviderConfig")
-
-	if _, err := e.Create(context.Background(), cr); err == nil {
-		t.Fatal("Create: want error for a 500 WAPI response, got nil")
-	}
-}
-
-// ── namespaced: Update ─────────────────────────────────────────────────────
-
-func TestNamespacedUpdateSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{
-		NetviewName: "default",
-		IPv4Address: "10.0.0.5",
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Comment:     "old comment",
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
-	cr.Spec.ForProvider.Comment = stringPtr("new comment")
-
-	if _, err := e.Update(context.Background(), cr); err != nil {
-		t.Fatalf("Update: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	stored := m.records[ref]
-	m.mu.Unlock()
-	if stored.Comment != "new comment" {
-		t.Errorf("Update: stored comment = %q, want %q", stored.Comment, "new comment")
-	}
-}
-
-// ── namespaced: Delete ────────────────────────────────────────────────────
-
-func TestNamespacedDeleteSuccess(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	ref := m.seed("fixedaddress", &ibclient.FixedAddress{IPv4Address: "10.0.0.5", NetviewName: "default"})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", ref, "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: unexpected error: %v", err)
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.records[ref]
-	m.mu.Unlock()
-	if stillExists {
-		t.Error("Delete: record still present after Delete")
-	}
-}
-
-func TestNamespacedDeleteNotFound(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/does-not-exist:10.0.0.5", "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error for already-gone resource, got: %v", err)
-	}
-}
-
-func TestNamespacedDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/test1:10.0.0.5", "ProviderConfig")
-
-	if _, err := e.Delete(context.Background(), cr); err == nil {
-		t.Fatal("Delete: expected error for 500, got nil")
-	}
-}
-
-// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5", "ProviderConfig")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
-
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
-	}
-}
-
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	liveRef := m.seed("fixedaddress", &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		Cidr:        "10.0.0.0/24",
-		Mac:         stringPtr("00:11:22:33:44:55"),
-	})
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5", "ProviderConfig")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
-
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
-	}
-
-	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
-	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
-	}
-}
-
-// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
-func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
-	m := newMockWapiServer()
-	srv := httptest.NewServer(m.handler())
-	defer srv.Close()
-
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: newTestObjectManager(t, srv)}
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "fixedaddress/stale-ref:10.0.0.5", "ProviderConfig")
-	cr.Spec.ForProvider.Network = stringPtr("10.0.0.0/24")
-
-	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
-	}
-}
-
-// ── namespaced: Connect ───────────────────────────────────────────────────
-
-func TestNamespacedConnectWithProviderConfig(t *testing.T) {
-	const (
-		ns     = "default"
-		secret = "infobloxnios-api-key"
-	)
+	u, _ := url.Parse(srv.URL)
 
 	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&namespacedpcv1alpha1.ProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
-				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
-					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
+	pc := &clusterpcv1alpha1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: clusterpcv1alpha1.ProviderConfigSpec{
+			Credentials: clusterpcv1alpha1.ProviderCredentials{
+				Source: xpv1.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
 				},
 			},
-		).Build()
-
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
+		},
 	}
+	secret := credentialsSecret("ns", "creds", u.Hostname(), "user", "pass")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pc, secret).Build()
+	c := &clusterConnector{kube: kube, usage: resource.NewLegacyProviderConfigUsageTracker(kube, &clusterpcv1alpha1.ProviderConfigUsage{})}
+	cr := newClusterFixedAddress("my-addr", "")
 
-	cr := newNamespacedFixedAddress(ns, "my-fixedaddress", "", "ProviderConfig")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
-	}
-}
-
-func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
-	const secret = "infobloxnios-api-key"
-	ns := "crossplane-system"
-
-	scheme := newTestScheme(t)
-	kube := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
-			&namespacedpcv1alpha1.ClusterProviderConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "default"},
-				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
-					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
-								Key:             "unused",
-							},
-						},
-					},
-				},
-			},
-		).Build()
-
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newNamespacedFixedAddress("app-ns", "my-fixedaddress", "", "ClusterProviderConfig")
-	got, err := conn.Connect(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Connect: unexpected error: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Connect: expected non-nil ExternalClient, got nil")
+	if _, err := c.Connect(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := &namespacedConnector{kube: kube, usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{})}
+	cr := newNamespacedFixedAddress("ns", "my-addr", "", "SomethingElse")
 
-	conn := &namespacedConnector{
-		kube:  kube,
-		usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{}),
-	}
-
-	cr := newNamespacedFixedAddress("default", "my-fixedaddress", "", "SomeOtherKind")
-	if _, err := conn.Connect(context.Background(), cr); err == nil {
-		t.Fatal("Connect: expected error for unsupported provider config kind, got nil")
+	if _, err := c.Connect(context.Background(), cr); err == nil {
+		t.Fatal("expected an error for an unsupported providerConfigRef Kind")
 	}
 }
 
-func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
-	if err := e.Disconnect(context.Background()); err != nil {
-		t.Errorf("Disconnect: unexpected error: %v", err)
-	}
-}
+func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
 
-// ── shared helper unit tests ─────────────────────────────────────────────
-
-func TestExtAttrsRoundTrip(t *testing.T) {
-	in := map[string]string{"env": "prod", "owner": "platform-team"}
-	ea := buildEA(in)
-	out := extAttrsFromEA(ea)
-	if !extAttrsEqual(in, out) {
-		t.Errorf("ExtAttrs round-trip mismatch: in=%v out=%v", in, out)
-	}
-}
-
-func TestExtAttrsEqualTreatsNilAndEmptyAsEqual(t *testing.T) {
-	if !extAttrsEqual(nil, map[string]string{}) {
-		t.Error("extAttrsEqual(nil, {}) = false, want true")
-	}
-	if !extAttrsEqual(map[string]string{}, nil) {
-		t.Error("extAttrsEqual({}, nil) = false, want true")
-	}
-}
-
-func TestIsNotFoundClassifiesTypedError(t *testing.T) {
-	err := &ibclient.NotFoundError{}
-	if !isNotFound(err) {
-		t.Error("isNotFound: want true for *ibclient.NotFoundError, got false")
-	}
-}
-
-func TestIsNotFoundClassifiesGenericStatusError(t *testing.T) {
-	if !isNotFound(errGenericStatus(404)) {
-		t.Error("isNotFound: want true for a generic 404 status error, got false")
-	}
-	if isNotFound(errGenericStatus(500)) {
-		t.Error("isNotFound: want false for a 500 status error, got true")
-	}
-}
-
-func errGenericStatus(code int) error {
-	return &genericStatusError{code: code}
-}
-
-type genericStatusError struct{ code int }
-
-func (e *genericStatusError) Error() string {
-	return "WAPI request error: " + itoa(e.code) + "('boom')\nContents:\n{}\n"
-}
-
-func TestDhcpOptionsRoundTrip(t *testing.T) {
-	in := []dhcpOption{
-		{Name: stringPtr("routers"), Num: int64Ptr(3), VendorClass: stringPtr("DHCP"), Value: stringPtr("10.0.0.1"), UseOption: boolPtr(true)},
-	}
-	sdk := toSDKOptions(in)
-	out := dhcpOptionsFromSDK(sdk)
-	if !dhcpOptionsEqual(in, out) {
-		t.Errorf("DHCP options round-trip mismatch: in=%+v out=%+v", in, out)
-	}
-}
-
-func TestDhcpOptionsEqualDetectsDiff(t *testing.T) {
-	a := []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")}}
-	b := []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
-	if dhcpOptionsEqual(a, b) {
-		t.Error("dhcpOptionsEqual: want false for differing Value, got true")
-	}
-}
-
-func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
-	f := &fixedAddressFields{IPv4Addr: stringPtr("10.0.0.5")}
-	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		Comment:     "server comment",
-		MatchClient: stringPtr("MAC_ADDRESS"),
-		Mac:         stringPtr("00:11:22:33:44:55"),
-		Ea:          ibclient.EA{"env": "prod"},
-	}
-
-	changed := lateInitialize(f, fa)
-	if !changed {
-		t.Fatal("lateInitialize: want changed=true, got false")
-	}
-	if strOrEmpty(f.NetworkView) != "default" {
-		t.Errorf("lateInitialize: NetworkView = %v, want default", f.NetworkView)
-	}
-	if strOrEmpty(f.Comment) != "server comment" {
-		t.Errorf("lateInitialize: Comment = %v, want %q", f.Comment, "server comment")
-	}
-	if strOrEmpty(f.MatchClient) != "MAC_ADDRESS" {
-		t.Errorf("lateInitialize: MatchClient = %v, want MAC_ADDRESS", f.MatchClient)
-	}
-	if len(f.ExtAttrs) != 1 || f.ExtAttrs["env"] != "prod" {
-		t.Errorf("lateInitialize: ExtAttrs = %v, want {env: prod}", f.ExtAttrs)
-	}
-}
-
-func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
-	f := &fixedAddressFields{
-		IPv4Addr: stringPtr("10.0.0.5"),
-		Comment:  stringPtr("user comment"),
-	}
-	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		Comment:     "server comment",
-	}
-
-	lateInitialize(f, fa)
-	if strOrEmpty(f.Comment) != "user comment" {
-		t.Errorf("lateInitialize: overwrote user-set Comment, got %v", f.Comment)
-	}
-}
-
-// TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff proves that
-// when useOptions is false the observed DHCP options (WAPI's own default
-// set, not values the user's config implies) are never written back into
-// spec.forProvider.options.
-func TestLateInitializeDoesNotBackfillOptionsWhenUseOptionsOff(t *testing.T) {
-	f := &fixedAddressFields{
-		IPv4Addr: stringPtr("10.0.0.5"),
-	}
-	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		UseOptions:  boolPtr(false),
-		Options: []*ibclient.Dhcpoption{
-			{Name: "routers", Value: "10.0.0.1"},
-		},
-	}
-
-	lateInitialize(f, fa)
-
-	if len(f.Options) != 0 {
-		t.Errorf("lateInitialize: Options = %+v, want empty (useOptions is off, observed options are the server's own default set, not user values)", f.Options)
-	}
-}
-
-func TestLateInitializeResolvesDynamicAllocationAddress(t *testing.T) {
-	f := &fixedAddressFields{IPv4Addr: stringPtr(""), Network: stringPtr("10.0.0.0/24")}
-	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.42", Cidr: "10.0.0.0/24"}
-
-	changed := lateInitialize(f, fa)
-	if !changed {
-		t.Fatal("lateInitialize: want changed=true for dynamic-allocation backfill, got false")
-	}
-	if strOrEmpty(f.IPv4Addr) != "10.0.0.42" {
-		t.Errorf("lateInitialize: IPv4Addr = %v, want the resolved literal address 10.0.0.42", f.IPv4Addr)
-	}
-}
-
-// TestIsUpToDate is a table-driven test exercising every mutable field
-// compared by isUpToDate (isUpToDateAddress and isUpToDateDHCP), covering
-// both the matching baseline and a drift on each individual field.
-func TestIsUpToDate(t *testing.T) {
-	base := fixedAddressFields{
-		IPv4Addr:                    stringPtr("10.0.0.5"),
-		MAC:                         stringPtr("00:11:22:33:44:55"),
-		NetworkView:                 stringPtr("default"),
-		Network:                     stringPtr("10.0.0.0/24"),
-		Name:                        stringPtr("host1"),
-		MatchClient:                 stringPtr("MAC_ADDRESS"),
-		Comment:                     stringPtr("hello"),
-		ExtAttrs:                    map[string]string{"env": "prod"},
-		Disable:                     boolPtr(false),
-		AgentCircuitID:              stringPtr("circuit1"),
-		AgentRemoteID:               stringPtr("remote1"),
-		ClientIdentifierPrependZero: boolPtr(true),
-		DHCPClientIdentifier:        stringPtr("client1"),
-		UseOptions:                  boolPtr(true),
-		Options: []dhcpOption{
-			{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")},
-		},
-	}
-	fa := &ibclient.FixedAddress{
-		IPv4Address:                 "10.0.0.5",
-		Mac:                         stringPtr("00:11:22:33:44:55"),
-		NetviewName:                 "default",
-		Cidr:                        "10.0.0.0/24",
-		Name:                        stringPtr("host1"),
-		MatchClient:                 stringPtr("MAC_ADDRESS"),
-		Comment:                     "hello",
-		Ea:                          ibclient.EA{"env": "prod"},
-		Disable:                     boolPtr(false),
-		AgentCircuitId:              stringPtr("circuit1"),
-		AgentRemoteId:               stringPtr("remote1"),
-		ClientIdentifierPrependZero: boolPtr(true),
-		DhcpClientIdentifier:        stringPtr("client1"),
-		UseOptions:                  boolPtr(true),
-		Options: []*ibclient.Dhcpoption{
-			{Name: "routers", Value: "10.0.0.1"},
-		},
-	}
-
-	if !isUpToDate(base, fa) {
-		t.Fatal("isUpToDate: want true for matching fields, got false")
-	}
-
-	cases := map[string]struct {
-		reason string
-		mutate func(f *fixedAddressFields)
-	}{
-		"IPv4Addr": {
-			reason: "an ipv4addr diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.IPv4Addr = stringPtr("10.0.0.9") },
-		},
-		"MAC": {
-			reason: "a mac diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.MAC = stringPtr("aa:bb:cc:dd:ee:ff") },
-		},
-		"NetworkView": {
-			reason: "a network_view diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.NetworkView = stringPtr("other-view") },
-		},
-		"Network": {
-			reason: "a network (CIDR) diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.Network = stringPtr("10.0.1.0/24") },
-		},
-		"Name": {
-			reason: "a name diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.Name = stringPtr("host2") },
-		},
-		"MatchClient": {
-			reason: "a match_client diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.MatchClient = stringPtr("CIRCUIT_ID") },
-		},
-		"Comment": {
-			reason: "a comment diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.Comment = stringPtr("changed") },
-		},
-		"ExtAttrs": {
-			reason: "an extattrs diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.ExtAttrs = map[string]string{"env": "dev"} },
-		},
-		"Disable": {
-			reason: "a disable diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.Disable = boolPtr(true) },
-		},
-		"AgentCircuitID": {
-			reason: "an agent_circuit_id diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.AgentCircuitID = stringPtr("circuit2") },
-		},
-		"AgentRemoteID": {
-			reason: "an agent_remote_id diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.AgentRemoteID = stringPtr("remote2") },
-		},
-		"ClientIdentifierPrependZero": {
-			reason: "a client_identifier_prepend_zero diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.ClientIdentifierPrependZero = boolPtr(false) },
-		},
-		"DHCPClientIdentifier": {
-			reason: "a dhcp_client_identifier diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.DHCPClientIdentifier = stringPtr("client2") },
-		},
-		"UseOptions": {
-			reason: "a use_options diff must be detected",
-			mutate: func(f *fixedAddressFields) { f.UseOptions = boolPtr(false) },
-		},
-		"Options": {
-			reason: "an options diff must be detected",
-			mutate: func(f *fixedAddressFields) {
-				f.Options = []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}}
+	scheme := newTestScheme(t)
+	cpc := &namespacedpcv1alpha1.ClusterProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+			Credentials: namespacedpcv1alpha1.ProviderCredentials{
+				Source: xpv1.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
+					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
+				},
 			},
 		},
 	}
+	secret := credentialsSecret("ns", "creds", u.Hostname(), "user", "pass")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpc, secret).Build()
+	c := &namespacedConnector{kube: kube, usage: resource.NewProviderConfigUsageTracker(kube, &namespacedpcv1alpha1.ProviderConfigUsage{})}
+	cr := newNamespacedFixedAddress("ns", "my-addr", "", "ClusterProviderConfig")
 
-	for name, tc := range cases {
+	if _, err := c.Connect(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ── newEmpty correctness (dual-object-type gate) ──────────────────────────
+
+func TestNewEmptyFixedAddressCorrectness(t *testing.T) {
+	for name, isIPv6 := range map[string]bool{"IPv4": false, "IPv6": true} {
 		t.Run(name, func(t *testing.T) {
-			drifted := base
-			tc.mutate(&drifted)
-			if isUpToDate(drifted, fa) {
-				t.Errorf("%s: isUpToDate: want false, got true", tc.reason)
+			fa := newEmptyFixedAddress(isIPv6)()
+			wantType := "fixedaddress"
+			if isIPv6 {
+				wantType = "ipv6fixedaddress"
+			}
+			if fa.ObjectType() != wantType {
+				t.Fatalf("expected ObjectType %q, got %q", wantType, fa.ObjectType())
+			}
+			found := false
+			for _, f := range fa.ReturnFields() {
+				if f == "extattrs" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("expected ReturnFields to include extattrs, got %v", fa.ReturnFields())
 			}
 		})
 	}
 }
 
-// TestIsUpToDateIgnoresOptionsWhenUseOptionsOff proves the options
-// comparison is gated on useOptions. When it is false, WAPI ignores the
-// submitted DHCP options and returns its own default set on every GET —
-// the spec options and the observed options are unrelated, and comparing
-// them unconditionally can never converge.
-func TestIsUpToDateIgnoresOptionsWhenUseOptionsOff(t *testing.T) {
-	f := fixedAddressFields{
-		IPv4Addr:    stringPtr("10.0.0.5"),
-		NetworkView: stringPtr("default"),
-		UseOptions:  boolPtr(false),
-		Options:     []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.2")}},
+// ── Identity EA must never late-init into spec.forProvider ───────────────
+
+func TestLateInitializeDoesNotLeakIdentityKeyIntoExtAttrs(t *testing.T) {
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(ibclient.EA{"Site": "dc1"}, "some-uid")
+
+	f := &fixedAddressFields{IPv4Addr: stringPtr(""), MAC: stringPtr("00:11:22:33:44:55")}
+	lateInitialize(f, fa)
+
+	if _, ok := f.ExtAttrs[identity.EAKey]; ok {
+		t.Fatalf("identity key must never late-init into spec.forProvider.extAttrs, got %v", f.ExtAttrs)
 	}
-	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		UseOptions:  boolPtr(false),
-		Options: []*ibclient.Dhcpoption{
-			{Name: "routers", Value: "10.0.0.1"},
-		},
+	if f.ExtAttrs["Site"] != "dc1" {
+		t.Fatalf("expected non-reserved EA to still be back-filled, got %v", f.ExtAttrs)
 	}
+}
+
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55")}
+	fa.Ea = identity.Stamp(nil, "some-uid")
+
+	f := fixedAddressFields{IPv4Addr: stringPtr("10.0.0.10"), MAC: stringPtr("00:11:22:33:44:55")}
 	if !isUpToDate(f, fa) {
-		t.Error("isUpToDate: want true when useOptions is off and only the server-owned options differ, got false (non-convergent drift comparison)")
+		t.Fatal("expected isUpToDate to ignore the identity EA when spec.extAttrs is empty")
 	}
 }
 
-// TestIsUpToDateDetectsUseOptionsTransition proves a useOptions
-// true -> false transition is still detected as drift even though the
-// value comparison is gated off. The flag comparison must be
-// unconditional.
-func TestIsUpToDateDetectsUseOptionsTransition(t *testing.T) {
-	f := fixedAddressFields{
-		IPv4Addr:    stringPtr("10.0.0.5"),
-		NetworkView: stringPtr("default"),
-		UseOptions:  boolPtr(false),
-		Options:     []dhcpOption{{Name: stringPtr("routers"), Value: stringPtr("10.0.0.1")}},
-	}
-	fa := &ibclient.FixedAddress{
-		IPv4Address: "10.0.0.5",
-		NetviewName: "default",
-		UseOptions:  boolPtr(true),
-		Options: []*ibclient.Dhcpoption{
-			{Name: "routers", Value: "10.0.0.1"},
-		},
-	}
-	if isUpToDate(f, fa) {
-		t.Error("isUpToDate: want false on a useOptions true -> false transition, got true (drift not detected)")
+func TestClusterDisconnectIsNoop(t *testing.T) {
+	e := &clusterExternal{}
+	if err := e.Disconnect(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-// TestIsUpToDateIPv6Addr verifies the IPv6 branch of isUpToDateAddress:
-// when the desired fields carry ipv6addr (isIPv6()==true), a mismatch on
-// ipv6addr is detected instead of ipv4addr.
-func TestIsUpToDateIPv6Addr(t *testing.T) {
-	f := fixedAddressFields{IPv6Addr: stringPtr("2001:db8::5"), NetworkView: stringPtr("default")}
-	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::5", NetviewName: "default"}
-	if !isUpToDate(f, fa) {
-		t.Fatal("isUpToDate: want true for matching ipv6addr, got false")
-	}
-
-	f.IPv6Addr = stringPtr("2001:db8::9")
-	if isUpToDate(f, fa) {
-		t.Error("isUpToDate: want false for an ipv6addr diff, got true")
-	}
-}
-
-func TestMatchClientForUpdatePrefersDesired(t *testing.T) {
-	got := matchClientForUpdate(stringPtr("CIRCUIT_ID"), stringPtr("MAC_ADDRESS"), false)
-	if got != "CIRCUIT_ID" {
-		t.Errorf("matchClientForUpdate = %q, want CIRCUIT_ID (desired takes priority)", got)
-	}
-}
-
-func TestMatchClientForUpdateFallsBackToObserved(t *testing.T) {
-	got := matchClientForUpdate(nil, stringPtr("REMOTE_ID"), false)
-	if got != "REMOTE_ID" {
-		t.Errorf("matchClientForUpdate = %q, want REMOTE_ID (observed fallback)", got)
-	}
-}
-
-func TestMatchClientForUpdateDefaultsForIPv4(t *testing.T) {
-	got := matchClientForUpdate(nil, nil, false)
-	if got != matchClientDefault {
-		t.Errorf("matchClientForUpdate = %q, want default %q", got, matchClientDefault)
-	}
-}
-
-func TestMatchClientForUpdateIgnoredForIPv6(t *testing.T) {
-	got := matchClientForUpdate(nil, nil, true)
-	if got != "" {
-		t.Errorf("matchClientForUpdate = %q, want empty string for IPv6 (no validation requirement)", got)
-	}
-}
-
-// ── extractCredentials: ssl_verify key is fully ignored ────────────────
-//
-// TLS verification is governed by the ProviderConfig's own sslVerify spec
-// field (see cluster.go/namespaced.go's Connect methods), never by a key
-// in the credentials Secret. This pins the migration: a legacy
-// "ssl_verify" key in the Secret must have zero effect on
-// extractCredentials — nioCredentials has no SslVerify field to read it
-// into.
-func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("ns", "secret", "grid.example.com", "admin", "s3cr3t")
-	secret.Data["ssl_verify"] = []byte("false")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "secret", Namespace: "ns"},
-		Key:             "unused",
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
-		t.Errorf("extractCredentials: got %+v, want Host/Username/Password populated regardless of the ssl_verify key", creds)
-	}
-}
-
-func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
-	if _, err := newObjectManagerWithScheme(&nioCredentials{Host: "example.com", Username: "u", Password: "p"}, false, "https", "443"); err != nil {
-		t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+func TestNamespacedDisconnectIsNoop(t *testing.T) {
+	e := &namespacedExternal{}
+	if err := e.Disconnect(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

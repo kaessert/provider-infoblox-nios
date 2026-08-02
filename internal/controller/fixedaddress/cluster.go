@@ -20,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/fixedaddress/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-fixedaddress.infobloxnios.crossplane.io"
@@ -83,13 +83,28 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Fixe
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{
+		kube:     c.kube,
+		objMgr:   objMgr.Manager,
+		conn:     objMgr.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.FixedAddress].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveFixedAddressIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
 // clusterToFields converts a clusterv1alpha1.FixedAddressParameters value
@@ -184,41 +199,25 @@ func clusterCloudInfoFromShared(ci *sharedCloudInfo) *clusterv1alpha1.FixedAddre
 	return out
 }
 
-// Observe fetches the FixedAddress from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the FixedAddress through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalObservation, error) {
+	f := clusterToFields(cr.Spec.ForProvider)
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetFixedAddressByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	fa, err := e.objMgr.GetFixedAddressByRef(externalID)
+	res, err := observeFixedAddress(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), f.isIPv6())
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := fixedAddressExistsByNaturalKey(e.objMgr, clusterToFields(cr.Spec.ForProvider))
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveFixedAddress)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveFixedAddress)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	fa := res.fa
 
-	o := observeFromFixedAddress(externalID, fa)
+	o := res.obs
 	cr.Status.AtProvider = clusterv1alpha1.FixedAddressObservation{
 		IPv4Addr:                    o.IPv4Addr,
 		IPv6Addr:                    o.IPv6Addr,
@@ -247,27 +246,49 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.FixedAd
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	f := clusterToFields(*p)
+	f = clusterToFields(*p)
 	lateInit := lateInitialize(&f, fa)
 	clusterApplyFields(p, f)
+
+	// A rotated or previously-unknown reference must be persisted through
+	// a path crossplane-runtime actually writes back to the API server.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+		lateInit = true
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts the
+	// identity stamp (see updateFixedAddress).
+	upToDate := isUpToDate(f, fa) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(f, fa),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
 // Create provisions a new FixedAddress via AllocateIP (NON-STANDARD — no
-// CreateFixedAddress method exists) and records the server-assigned _ref
-// as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalCreation, error) {
+// CreateFixedAddress method exists), stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	f := clusterToFields(cr.Spec.ForProvider)
-	fa, err := createFixedAddress(e.objMgr, f)
+	fa, err := createFixedAddress(e.objMgr, f, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateFixedAddress)
 	}
@@ -279,12 +300,13 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.FixedAdd
 // Update patches the mutable FixedAddress fields. Because ipv4addr is
 // _ref-mutating (UNSTABLE external name, ADR-IN-0004), the external-name
 // annotation is refreshed whenever the WAPI response returns a different
-// _ref than the one used to issue the request.
+// _ref than the one used to issue the request. Every call re-asserts the
+// identity stamp.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalUpdate, error) {
 	f := clusterToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
-	fa, err := updateFixedAddress(e.objMgr, externalID, f, cr.Status.AtProvider.MatchClient)
+	fa, err := updateFixedAddress(e.objMgr, externalID, f, cr.Status.AtProvider.MatchClient, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateFixedAddress)
 	}
@@ -297,14 +319,12 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.FixedA
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the FixedAddress. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteFixedAddressResolving404 — because the _ref is a derived handle
-// that rotates whenever an identity field changes, and a stale handle
-// 404s exactly like a genuinely deleted object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalDelete, error) {
+// Delete removes the FixedAddress, resolving through the shared identity
+// ladder first.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.FixedAddress) (managed.ExternalDelete, error) {
+	f := clusterToFields(cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
-	if err := deleteFixedAddressResolving404(e.objMgr, externalID, clusterToFields(cr.Spec.ForProvider)); err != nil {
+	if err := deleteFixedAddressIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID()), f.isIPv6()); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

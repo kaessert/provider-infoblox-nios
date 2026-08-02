@@ -19,8 +19,8 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/ipv4sharednetwork/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const namespacedControllerName = "namespaced-ipv4sharednetwork.infobloxnios.m.crossplane.io"
@@ -99,12 +99,17 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // namespacedExternal implements
@@ -112,39 +117,38 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveIPv4SharedNetworkIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
-// Observe fetches the IPv4SharedNetwork from the WAPI by its _ref external
-// name and compares it against the desired spec.
-func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the IPv4SharedNetwork through the shared UID-in-EA
+// identity ladder and compares the result against the desired spec. See
+// observeIPv4SharedNetwork for the ladder itself.
+func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	sn, err := e.objMgr.GetIpv4SharedNetworkByRef(externalID)
+	res, err := observeIPv4SharedNetwork(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.NetworkView, &p.Comment, &p.Disable, &p.UseOptions, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := ipv4SharedNetworkExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.NetworkView, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveIPv4SharedNet)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveIPv4SharedNet)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromIPv4SharedNetwork(externalID, sn)
+	o := res.obs
 	cr.Status.AtProvider = namespacedv1alpha1.IPv4SharedNetworkObservation{
 		Name:                  o.Name,
 		Networks:              o.Networks,
@@ -168,32 +172,44 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.I
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.NetworkView, &p.Comment, &p.Disable, &p.UseOptions, &p.ExtAttrs, o)
-	// Only back-fill options when useOptions is on (post-backfill value
-	// above). When it is off, the observed options are WAPI's own
-	// default set, not values implied by the user's config.
+	lateInit := res.lateInit
 	if len(p.Options) == 0 && len(o.Options) > 0 && boolOrFalse(p.UseOptions) {
 		p.Options = optionsToNamespaced(o.Options)
 		lateInit = true
+	}
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
 	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.Networks, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options), res.sn) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.Networks, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options), sn),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
-// Create provisions a new IPv4SharedNetwork and records the
-// server-assigned _ref as the external name.
-func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalCreation, error) {
+// Create provisions a new IPv4SharedNetwork, stamping the managed
+// resource's own uid into the object's identity extensible attribute in
+// the same request, and records the server-assigned _ref as the external
+// name.
+func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	sn, err := createIPv4SharedNetwork(e.objMgr, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options))
+	sn, err := createIPv4SharedNetwork(e.objMgr, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options), uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateIPv4SharedNet)
 	}
@@ -202,21 +218,20 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.IP
 	return managed.ExternalCreation{}, nil
 }
 
-// Update patches the mutable IPv4SharedNetwork fields (name, networks,
-// comment, extattrs, disable, useOptions, options). networkView is
+// Update patches the mutable IPv4SharedNetwork fields. networkView is
 // immutable and is never sent as the top-level network_view key — see
-// updateIPv4SharedNetwork.
+// updateIPv4SharedNetwork. Every call re-asserts the identity stamp.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	sn, err := updateIPv4SharedNetwork(e.objMgr, externalID, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options))
+	sn, err := updateIPv4SharedNetwork(e.objMgr, externalID, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options), string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateIPv4SharedNet)
 	}
 
-	// See clusterExternal.Update — name is mutable and the returned _ref
-	// must be re-annotated whenever it changes.
+	// See clusterExternal.Update — UpdateIpv4SharedNetwork always returns
+	// the object's current _ref, and renaming changes the _ref.
 	if sn.Ref != "" && sn.Ref != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, sn.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
@@ -225,15 +240,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the IPv4SharedNetwork. A 404 on the stored _ref is not
-// treated as already-deleted by itself — see
-// deleteIPv4SharedNetworkResolving404 — because the _ref is a derived
-// handle that rotates whenever an identity field changes, and a stale
-// handle 404s exactly like a genuinely deleted object.
-func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
+// Delete removes the IPv4SharedNetwork, resolving through the shared
+// identity ladder first.
+func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteIPv4SharedNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Name); err != nil {
+	if err := deleteIPv4SharedNetworkIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

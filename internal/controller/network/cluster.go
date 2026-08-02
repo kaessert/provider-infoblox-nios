@@ -20,7 +20,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/network/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 const clusterControllerName = "cluster-network.infobloxnios.crossplane.io"
@@ -73,54 +73,53 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Netw
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mc, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{objMgr: objMgr}, nil
+	return &clusterExternal{
+		objMgr:   mc.Manager,
+		conn:     mc.Connector,
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.Network].
 type clusterExternal struct {
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — see resolveNetworkIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host.
+	endpoint string
 }
 
-// Observe fetches the Network from the WAPI by its _ref external name and
-// compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.Network) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the Network through the shared UID-in-EA identity
+// ladder (family-aware — see resolveNetworkIdentity) and compares the
+// result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.Network) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetNetworkByRef with
-	// the CR's Kubernetes name (not a real WAPI _ref) would error against
-	// the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	nw, err := e.objMgr.GetNetworkByRef(externalID)
+	res, err := observeNetwork(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Network, &p.Comment, p.ParentCidr, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := networkExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.NetworkView, cr.Spec.ForProvider.Network)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNetwork)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveNetwork)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromNetwork(externalID, nw)
+	o := res.obs
 	members := make([]clusterv1alpha1.NetworkMember, 0, len(o.Members))
 	for _, m := range o.Members {
 		members = append(members, clusterv1alpha1.NetworkMember{
@@ -144,27 +143,48 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.Network
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
-	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.Network, &p.Comment, &p.ExtAttrs, nw)
+	// A rotated or previously-unknown reference must be persisted through
+	// a path crossplane-runtime actually writes back to the API server.
+	// res.lateInit is already forced true alongside res.refreshedRef by
+	// observeNetwork for exactly this reason.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts the
+	// identity stamp (see updateNetwork).
+	upToDate := isUpToDate(p.Comment, p.ExtAttrs, res.nw) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Comment, p.ExtAttrs, nw),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new Network and records the server-assigned _ref as
-// the external name. Routes across three creation paths — see
-// createOrAllocateNetwork. The WAPI object type (network vs ipv6network)
-// is selected at runtime from the CIDR format.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.Network) (managed.ExternalCreation, error) {
+// Create provisions a new Network, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+// Routes across three creation paths — see createOrAllocateNetwork. The
+// WAPI object type (network vs ipv6network) is selected at runtime from
+// the CIDR format.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.Network) (managed.ExternalCreation, error) {
+	uid := string(cr.GetUID())
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	p := cr.Spec.ForProvider
-	nw, err := createOrAllocateNetwork(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.Object, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs)
+	nw, err := createOrAllocateNetwork(e.objMgr, p.NetworkView, p.Network, p.ParentCidr, p.Comment, p.Object, p.AllocatePrefixLen, p.FilterParams, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateNetwork)
 	}
@@ -175,12 +195,12 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.Network)
 
 // Update patches the mutable Network fields (comment, extattrs).
 // networkView and network (cidr) are immutable and are never sent — see
-// updateNetwork.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.Network) (managed.ExternalUpdate, error) {
+// updateNetwork. Every call re-asserts the identity stamp.
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Network) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs); err != nil {
+	if err := updateNetwork(e.objMgr, externalID, p.Comment, p.ExtAttrs, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateNetwork)
 	}
 
@@ -190,15 +210,15 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.Network)
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the Network. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteNetworkResolving404 — because
-// the _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object. This is a hard delete — a subsequent GET on the same ref 404s.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.Network) (managed.ExternalDelete, error) {
-	externalID := meta.GetExternalName(cr)
+// Delete removes the Network, resolving through the shared identity
+// ladder first — see deleteNetworkIdentity for the full
+// ownership-verification rules a stale or rotated _ref must satisfy
+// before a delete is issued. This is a hard delete — a subsequent GET on
+// the same ref 404s.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.Network) (managed.ExternalDelete, error) {
 	p := cr.Spec.ForProvider
-	if err := deleteNetworkResolving404(e.objMgr, externalID, p.NetworkView, p.Network); err != nil {
+	externalID := meta.GetExternalName(cr)
+	if err := deleteNetworkIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID()), p.Network, p.ParentCidr); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
