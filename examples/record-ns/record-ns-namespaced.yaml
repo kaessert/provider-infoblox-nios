@@ -13,6 +13,12 @@
 # without colliding on the same (view, zone, name) WAPI identity. Like
 # record-ns.yaml, `name` MUST be a zone-apex name, not a subdomain — see
 # record-ns.yaml's "NS quirk" note for why.
+#
+# ${data.runToken}: see record-ns.yaml's runToken comment — nameserver is
+# tokenised (not name/view) because this record's identity ladder makes
+# name/view shared Grid context, not tokenisable identity. "-ns-" keeps
+# this scope's nameserver distinct from record-ns.yaml's within a run,
+# on top of the pre-existing distinct zone-apex.
 apiVersion: recordns.infobloxnios.m.crossplane.io/v1alpha1
 kind: NSRecord
 metadata:
@@ -28,7 +34,7 @@ metadata:
     # rationale.
     crossplane.io/update-test: |
       - field: nameserver
-        value: "ns2-ns.example.com"
+        skip: "part of this record's natural key (name, view, nameserver); name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component and must not be set to a shared literal value — doing so would converge every concurrent run onto the same natural key at Update time. Mutability is exercised structurally by every other DNS record's update-test via the shared _ref-rotation-on-update code path (see record-a.yaml's name skip and record-srv.yaml's priority field)"
       - field: msDelegationName
         skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses
@@ -36,7 +42,7 @@ metadata:
 spec:
   forProvider:
     name: example.com
-    nameserver: ns1.example.com
+    nameserver: ns1-ns-${data.runToken}.example.com
     addresses:
       - address: 192.0.2.54
         autoCreatePtr: false
