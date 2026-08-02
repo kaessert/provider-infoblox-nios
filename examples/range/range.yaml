@@ -17,6 +17,17 @@
 #   startAddr: first address in the DHCP range.
 #   endAddr:   last address in the DHCP range.
 #
+# ${data.netRangeStartCluster} / ${data.netRangeEndCluster}: injected by
+# uptest from the --data-source file (see test/e2e/gen-datasource.sh) so
+# concurrent E2E runs against the shared NIOS Grid never request the same
+# (startAddr, endAddr, networkView) WAPI identity. These resolve to
+# 100.64.<BLOCK_INDEX>.140 through .160 — the cluster-scope's fixed
+# 21-address sub-block reserved inside the run's /24 (see the
+# sub-allocation map in gen-datasource.sh's header comment;
+# range-namespaced.yaml uses the disjoint .161-.181 sub-block). Left
+# literal ("${data.netRangeStartCluster}") if no datasource is supplied,
+# which is exactly the pre-isolation behavior this guards against.
+#
 # Optional fields:
 #   networkView: name of the NetworkView the range belongs to. This
 #                example uses the Grid's well-known "default" network view
@@ -75,8 +86,8 @@ metadata:
         skip: "reference field resolving to networkView; not exercised via per-field diff testing"
 spec:
   forProvider:
-    startAddr: 203.0.113.100
-    endAddr: 203.0.113.120
+    startAddr: ${data.netRangeStartCluster}
+    endAddr: ${data.netRangeEndCluster}
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:

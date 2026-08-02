@@ -7,9 +7,13 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the address range below differs from range.yaml's so
-# both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same range identity.
+# Distinct identity: ${data.netRangeStartNamespaced} / ${data.netRangeEndNamespaced}
+# (100.64.<BLOCK_INDEX>.161 through .181) are a disjoint 21-address
+# sub-block from range.yaml's ${data.netRangeStartCluster} /
+# ${data.netRangeEndCluster} (.140-.160) — see the sub-allocation map in
+# test/e2e/gen-datasource.sh's header comment — so both examples can be
+# applied to the same NIOS Grid Manager (and the same E2E run's netPrefix)
+# at once without colliding on the same range identity.
 apiVersion: range.infobloxnios.m.crossplane.io/v1alpha1
 kind: Range
 metadata:
@@ -42,8 +46,8 @@ metadata:
         skip: "reference field resolving to networkView; not exercised via per-field diff testing"
 spec:
   forProvider:
-    startAddr: 203.0.113.160
-    endAddr: 203.0.113.180
+    startAddr: ${data.netRangeStartNamespaced}
+    endAddr: ${data.netRangeEndNamespaced}
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
