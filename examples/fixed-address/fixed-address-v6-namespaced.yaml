@@ -1,8 +1,7 @@
 # FixedAddress (IPv6 variant) is the namespace-scoped variant of the
 # Infoblox NIOS DHCP fixed address. See fixed-address-v6.yaml for the
-# cluster-scoped variant, the dual-object-type rationale, and the DUID /
-# known controller limitation note — this file only documents what
-# differs.
+# cluster-scoped variant, the dual-object-type rationale, and the DUID
+# field note — this file only documents what differs.
 #
 # This example references the cluster-scoped ClusterProviderConfig (usable
 # by namespaced resources from any namespace) rather than the
@@ -30,16 +29,16 @@ metadata:
     crossplane.io/update-test: |
       - field: comment
         value: "Updated by update-tester (IPv6, namespaced)"
+      - field: mac
+        value: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:99"
       - field: name
         value: "updated-fixed-address-v6-ns"
-      - field: mac
-        skip: "required DUID for IPv6, but the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's file header) — value-testing it cannot converge until that is fixed"
       - field: matchClient
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: disable
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: useOptions
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: ipv4addr
         skip: "mutually exclusive with ipv6addr; this example uses ipv6addr"
       - field: ipv6addr
@@ -49,13 +48,13 @@ metadata:
       - field: network
         skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv6addr"
       - field: agentCircuitId
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: agentRemoteId
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: dhcpClientIdentifier
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: clientIdentifierPrependZero
-        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's update-test annotation header) — value-testing it cannot converge"
       - field: extAttrs
         skip: "optional map field, low update-test value"
       - field: options
