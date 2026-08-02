@@ -42,6 +42,19 @@
 // — see isReservedIdentityDefinitionName and its use in
 // cluster.go/namespaced.go.
 //
+// That spec-name check alone is bypassable: Update() and Delete() both
+// address WAPI purely by the stored _ref (the external-name annotation),
+// never by re-deriving it from spec.forProvider.name. Hand-setting the
+// annotation to the reserved definition's _ref — an ordinary adoption
+// workflow, not only a malicious one — while leaving
+// spec.forProvider.name as something else entirely reaches the reserved
+// definition with the spec-name guard never seeing it. Create/Update/
+// Delete therefore also resolve the annotation against WAPI and refuse
+// if the FETCHED object's name is the reserved one, regardless of what
+// the spec says — see refuseIfResolvedRefIsReserved below and its use in
+// cluster.go/namespaced.go. This is a second, independent check; it does
+// not replace the spec-name guard.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared connector plumbing, field comparison, and late-init logic lives
 // here.
@@ -89,6 +102,7 @@ const (
 	errReservedName        = "refusing to manage the reserved identity extensible attribute definition (\"" + identity.EAKey + "\"): " +
 		"every other resource in this provider depends on it for ownership verification, and this controller has no way to tell a " +
 		"legitimate administrative change from one that would silently break identity resolution Grid-wide. Choose a different name."
+	errResolveReservedGuard = "cannot verify whether the external-name annotation resolves to the reserved identity extensible attribute definition"
 )
 
 // isReservedIdentityDefinitionName reports whether name is the identity
@@ -97,6 +111,47 @@ const (
 // rationale.
 func isReservedIdentityDefinitionName(name string) bool {
 	return name == identity.EAKey
+}
+
+// refuseIfResolvedRefIsReserved fetches the object addressed by ref and
+// refuses the caller's mutating operation if that object's ACTUAL
+// (resolved) name is the reserved identity extensible attribute
+// definition name — regardless of what cr.Spec.ForProvider.Name says.
+//
+// isReservedIdentityDefinitionName alone only protects the direct path:
+// a user naming their own MR "Crossplane Internal ID". It does nothing
+// for the alias path: crossplane.io/external-name hand-set (e.g. during
+// adoption) to the reserved definition's _ref, with
+// spec.forProvider.name left as something else entirely. Update() and
+// Delete() address WAPI purely by ref — they never re-derive it from the
+// spec name — so without this second check they would rename or delete
+// the reserved definition through that alias while the spec-name guard,
+// looking at the wrong field, stays silent. See the package doc's
+// "Self-reference guard" section.
+//
+// ref == "" or ref == crName is not yet a real WAPI handle (the default
+// external-name before Create() has ever run — see the pre-create guard
+// in Observe) and is skipped rather than probed, matching Observe's own
+// handling of that state. A NotFound result on the GET is passed through
+// unchanged: it means the handle is stale or absent, a state the
+// natural-key staleref fallback already owns downstream of this guard —
+// this guard only ever adds a refusal, it never removes existing 404
+// handling.
+func refuseIfResolvedRefIsReserved(conn *ibclient.Connector, ref, crName string) error {
+	if ref == "" || ref == crName {
+		return nil
+	}
+	def, err := getEADefinitionByRef(conn, ref)
+	if err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return errors.Wrap(err, errResolveReservedGuard)
+	}
+	if def.Name != nil && isReservedIdentityDefinitionName(*def.Name) {
+		return errors.New(errReservedName)
+	}
+	return nil
 }
 
 // wapiVersion is the NIOS WAPI version this provider targets

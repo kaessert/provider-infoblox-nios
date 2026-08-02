@@ -344,6 +344,23 @@ func fixedStatusHandler(status int) http.Handler {
 	})
 }
 
+// mutationErrorHandler answers every GET with a benign (non-reserved)
+// EADefinition so the resolved-name guard's own read passes through
+// cleanly, then fails every other method (the actual mutating call under
+// test) with the given status. Used by tests that want to exercise a
+// mutating call's own error classification without that assertion being
+// muddied by the guard's read failing first.
+func mutationErrorHandler(status int, ref, name string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, http.StatusOK, &ibclient.EADefinition{Name: stringPtr(name), Ref: ref})
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"Error":"boom"}`))
+	})
+}
+
 // newTestConnector builds an *ibclient.Connector pointed at the given
 // httptest.Server via plain HTTP (no TLS needed — the WapiRequestBuilder
 // only switches to HTTPS when hostCfg.Scheme != "http").
@@ -755,7 +772,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 }
 
 func TestClusterDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	srv := httptest.NewServer(mutationErrorHandler(http.StatusInternalServerError, "extensibleattributedef/test1:MyAttribute", "MyAttribute"))
 	defer srv.Close()
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
@@ -1178,7 +1195,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 // WAPI delete endpoint is propagated (wrapped, not swallowed) rather than
 // being treated as a not-found/already-deleted success.
 func TestNamespacedDeleteServerError(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	srv := httptest.NewServer(mutationErrorHandler(http.StatusInternalServerError, "extensibleattributedef/test1:MyAttribute", "MyAttribute"))
 	defer srv.Close()
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
@@ -1798,4 +1815,137 @@ func TestNamespacedDeleteRefusesReservedName(t *testing.T) {
 
 	_, err := e.Delete(context.Background(), cr)
 	assertReservedNameRefusal(t, err, "Delete")
+}
+
+// ── Self-reference guard via the resolved ref (alias bypass) ────────────
+//
+// The tests above prove the spec-name check refuses when
+// spec.forProvider.name literally IS the reserved name. These tests prove
+// the second, independent check: an MR whose spec.forProvider.name is
+// arbitrary but whose crossplane.io/external-name annotation resolves
+// (via a WAPI GET) to the reserved definition's _ref must ALSO be
+// refused — the spec-name check alone never inspects what the annotation
+// actually addresses. Each server allows the guard's own GET but fails
+// the test on any other request, proving the refusal happens before any
+// mutating WAPI call.
+
+// reservedRef is a _ref that — per the mock server below — resolves to
+// an EADefinition literally named identity.EAKey, simulating the
+// external-name annotation having been hand-set (e.g. during adoption)
+// to point at the reserved identity extensible attribute definition.
+const reservedRef = "extensibleattributedef/reserved:Crossplane Internal ID"
+
+// divergentSpecName is a spec.forProvider.name value that is NOT the
+// reserved name — used across the resolved-ref tests below to prove the
+// spec-name check alone (which only ever sees this value) is not what
+// produces the refusal; the resolved-ref guard must.
+const divergentSpecName = "something-else"
+
+// failOnMutatingRequests returns a server that answers every GET for ref
+// with an EADefinition named name, and fails the test on any other
+// request (POST/PUT/DELETE) — proving the resolved-name guard refuses
+// before issuing any mutating WAPI call.
+func failOnMutatingRequests(t *testing.T, ref, name string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, http.StatusOK, &ibclient.EADefinition{Name: stringPtr(name), Ref: ref})
+			return
+		}
+		t.Fatalf("unexpected mutating HTTP call: %s %s", r.Method, r.URL.Path)
+	}))
+}
+
+func TestClusterUpdateRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", reservedRef)
+	// Divergent spec name: this is exactly what the spec-name check
+	// cannot see — the guard must resolve externalID itself.
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Update(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Update")
+}
+
+func TestClusterDeleteRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", reservedRef)
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Delete(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Delete")
+}
+
+func TestClusterCreateRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", reservedRef)
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Create(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Create")
+}
+
+func TestNamespacedUpdateRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", reservedRef, "ProviderConfig")
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Update(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Update")
+}
+
+func TestNamespacedDeleteRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", reservedRef, "ProviderConfig")
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Delete(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Delete")
+}
+
+func TestNamespacedCreateRefusesResolvedReservedRef(t *testing.T) {
+	srv := failOnMutatingRequests(t, reservedRef, identity.EAKey)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", reservedRef, "ProviderConfig")
+	cr.Spec.ForProvider.Name = divergentSpecName
+
+	_, err := e.Create(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Create")
+}
+
+// TestClusterUpdateResolveGuardPropagatesGetError verifies the guard's
+// own GET failure (a transport-level error, not a refusal) is wrapped
+// and surfaced rather than treated as either "not reserved" or silently
+// swallowed.
+func TestClusterUpdateResolveGuardPropagatesGetError(t *testing.T) {
+	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", "extensibleattributedef/test1:MyAttribute")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected error when the resolved-name guard's GET fails, got nil")
+	}
+	if !strings.Contains(err.Error(), errResolveReservedGuard) {
+		t.Errorf("Update: error = %q, want it to contain %q", err.Error(), errResolveReservedGuard)
+	}
 }
