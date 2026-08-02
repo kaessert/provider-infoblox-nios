@@ -871,12 +871,11 @@ func TestNewEmptyIpv4SharedNetworkCorrectness(t *testing.T) {
 func TestLateInitializeDoesNotLeakIdentityKeyIntoExtAttrs(t *testing.T) {
 	sn := &ibclient.SharedNetwork{Name: stringPtr("test-shared-network")}
 	sn.Ea = identity.Stamp(ibclient.EA{"Site": "dc1"}, "some-uid")
-	obs := observeFromIPv4SharedNetwork("sharednetwork/x", sn)
 
 	var networkView, comment *string
 	var disable, useOptions *bool
 	var extAttrs map[string]string
-	lateInitialize(&networkView, &comment, &disable, &useOptions, &extAttrs, obs)
+	lateInitialize(&networkView, &comment, &disable, &useOptions, &extAttrs, sn)
 
 	if _, ok := extAttrs[identity.EAKey]; ok {
 		t.Fatalf("identity key must never late-init into spec.forProvider.extAttrs, got %v", extAttrs)

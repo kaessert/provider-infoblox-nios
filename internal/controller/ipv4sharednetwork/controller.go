@@ -636,65 +636,47 @@ func observeFromIPv4SharedNetwork(externalID string, sn *ibclient.SharedNetwork)
 
 // lateInitialize back-fills server-defaulted optional primitive fields
 // (networkView, comment, disable, useOptions, extAttrs) from the observed
-// IPv4SharedNetwork into spec so isUpToDate does not see phantom drift on
-// the next reconcile. The required fields (name, networks) are always
-// user-supplied and never late-initialized. Options requires
+// ibclient.SharedNetwork into spec so isUpToDate does not see phantom
+// drift on the next reconcile. The required fields (name, networks) are
+// always user-supplied and never late-initialized. Options requires
 // scope-specific type conversion and is handled separately by each
 // scope's Observe (see optionsToCluster/optionsToNamespaced). extAttrs is
 // back-filled with the provider's own identity stamp stripped out
-// (identity.Strip) — the CRD schema never includes that reserved key, so
+// (identity.Strip) — the same helper every other IPAM controller uses —
+// because the CRD schema never includes that reserved key, so
 // late-initializing it into spec.forProvider would fail CEL validation
 // and produce a permanent diff. Returns true if any field was changed.
-func lateInitialize(networkView, comment **string, disable, useOptions **bool, extAttrs *map[string]string, o observedIPv4SharedNetwork) bool {
+func lateInitialize(networkView, comment **string, disable, useOptions **bool, extAttrs *map[string]string, sn *ibclient.SharedNetwork) bool {
 	changed := false
 
-	if *networkView == nil && o.NetworkView != nil {
-		*networkView = o.NetworkView
+	if *networkView == nil && sn.NetworkView != "" {
+		v := sn.NetworkView
+		*networkView = &v
 		changed = true
 	}
-	if *comment == nil && o.Comment != nil {
-		*comment = o.Comment
+	if *comment == nil && sn.Comment != nil && *sn.Comment != "" {
+		v := *sn.Comment
+		*comment = &v
 		changed = true
 	}
-	if *disable == nil && o.Disable != nil {
-		*disable = o.Disable
+	if *disable == nil && sn.Disable != nil {
+		v := *sn.Disable
+		*disable = &v
 		changed = true
 	}
-	if *useOptions == nil && o.UseOptions != nil {
-		*useOptions = o.UseOptions
+	if *useOptions == nil && sn.UseOptions != nil {
+		v := *sn.UseOptions
+		*useOptions = &v
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := stripIdentityKey(o.ExtAttrs); len(fromRec) > 0 {
-			*extAttrs = fromRec
+		if fromSN := extAttrsFromEA(identity.Strip(sn.Ea)); len(fromSN) > 0 {
+			*extAttrs = fromSN
 			changed = true
 		}
 	}
 
 	return changed
-}
-
-// stripIdentityKey returns a copy of extAttrs (the CRD's simplified
-// string-valued extensible-attributes map, as extracted by
-// observeFromIPv4SharedNetwork) with the provider's own identity stamp
-// removed — the CRD schema never includes that reserved key, so
-// late-initializing it into spec.forProvider would fail CEL validation
-// and produce a permanent diff. Operates on the already-stringified map
-// rather than the raw ibclient.EA (identity.Strip's usual input) because
-// observedIPv4SharedNetwork.ExtAttrs is the only form available by the
-// time lateInitialize runs.
-func stripIdentityKey(extAttrs map[string]string) map[string]string {
-	if len(extAttrs) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(extAttrs))
-	for k, v := range extAttrs {
-		if k == identity.EAKey {
-			continue
-		}
-		out[k] = v
-	}
-	return out
 }
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
@@ -824,7 +806,7 @@ func observeIPv4SharedNetwork(ctx context.Context, conn ibclient.IBConnector, pr
 		obs:     obs,
 		adopted: outcome == identity.OutcomeAdopted,
 	}
-	res.lateInit = lateInitialize(networkView, comment, disable, useOptions, extAttrs, obs)
+	res.lateInit = lateInitialize(networkView, comment, disable, useOptions, extAttrs, sn)
 
 	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
 		res.refreshedRef = sn.Ref
