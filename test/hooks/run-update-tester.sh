@@ -57,6 +57,35 @@
 # examples/dns-view/dns-view.yaml for a worked example of this pattern.
 # ─────────────────────────────────────────────────────────────────────
 
+# ── Known limitation: client-go's per-object Event spam-filter ceiling ──
+# The per-field evidence check below (in tools/update-tester) counts
+# UpdatedExternalResource/CannotUpdateExternalResource events to prove
+# Update() actually ran for each tested field. crossplane-runtime emits
+# exactly ONE identical Event per successful Update() call regardless of
+# which field changed, and client-go's EventBroadcaster throttles repeated
+# events sharing the same (object, reason, message) key with a token-bucket
+# spam filter: burst=25, refilling at only 1 token/300s once exhausted
+# (k8s.io/client-go/tools/record: defaultSpamBurst=25, defaultSpamQPS=1/300).
+# That bucket lives in the running controller pod's in-memory
+# EventBroadcaster for the whole e2e session (per-controller-process state,
+# not per-tester-invocation), so once a single resource's crossplane.io/
+# update-test annotation drives more than ~25 genuine Update() calls in one
+# run, the 26th+ calls still reach the backend but stop producing fresh
+# Event objects for this evidence check to see — a false NOT-EVIDENCED, not
+# a controller defect. This was first hit by DNSView (49 mutable scalar
+# fields, by far the largest per-field test surface in this catalog); see
+# examples/dns-view/dns-view.yaml's header comment for the full
+# investigation and the fix applied there (trimming the live-tested field
+# set to one representative field per gated feature group, safely under
+# the 25-event ceiling, with the remainder skip-annotated). If a future
+# resource's tested-field count approaches ~20-25, apply the same trim
+# rather than assuming a fresh NOT-EVIDENCED result is a controller
+# regression. A durable, general fix would teach the evidence check itself
+# to tolerate the spam filter (e.g. a different convergence signal for
+# high-field-count resources); that logic lives in tools/update-tester,
+# outside this script's charter.
+# ─────────────────────────────────────────────────────────────────────
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
