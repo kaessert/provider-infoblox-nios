@@ -41,7 +41,7 @@ type NetworkParameters struct {
 	ParentCidr *string `json:"parentCidr,omitempty"`
 	// Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Required when parentCidr or filterParams is set.
 	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"`
-	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Keys must carry the WAPI extensible-attribute search prefix "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare key such as "Site" is rejected by WAPI with "Unknown argument/field". Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
 	// +optional
 	FilterParams map[string]string `json:"filterParams"`
 	// WAPI object type filter for AllocateNetworkByEA, e.g. "networkcontainer". Only valid when filterParams is set; ignored otherwise.
@@ -75,7 +75,7 @@ type NetworkObservation struct {
 	ParentCidr *string `json:"parentCidr,omitempty"` // atProvider
 	// Prefix length of the subnet to allocate from parentCidr or filterParams, e.g. 24 for a /24. Required when parentCidr or filterParams is set.
 	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"` // atProvider
-	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Keys must carry the WAPI extensible-attribute search prefix "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare key such as "Site" is rejected by WAPI with "Unknown argument/field". Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
 	// +optional
 	FilterParams map[string]string `json:"filterParams"` // atProvider
 	// WAPI object type filter for AllocateNetworkByEA, e.g. "networkcontainer". Only valid when filterParams is set; ignored otherwise.

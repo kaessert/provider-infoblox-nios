@@ -86,10 +86,13 @@ spec:
                   filterParams:
                     additionalProperties:
                       type: string
-                    description: Extensible attribute key/value filter for EA-based
+                    description: 'Extensible attribute key/value filter for EA-based
                       allocation, driving the AllocateNetworkContainerByEA SDK call.
+                      Keys must carry the WAPI extensible-attribute search prefix
+                      "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare
+                      key such as "Site" is rejected by WAPI with "Unknown argument/field".
                       Mutually exclusive with parentCidr. When set, allocatePrefixLen
-                      is required.
+                      is required.'
                     type: object
                   network:
                     description: 'CIDR of the container network, e.g. "10.0.0.0/16".
@@ -287,10 +290,13 @@ spec:
                   filterParams:
                     additionalProperties:
                       type: string
-                    description: Extensible attribute key/value filter for EA-based
+                    description: 'Extensible attribute key/value filter for EA-based
                       allocation, driving the AllocateNetworkContainerByEA SDK call.
+                      Keys must carry the WAPI extensible-attribute search prefix
+                      "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare
+                      key such as "Site" is rejected by WAPI with "Unknown argument/field".
                       Mutually exclusive with parentCidr. When set, allocatePrefixLen
-                      is required.
+                      is required.'
                     type: object
                   id:
                     description: |-

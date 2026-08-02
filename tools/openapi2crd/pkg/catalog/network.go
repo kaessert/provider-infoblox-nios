@@ -106,7 +106,7 @@ func network() ResourceDescriptor {
 				JSONName:    "filterParams",
 				GoType:      goTypeStringMap,
 				Scope:       FieldScopeRequest,
-				Description: "Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.",
+				Description: "Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkByEA SDK call. Keys must carry the WAPI extensible-attribute search prefix \"*\" (e.g. \"*Site\": \"nyc\" to filter on the Site EA) — a bare key such as \"Site\" is rejected by WAPI with \"Unknown argument/field\". Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.",
 			},
 			{
 				Name:        "Object",
