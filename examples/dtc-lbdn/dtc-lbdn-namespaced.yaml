@@ -35,7 +35,7 @@ metadata:
       - field: lbMethod
         value: "RATIO"
       - field: priority
-        value: 5
+        value: 2
       - field: persistence
         value: 300
       - field: disable
