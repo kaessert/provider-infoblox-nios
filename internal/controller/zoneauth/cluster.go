@@ -304,7 +304,7 @@ func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneAuth
 	f := clusterFieldsFromSpec(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
+	if err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)
 	}
 

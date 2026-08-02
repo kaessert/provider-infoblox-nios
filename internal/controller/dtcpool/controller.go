@@ -1024,16 +1024,6 @@ func newEmptyDtcPool() *ibclient.DtcPool {
 	return pool
 }
 
-// getDtcPoolByRef issues the WAPI GET call for the DTCPool identified by
-// ref via the low-level IBConnector — see dtcPoolReturnFields and the
-// package doc comment for why the ObjectManager's GetDtcPoolByRef
-// convenience method cannot be used as-is for this deployment.
-func getDtcPoolByRef(conn ibclient.IBConnector, ref string) (*ibclient.DtcPool, error) {
-	pool := newEmptyDtcPool()
-	err := conn.GetObject(pool, ref, ibclient.NewQueryParams(false, nil), &pool)
-	return pool, err
-}
-
 // deleteDtcPool issues the WAPI delete call.
 func deleteDtcPool(objMgr ibclient.IBObjectManager, ref string) error {
 	_, err := objMgr.DeleteDtcPool(ref)

@@ -62,7 +62,6 @@ const (
 	errCreateZoneAuth            = "cannot create ZoneAuth"
 	errUpdateZoneAuth            = "cannot update ZoneAuth"
 	errDeleteZoneAuth            = "cannot delete ZoneAuth"
-	errEmptyRef                  = "empty reference to an object is not allowed"
 	errEmptyUID                  = "cannot stamp ZoneAuth identity: managed resource's metadata.uid is empty"
 	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
 		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
@@ -898,20 +897,6 @@ func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 
 // ── WAPI call wrappers (shared by both scopes) ──────────────────────────
 
-// getZoneAuthByRef issues a direct WAPI GET for the zone_auth object
-// identified by ref, requesting every field mirrored by
-// ZoneAuthObservation.
-func getZoneAuthByRef(conn ibclient.IBConnector, ref string) (*ibclient.ZoneAuth, error) {
-	if ref == "" {
-		return nil, errors.New(errEmptyRef)
-	}
-	z := newZoneAuthForGet()
-	if err := conn.GetObject(z, ref, ibclient.NewQueryParams(false, nil), z); err != nil {
-		return nil, err
-	}
-	return z, nil
-}
-
 // createZoneAuth issues a direct WAPI POST for a new zone_auth object and
 // returns the server-assigned _ref. Stamps the owning managed resource's
 // uid into the object's extensible attributes in the same request that
@@ -932,13 +917,14 @@ func createZoneAuth(conn ibclient.IBConnector, f zoneAuthFields, uid string) (st
 // (fqdn/view/zone_format) is immutable. Every call re-asserts the
 // identity stamp since a WAPI PUT carrying extattrs replaces the whole
 // map rather than merging it.
-func updateZoneAuth(conn ibclient.IBConnector, ref string, f zoneAuthFields, uid string) (string, error) {
+func updateZoneAuth(conn ibclient.IBConnector, ref string, f zoneAuthFields, uid string) error {
 	if uid == "" {
-		return "", errors.New(errEmptyUID)
+		return errors.New(errEmptyUID)
 	}
 	z := buildZoneAuthForUpdate(f)
 	z.Ea = identity.Stamp(z.Ea, uid)
-	return conn.UpdateObject(z, ref)
+	_, err := conn.UpdateObject(z, ref)
+	return err
 }
 
 // deleteZoneAuth issues a direct WAPI DELETE for the zone_auth object

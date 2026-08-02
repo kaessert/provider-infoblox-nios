@@ -801,17 +801,6 @@ func newEmptyDtcLbdn() *ibclient.DtcLbdn {
 	return lbdn
 }
 
-// getDtcLbdnByRef issues the WAPI GET call for the DTCLBDN identified by
-// ref via the low-level IBConnector — see dtcLbdnReturnFields and the
-// package doc comment for why the ObjectManager's GetDtcLbdnByRef
-// convenience method cannot be used as-is for this deployment.
-func getDtcLbdnByRef(conn ibclient.IBConnector, ref string) (*ibclient.DtcLbdn, error) {
-	lbdn := &ibclient.DtcLbdn{}
-	lbdn.SetReturnFields(append(lbdn.ReturnFields(), dtcLbdnReturnFields...))
-	err := conn.GetObject(lbdn, ref, ibclient.NewQueryParams(false, nil), &lbdn)
-	return lbdn, err
-}
-
 // ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
 // ensureIdentityPrerequisite probes the Grid for the identity extensible

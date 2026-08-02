@@ -68,7 +68,6 @@ const (
 	errCreateDNSView             = "cannot create DNSView"
 	errUpdateDNSView             = "cannot update DNSView"
 	errDeleteDNSView             = "cannot delete DNSView"
-	errEmptyRef                  = "empty reference to an object is not allowed"
 	errEmptyUID                  = "cannot stamp DNSView identity: managed resource's metadata.uid is empty"
 	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
 		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
@@ -2138,19 +2137,6 @@ func newViewForGet() *ibclient.View {
 	v := ibclient.NewEmptyDNSView()
 	v.SetReturnFields(append(v.ReturnFields(), dnsViewReturnFields...))
 	return v
-}
-
-// getViewByRef issues a direct WAPI GET for the view object identified by
-// ref, requesting every field mirrored by DNSViewObservation.
-func getViewByRef(conn ibclient.IBConnector, ref string) (*ibclient.View, error) {
-	if ref == "" {
-		return nil, errors.New(errEmptyRef)
-	}
-	v := newViewForGet()
-	if err := conn.GetObject(v, ref, ibclient.NewQueryParams(false, nil), v); err != nil {
-		return nil, err
-	}
-	return v, nil
 }
 
 // createView issues a direct WAPI POST for a new view object and returns

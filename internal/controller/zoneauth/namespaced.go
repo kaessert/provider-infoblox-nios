@@ -328,7 +328,7 @@ func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.Zo
 	f := namespacedFieldsFromSpec(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
 
-	if _, err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
+	if err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)
 	}
 
