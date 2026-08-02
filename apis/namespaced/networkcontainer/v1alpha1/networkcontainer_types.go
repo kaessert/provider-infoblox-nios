@@ -29,7 +29,7 @@ type NetworkContainerParameters struct {
 	ParentCidr *string `json:"parentCidr,omitempty"`
 	// Prefix length of the subnet container to allocate from parentCidr or filterParams, e.g. 16 for a /16. Required when parentCidr or filterParams is set.
 	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"`
-	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call. Keys must carry the WAPI extensible-attribute search prefix "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare key such as "Site" is rejected by WAPI with "Unknown argument/field". Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
 	// +optional
 	FilterParams map[string]string `json:"filterParams"`
 	// Comment for the network container.
@@ -61,7 +61,7 @@ type NetworkContainerObservation struct {
 	ParentCidr *string `json:"parentCidr,omitempty"` // atProvider
 	// Prefix length of the subnet container to allocate from parentCidr or filterParams, e.g. 16 for a /16. Required when parentCidr or filterParams is set.
 	AllocatePrefixLen *uint `json:"allocatePrefixLen,omitempty"` // atProvider
-	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call. Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
+	// Extensible attribute key/value filter for EA-based allocation, driving the AllocateNetworkContainerByEA SDK call. Keys must carry the WAPI extensible-attribute search prefix "*" (e.g. "*Site": "nyc" to filter on the Site EA) — a bare key such as "Site" is rejected by WAPI with "Unknown argument/field". Mutually exclusive with parentCidr. When set, allocatePrefixLen is required.
 	// +optional
 	FilterParams map[string]string `json:"filterParams"` // atProvider
 	// Comment for the network container.
