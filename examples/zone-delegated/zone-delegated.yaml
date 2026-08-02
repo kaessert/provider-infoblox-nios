@@ -3,10 +3,23 @@
 # namespace-scoped variant used by namespaced (ModernManaged) resources.
 #
 # External name: server-assigned. WAPI returns an opaque `_ref` string
-# (e.g. "zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default")
+# (e.g. "zone_delegated/ZG5zLnpvbmUk...:delegated-abc1234567.example.com/default")
 # from Create; Crossplane stores it in the crossplane.io/external-name
 # annotation. Do not set that annotation manually — the controller
 # populates it.
+#
+# Distinct identity: fqdn is a child of "example.com", the auth zone
+# test/setup.sh pre-provisions in the default view as a shared prerequisite
+# for the DNS record examples. ${data.runToken} is injected by uptest from
+# the --data-source file (see test/e2e/gen-datasource.sh) so concurrent E2E
+# runs never request the same (fqdn, view) WAPI identity — the parent zone
+# itself stays shared and untokenised. Left literal ("${data.runToken}") if
+# no datasource is supplied, which WAPI rejects outright as an invalid DNS
+# label — exactly the pre-isolation behavior this guards against.
+#
+# delegateTo[].address is left literal: the tokenised fqdn above already
+# makes each run's zone unique, so the delegation targets need no per-run
+# identity of their own.
 #
 # Required fields:
 #   fqdn:       FQDN of the delegated zone. Immutable after creation (CEL
@@ -64,7 +77,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    fqdn: delegated.example.com
+    fqdn: delegated-${data.runToken}.example.com
     delegateTo:
       - name: ns1.delegate.com
         address: 10.0.0.1

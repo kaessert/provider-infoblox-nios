@@ -9,7 +9,14 @@
 #
 # Distinct identity: the fqdn below differs from zone-delegated.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same (view, fqdn) WAPI identity.
+# without colliding on the same (view, fqdn) WAPI identity. Both remain
+# children of the shared "example.com" zone test/setup.sh provisions.
+#
+# ${data.runToken}: see zone-delegated.yaml — same per-run isolation
+# token, applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
+#
+# delegateTo[].address is left literal here too — see zone-delegated.yaml.
 apiVersion: zonedelegated.infobloxnios.m.crossplane.io/v1alpha1
 kind: ZoneDelegated
 metadata:
@@ -41,7 +48,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    fqdn: delegated-ns.example.com
+    fqdn: delegated-ns-${data.runToken}.example.com
     delegateTo:
       - name: ns1.delegate.com
         address: 10.0.1.1
