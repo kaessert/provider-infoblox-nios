@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -184,6 +185,12 @@ type mockDtcLbdnServer struct {
 	searchCalls int
 	// eaDefSearchCalls counts prerequisite-probe GET requests.
 	eaDefSearchCalls int
+	// createCalls counts POST (create) requests — tests assert this to
+	// prove a refusal or a validation failure issued zero mutating
+	// requests, not just that the in-memory record set looks unchanged.
+	createCalls int
+	// deleteCalls counts DELETE requests, for the same reason.
+	deleteCalls int
 }
 
 func newMockDtcLbdnServer() *mockDtcLbdnServer {
@@ -249,6 +256,9 @@ func (m *mockDtcLbdnServer) handler() http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
@@ -388,6 +398,7 @@ func (m *mockDtcLbdnServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.deleteCalls++
 		_, ok := m.records[ref]
 		delete(m.records, ref)
 		m.mu.Unlock()
@@ -2151,5 +2162,309 @@ func TestNewClientWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 				t.Fatal("newClientsWithScheme: expected non-nil connector")
 			}
 		})
+	}
+}
+
+// ── identity ladder: Ambiguous match refusal ────────────────────────────
+
+func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-cluster"
+	ref1 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-one"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-two"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCLBDN("my-lbdn", "")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-namespaced"
+	ref1 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-one"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-two"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCLBDN("default", "my-lbdn", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+// ── identity ladder: Adopted never reports up to date ───────────────────
+
+func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+		// No identity.EAKey stamped — this object is unowned.
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCLBDN("my-lbdn", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCLBDN("default", "my-lbdn", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+// ── Create: identity stamp in the wire body, exactly once ───────────────
+
+func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCLBDN("my-lbdn", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec, ok := m.records[ref]
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	if !ok {
+		t.Fatalf("Create: no record captured for ref %q", ref)
+	}
+	if createCalls != 1 {
+		t.Errorf("Create: createCalls = %d, want exactly 1", createCalls)
+	}
+	if got, present := rec.Ea[identity.EAKey]; !present || got != string(cr.GetUID()) {
+		t.Errorf("Create: wire-captured Ea[%q] = %q (present=%v), want %q", identity.EAKey, got, present, cr.GetUID())
+	}
+}
+
+// TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests: see zoneauth's
+// identically-named test for the note on why a whitespace-only uid is
+// not covered — Kubernetes never assigns one, and this is a
+// cross-family validation-consistency finding tracked separately.
+func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCLBDN("my-lbdn", "")
+	cr.UID = types.UID("")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a blank uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// ── rotation: persistence round-trips through a client ──────────────────
+
+func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/stale-ref:my-lbdn")
+	newRef := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: want ResourceLateInitialized=true so the recovered reference is persisted, got false")
+	}
+	if meta.GetExternalName(cr) != newRef {
+		t.Fatalf("Observe: in-memory external-name = %q, want %q", meta.GetExternalName(cr), newRef)
+	}
+
+	// Simulate the managed reconciler's post-Observe persistence.
+	if err := kube.Update(context.Background(), cr); err != nil {
+		t.Fatalf("kube.Update: unexpected error: %v", err)
+	}
+
+	fetched := &clusterv1alpha1.DTCLBDN{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: cr.GetName()}, fetched); err != nil {
+		t.Fatalf("kube.Get: unexpected error: %v", err)
+	}
+	if got := meta.GetExternalName(fetched); got != newRef {
+		t.Errorf("Observe: persisted external-name (re-GET into a distinct object) = %q, want %q", got, newRef)
+	}
+}
+
+// ── isUpToDate: identity EA never produces a phantom diff ───────────────
+//
+// isUpToDate has its own identity.Strip call site, separate from
+// lateInitializeExtAttrs's. This test targets it directly: a
+// spec.extAttrs that already matches the user-facing keys must still
+// compare up to date against a live record whose Ea additionally carries
+// the reserved identity stamp.
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	rec := &ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+		Ea:       ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "some-uid"},
+	}
+	name := stringPtr("my-lbdn")
+	lbMethod := stringPtr("ROUND_ROBIN")
+	patterns := []string{"*.example.com"}
+
+	if !isUpToDate(name, lbMethod, patterns, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, map[string]string{eaKeyEnv: eaValProd}, rec) {
+		t.Error("isUpToDate: want true when spec.extAttrs already matches the user-facing keys and the live object's Ea only additionally carries the reserved identity stamp")
+	}
+}
+
+// ── newEmptyDtcLbdn: the constructor actually passed to Resolve ─────────
+//
+// internal/clients/identity's own TestNewEmptyCorrectness documents this
+// as one of the two packages (alongside dtcpool) whose local newEmpty
+// wrapper it does NOT exercise directly. This test closes that gap.
+func TestNewEmptyDtcLbdnObjectTypeAndReturnFields(t *testing.T) {
+	l := newEmptyDtcLbdn()
+	if got := l.ObjectType(); got != "dtc:lbdn" {
+		t.Errorf("newEmptyDtcLbdn().ObjectType() = %q, want %q", got, "dtc:lbdn")
+	}
+	fields := l.ReturnFields()
+	found := false
+	for _, f := range fields {
+		if f == "extattrs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("newEmptyDtcLbdn().ReturnFields() = %v, want it to contain %q — identity.Resolve reads the identity stamp from the Ea field, which this field populates on GET", fields, "extattrs")
+	}
+}
+
+// ── status.atProvider mirror retains the identity key (convention 0032) ─
+
+func TestClusterObserveAtProviderExtAttrsRetainsIdentityKey(t *testing.T) {
+	m := newMockDtcLbdnServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+		Ea:       ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "test-uid-cluster"},
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCLBDN("my-lbdn", ref)
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{eaKeyEnv: eaValProd}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got, present := cr.Status.AtProvider.ExtAttrs[identity.EAKey]; !present || got != "test-uid-cluster" {
+		t.Errorf("Observe: status.atProvider.extAttrs[%q] = %q (present=%v), want the full-mirror copy to retain the identity stamp", identity.EAKey, got, present)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -179,6 +180,12 @@ type mockWapiServer struct {
 	searchCalls int
 	// eaDefSearchCalls counts prerequisite-probe GET requests.
 	eaDefSearchCalls int
+	// createCalls counts POST (create) requests — tests assert this to
+	// prove a refusal or a validation failure issued zero mutating
+	// requests, not just that the in-memory record set looks unchanged.
+	createCalls int
+	// deleteCalls counts DELETE requests, for the same reason.
+	deleteCalls int
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -245,6 +252,9 @@ func (m *mockWapiServer) handler() http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
@@ -372,6 +382,7 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.deleteCalls++
 		_, ok := m.records[ref]
 		delete(m.records, ref)
 		m.mu.Unlock()
@@ -2068,5 +2079,291 @@ func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 				t.Fatal("newObjectManagerWithScheme: expected non-nil manager and connector")
 			}
 		})
+	}
+}
+
+// ── identity ladder: Ambiguous match refusal ────────────────────────────
+
+func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-cluster"
+	ref1 := m.seed(&ibclient.ZoneDelegated{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneDelegated{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterZoneDelegated("my-zone", "")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-namespaced"
+	ref1 := m.seed(&ibclient.ZoneDelegated{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneDelegated{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	mc := newTestClients(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedZoneDelegated("default", "my-zone", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+// ── identity ladder: Adopted never reports up to date ───────────────────
+
+func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneDelegated{
+		Fqdn:       "delegated.example.com",
+		View:       stringPtr("default"),
+		DelegateTo: ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+		// No identity.EAKey stamped — this object is unowned.
+	})
+
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterZoneDelegated("my-zone", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneDelegated{
+		Fqdn:       "delegated.example.com",
+		View:       stringPtr("default"),
+		DelegateTo: ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+	})
+
+	mc := newTestClients(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedZoneDelegated("default", "my-zone", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+// ── Create: identity stamp in the wire body, exactly once ───────────────
+
+func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterZoneDelegated("my-zone", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec, ok := m.records[ref]
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	if !ok {
+		t.Fatalf("Create: no record captured for ref %q", ref)
+	}
+	if createCalls != 1 {
+		t.Errorf("Create: createCalls = %d, want exactly 1", createCalls)
+	}
+	if got, present := rec.Ea[identity.EAKey]; !present || got != string(cr.GetUID()) {
+		t.Errorf("Create: wire-captured Ea[%q] = %q (present=%v), want %q", identity.EAKey, got, present, cr.GetUID())
+	}
+}
+
+// TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests: see zoneauth's
+// identically-named test for the note on why a whitespace-only uid is
+// not covered — Kubernetes never assigns one, and this is a
+// cross-family validation-consistency finding tracked separately.
+func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterZoneDelegated("my-zone", "")
+	cr.UID = types.UID("")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a blank uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// ── rotation: persistence round-trips through a client ──────────────────
+
+func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterZoneDelegated("my-zone", "zone_delegated/stale-ref:delegated.example.com/default")
+	newRef := m.seed(&ibclient.ZoneDelegated{Fqdn: "delegated.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: want ResourceLateInitialized=true so the recovered reference is persisted, got false")
+	}
+	if meta.GetExternalName(cr) != newRef {
+		t.Fatalf("Observe: in-memory external-name = %q, want %q", meta.GetExternalName(cr), newRef)
+	}
+
+	// Simulate the managed reconciler's post-Observe persistence.
+	if err := kube.Update(context.Background(), cr); err != nil {
+		t.Fatalf("kube.Update: unexpected error: %v", err)
+	}
+
+	fetched := &clusterv1alpha1.ZoneDelegated{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: cr.GetName()}, fetched); err != nil {
+		t.Fatalf("kube.Get: unexpected error: %v", err)
+	}
+	if got := meta.GetExternalName(fetched); got != newRef {
+		t.Errorf("Observe: persisted external-name (re-GET into a distinct object) = %q, want %q", got, newRef)
+	}
+}
+
+// ── isUpToDate: identity EA never produces a phantom diff ───────────────
+//
+// isUpToDate has its own identity.Strip call site, separate from
+// lateInitialize's — TestLateInitializeStripsIdentityEAFromExtAttrs only
+// exercises the latter. This test targets the former directly: a
+// spec.extAttrs that already matches the user-facing keys must still
+// compare up to date against a live record whose Ea additionally carries
+// the reserved identity stamp.
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	rec := &ibclient.ZoneDelegated{
+		DelegateTo: ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+		Ea:         ibclient.EA{"env": "prod", identity.EAKey: "some-uid"},
+	}
+	delegateTo := []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}
+
+	if !isUpToDate(delegateTo, nil, nil, nil, nil, nil, nil, map[string]string{"env": "prod"}, rec) {
+		t.Error("isUpToDate: want true when spec.extAttrs already matches the user-facing keys and the live object's Ea only additionally carries the reserved identity stamp")
+	}
+}
+
+// ── status.atProvider mirror retains the identity key (convention 0032) ─
+
+func TestClusterObserveAtProviderExtAttrsRetainsIdentityKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneDelegated{
+		Fqdn:       "delegated.example.com",
+		View:       stringPtr("default"),
+		DelegateTo: ibclient.NullableNameServers{NameServers: []ibclient.NameServer{{Name: "ns1.example.com", Address: "10.0.0.53"}}},
+		Ea:         ibclient.EA{"env": "prod", identity.EAKey: "test-uid-cluster"},
+	})
+
+	mc := newTestClients(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterZoneDelegated("my-zone", ref)
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got, present := cr.Status.AtProvider.ExtAttrs[identity.EAKey]; !present || got != "test-uid-cluster" {
+		t.Errorf("Observe: status.atProvider.extAttrs[%q] = %q (present=%v), want the full-mirror copy to retain the identity stamp", identity.EAKey, got, present)
 	}
 }

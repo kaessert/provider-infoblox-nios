@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
@@ -143,6 +144,12 @@ type mockWapiServer struct {
 	searchCalls int
 	// eaDefSearchCalls counts prerequisite-probe GET requests.
 	eaDefSearchCalls int
+	// createCalls counts POST (create) requests — tests assert this to
+	// prove a refusal or a validation failure issued zero mutating
+	// requests, not just that the in-memory record set looks unchanged.
+	createCalls int
+	// deleteCalls counts DELETE requests, for the same reason.
+	deleteCalls int
 }
 
 func newMockWapiServer() *mockWapiServer {
@@ -208,6 +215,9 @@ func (m *mockWapiServer) handler() http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
@@ -341,6 +351,7 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.deleteCalls++
 		_, ok := m.records[ref]
 		delete(m.records, ref)
 		m.mu.Unlock()
@@ -1699,5 +1710,307 @@ func TestNewConnectorWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 				t.Fatal("newConnectorWithScheme: expected non-nil connector")
 			}
 		})
+	}
+}
+
+// ── identity ladder: Ambiguous match refusal ────────────────────────────
+//
+// AmbiguousMatchError is the second typed refusal the identity ladder can
+// return (alongside HandleReuseError) — when more than one Grid object
+// carries this managed resource's identity stamp, the ladder must refuse
+// rather than silently pick the first match. Per ADR-IN-0006, taking an
+// arbitrary match risks mutating or deleting an object this resource does
+// not actually own.
+
+func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-cluster"
+	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	meta.SetExternalName(cr, cr.GetName()) // simulate NameAsExternalName initializer — forces the UID-only search path
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-namespaced"
+	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+// ── identity ladder: Adopted never reports up to date ───────────────────
+//
+// OutcomeAdopted means the stored _ref resolved but the live object
+// carries no identity stamp at all — Observe() adopts it leniently (so
+// the very next reconcile can re-stamp it via Update), but it must never
+// report ResourceUpToDate:true in the same pass, even when every
+// user-facing field already matches the desired spec. Reporting up to
+// date here would mean the object never gets stamped, since Update() is
+// only invoked when ResourceUpToDate is false.
+
+func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn:    "example.com",
+		View:    stringPtr("default"),
+		Comment: stringPtr("hello"),
+		Disable: boolPtr(false),
+		// No identity.EAKey stamped — this object is unowned.
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("hello")
+	cr.Spec.ForProvider.Disable = boolPtr(false)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn:    "example.com",
+		View:    stringPtr("default"),
+		Comment: stringPtr("hello"),
+		Disable: boolPtr(false),
+	})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("hello")
+	cr.Spec.ForProvider.Disable = boolPtr(false)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+// ── Create: identity stamp in the wire body, exactly once ───────────────
+
+// TestClusterCreateStampsIdentityEAExactlyOnce asserts the identity value
+// in the request the mock server actually decoded off the wire — not the
+// in-memory cr or the local zoneAuthFields struct — and that Create()
+// issued exactly one POST.
+func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec, ok := m.records[ref]
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	if !ok {
+		t.Fatalf("Create: no record captured for ref %q", ref)
+	}
+	if createCalls != 1 {
+		t.Errorf("Create: createCalls = %d, want exactly 1", createCalls)
+	}
+	if got, present := rec.Ea[identity.EAKey]; !present || got != string(cr.GetUID()) {
+		t.Errorf("Create: wire-captured Ea[%q] = %q (present=%v), want %q", identity.EAKey, got, present, cr.GetUID())
+	}
+}
+
+// TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests asserts that a
+// managed resource with a blank uid (should never happen in a real
+// cluster — the API server always assigns a well-formed UUID — but
+// crossplane-runtime's type system does not guarantee it) fails hard
+// before issuing any WAPI call. Stamping an empty identity value would
+// make every future ambiguity search match every unstamped object.
+//
+// A whitespace-only uid is not covered here: createZoneAuth's own guard
+// checks uid == "" without trimming, unlike identity.Resolve's ladder
+// (which does strings.TrimSpace before the same check) — tracked as a
+// standalone validation-consistency finding, not a functional risk,
+// since the Kubernetes API server never assigns a whitespace-only UID.
+func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.UID = types.UID("")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a blank uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// ── rotation: persistence round-trips through a client ──────────────────
+//
+// Convention: a test asserting meta.GetExternalName(cr) on the very same
+// in-memory object Observe() just mutated would pass even if the
+// annotation mutation never actually reaches the object crossplane-
+// runtime persists — for example if a future refactor read from a stale
+// copy. This test performs the same write+re-GET-on-a-distinct-instance
+// round trip the real managed reconciler performs after
+// ResourceLateInitialized:true.
+func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
+	newRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: want ResourceLateInitialized=true so the recovered reference is persisted, got false")
+	}
+	if meta.GetExternalName(cr) != newRef {
+		t.Fatalf("Observe: in-memory external-name = %q, want %q", meta.GetExternalName(cr), newRef)
+	}
+
+	// Simulate the managed reconciler's post-Observe persistence.
+	if err := kube.Update(context.Background(), cr); err != nil {
+		t.Fatalf("kube.Update: unexpected error: %v", err)
+	}
+
+	fetched := &clusterv1alpha1.ZoneAuth{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: cr.GetName()}, fetched); err != nil {
+		t.Fatalf("kube.Get: unexpected error: %v", err)
+	}
+	if got := meta.GetExternalName(fetched); got != newRef {
+		t.Errorf("Observe: persisted external-name (re-GET into a distinct object) = %q, want %q", got, newRef)
+	}
+}
+
+// ── newZoneAuthForGet: the constructor actually passed to Resolve ───────
+//
+// internal/clients/identity's own TestNewEmptyCorrectness exercises
+// ibclient.NewZoneAuth(ibclient.ZoneAuth{}) directly, documenting the SDK
+// baseline — but resolveZoneAuthIdentity passes this package's own
+// newZoneAuthForGet, not that raw constructor, to identity.Resolve. This
+// test closes that gap: it must fail if newZoneAuthForGet is ever
+// rewritten to build a bare &ibclient.ZoneAuth{} (losing every field the
+// append-based construction currently adds on top of the SDK default,
+// though extattrs would still survive since it is one of the SDK's own
+// baseline return fields — the real risk this guards against is a
+// rewrite that constructs the return-fields list from scratch instead of
+// appending to the SDK default).
+func TestNewZoneAuthForGetObjectTypeAndReturnFields(t *testing.T) {
+	z := newZoneAuthForGet()
+	if got := z.ObjectType(); got != "zone_auth" {
+		t.Errorf("newZoneAuthForGet().ObjectType() = %q, want %q", got, "zone_auth")
+	}
+	fields := z.ReturnFields()
+	found := false
+	for _, f := range fields {
+		if f == "extattrs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("newZoneAuthForGet().ReturnFields() = %v, want it to contain %q — identity.Resolve reads the identity stamp from the Ea field, which this field populates on GET", fields, "extattrs")
 	}
 }
