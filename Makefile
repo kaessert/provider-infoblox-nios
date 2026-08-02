@@ -124,17 +124,24 @@ UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-pre
 UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 # FixedAddress's AllocateIP call unconditionally requires an existing
-# parent Network object covering the address (unlike HostRecord and Range,
-# which need no parent Network — see test/e2e/gen-datasource.sh's
-# sub-allocation map comment). Prerequisite-bundling: the parent Network's
-# manifest is listed BEFORE fixed-address.yaml's own, so uptest creates it
-# first (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
+# parent Network object covering the address (unlike HostRecord, which
+# bypasses the requirement via configureForDns — see
+# test/e2e/gen-datasource.sh's sub-allocation map comment). Prerequisite-
+# bundling: the parent Network's manifest is listed BEFORE
+# fixed-address.yaml's own, so uptest creates it first (IN-ISO-IPAM-PREREQ;
+# address plan: IN-ISO-IPAM-PLAN).
 UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
-# Range needs no Makefile prerequisite-bundling: its `network` field is
-# omitted in the example, and live-testing confirmed WAPI does not require
-# a pre-existing Network for the address span (unlike FixedAddress's
-# AllocateIP, above) (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_RANGE := examples/range/range.yaml,examples/range/range-namespaced.yaml
+# Range's CreateNetworkRange call, like FixedAddress's AllocateIP,
+# unconditionally requires an existing parent Network object covering the
+# range's address span, even though the example leaves the Range's own
+# `network` field unset — live-verified on the Grid: WAPI 400
+# IBDataConflictError ("Cannot find the parent network for the DHCP
+# range...") without one. This corrects an earlier assumption that omitting
+# `network` from the spec meant no parent Network was required at all.
+# Prerequisite-bundling: each scope's parent Network manifest is listed
+# BEFORE its own range.yaml/range-namespaced.yaml, so uptest creates it
+# first (IN-ISO-IPAM-PREREQ fix; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml

@@ -1,0 +1,41 @@
+# network-prereq.yaml — prerequisite parent Network for range.yaml.
+#
+# Range's CreateNetworkRange call (see range.yaml's field docs)
+# unconditionally requires an existing parent Network object covering the
+# range's address span, unlike HostRecord which can bypass the requirement
+# via configureForDns. Live-verified on the Grid: WAPI 400
+# IBDataConflictError ("Cannot find the parent network for the DHCP
+# range...") without one, even though range.yaml itself leaves its
+# `network` field unset. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_RANGE) applies this manifest before range.yaml so the
+# parent Network exists first.
+#
+# ${data.netRangeParentCluster}: a per-run /27 reserved specifically for
+# this prerequisite (see test/e2e/gen-datasource.sh's sub-allocation map),
+# disjoint from every other addressed example's sub-block — including
+# examples/network/network.yaml's own ${data.netNetworkCluster} — so this
+# object never collides with the standalone Network example even when
+# both apply in the same E2E run (`make e2e` / CORE tier). range.yaml's
+# own ${data.netRangeStartCluster}/${data.netRangeEndCluster} span is
+# nested inside this /27.
+#
+# This manifest is intentionally not update-tested (no
+# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
+# annotation): range.yaml's Create depends on this object's CIDR staying
+# stable for the whole run, and it is not itself a resource under test —
+# see examples/network/network.yaml for the general-purpose, independently
+# update-tested Network example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-range-network
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: default
+    network: ${data.netRangeParentCluster}
+    comment: "Prerequisite parent network for range.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default
