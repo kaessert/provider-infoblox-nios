@@ -12,7 +12,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,6 +19,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/network/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 )
 
 const namespacedControllerName = "namespaced-network.infobloxnios.m.crossplane.io"
@@ -253,7 +253,7 @@ func setupNamespacedNetwork(mgr ctrl.Manager, o controller.Options) error {
 	name := namespacedControllerName
 
 	if o.MetricOptions != nil {
-		if err := mgr.Add(statemetrics.NewMRStateRecorder(
+		if err := mgr.Add(statemetrics.NewResilientRecorder(
 			mgr.GetClient(),
 			o.Logger,
 			o.MetricOptions.MRStateMetrics,
