@@ -40,6 +40,7 @@ const (
 
 func stringPtr(s string) *string { return &s }
 func uint32Ptr(u uint32) *uint32 { return &u }
+func boolPtr(b bool) *bool       { return &b }
 
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -298,6 +299,7 @@ func (m *mockWapiServer) handler() http.Handler {
 		existing.Ea = incoming.Ea
 		existing.Options = incoming.Options
 		existing.UseOptions = incoming.UseOptions
+		existing.CloudApiCompatible = incoming.CloudApiCompatible
 		respRef := ref
 		if renamed {
 			delete(m.templates, ref)
@@ -351,7 +353,7 @@ func TestClusterObserveResolvedUpToDate(t *testing.T) {
 	defer srv.Close()
 	mc := newTestClient(t, srv)
 
-	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5), CloudApiCompatible: boolPtr(true)}
 	rec.Ea = identity.Stamp(nil, testUIDCluster)
 	ref := m.seed(rec)
 
@@ -512,8 +514,70 @@ func TestCreateRangeTemplateRefusesEmptyUID(t *testing.T) {
 	defer srv.Close()
 	mc := newTestClient(t, srv)
 
-	if _, err := createRangeTemplate(mc.Manager, stringPtr("x"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, nil, nil, ""); err == nil {
+	if _, err := createRangeTemplate(mc.Manager, stringPtr("x"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, nil, ""); err == nil {
 		t.Fatal("expected an error for empty uid")
+	}
+}
+
+// TestClusterCreateAlwaysSendsCloudAPICompatibleTrue guards against the
+// regression this fix addresses: a live Grid rejects a template object
+// with a cloud-incompatible flag that references the (cloud-compatible)
+// identity extensible attribute this controller stamps unconditionally.
+// The CR here deliberately leaves cloudApiCompatible unset in spec — the
+// common case, and the one that broke every RangeTemplate Create before
+// this fix — and the wire value must still come back true.
+func TestClusterCreateAlwaysSendsCloudAPICompatibleTrue(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	cr := newClusterRangeTemplate("my-tpl", "my-tpl")
+	if cr.Spec.ForProvider.CloudApiCompatible != nil {
+		t.Fatal("test fixture assumption violated: cloudApiCompatible must start unset")
+	}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, rec := range m.templates {
+		if rec.CloudApiCompatible == nil || !*rec.CloudApiCompatible {
+			t.Fatalf("expected cloud_api_compatible=true on the wire even though spec left it unset, got %v", rec.CloudApiCompatible)
+		}
+	}
+}
+
+// TestClusterUpdateAlwaysSendsCloudAPICompatibleTrue is the Update-path
+// counterpart of TestClusterCreateAlwaysSendsCloudAPICompatibleTrue — a
+// PUT replaces the whole object, so the constraint must hold on every
+// mutating call, not just Create.
+func TestClusterUpdateAlwaysSendsCloudAPICompatibleTrue(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5), CloudApiCompatible: boolPtr(false)}
+	rec.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rec)
+
+	cr := newClusterRangeTemplate("my-tpl", ref)
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	updated := m.templates[ref]
+	if updated.CloudApiCompatible == nil || !*updated.CloudApiCompatible {
+		t.Fatalf("expected cloud_api_compatible=true on the wire after Update, got %v", updated.CloudApiCompatible)
 	}
 }
 
@@ -730,11 +794,20 @@ func TestLateInitializeDoesNotLeakIdentityKeyIntoExtAttrs(t *testing.T) {
 }
 
 func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
-	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5), CloudApiCompatible: boolPtr(true)}
 	rec.Ea = identity.Stamp(nil, "some-uid")
 
-	if !isUpToDate(stringPtr("test-template"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, nil, rec) {
+	if !isUpToDate(stringPtr("test-template"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, rec) {
 		t.Fatal("expected isUpToDate to ignore the identity EA when spec.extAttrs is empty")
+	}
+}
+
+func TestIsUpToDateRequiresCloudAPICompatible(t *testing.T) {
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5), CloudApiCompatible: boolPtr(false)}
+	rec.Ea = identity.Stamp(nil, "some-uid")
+
+	if isUpToDate(stringPtr("test-template"), uint32Ptr(10), uint32Ptr(5), nil, nil, nil, nil, "", nil, nil, rec) {
+		t.Fatal("expected drift when the Grid object is not cloud-API-compatible — this controller always requests true on the wire")
 	}
 }
 
