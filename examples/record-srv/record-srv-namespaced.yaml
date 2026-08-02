@@ -10,6 +10,12 @@
 # Distinct identity: the owner name below differs from record-srv.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-srv.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling. The
+# existing "ns" label keeps this scope distinct from the cluster-scoped
+# sibling within a single run; the token keeps both distinct across runs.
 apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
 kind: SRVRecord
 metadata:
@@ -51,7 +57,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: _sip._tcp.ns.example.com
+    name: _sip._tcp.ns.${data.runToken}.example.com
     target: sipserver-ns.example.com
     priority: 10
     weight: 20

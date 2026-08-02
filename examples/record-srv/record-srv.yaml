@@ -10,6 +10,15 @@
 # Create behavior: sync — the WAPI POST returns the new object's `_ref`
 # immediately (HTTP 201), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against. Spliced into
+# the owner portion after the RFC 2782 service/protocol labels
+# ("_sip._tcp"), never ahead of or inside them — those labels must stay
+# leftmost for WAPI/DNS to recognize the record as an SRV record.
+#
 # Required fields:
 #   name:     owner name in FQDN format, following the standard SRV naming
 #             convention "_service._proto.name" (e.g. "_sip._tcp.example.com").
@@ -90,7 +99,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: _sip._tcp.example.com
+    name: _sip._tcp.${data.runToken}.example.com
     target: sipserver.example.com
     priority: 10
     weight: 20
