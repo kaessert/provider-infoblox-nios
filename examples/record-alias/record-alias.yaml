@@ -23,6 +23,15 @@
 #               treated as fixed at creation (CEL rule enforced).
 #
 # Optional mutable fields: comment, disable, ttl, useTtl, extAttrs.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against. targetName and
+# targetType are payload, not identity — they stay literal because the
+# (view, name, targetName, targetType) tuple already differs across runs
+# once name is tokenised.
 apiVersion: recordalias.infobloxnios.crossplane.io/v1alpha1
 kind: AliasRecord
 metadata:
@@ -63,7 +72,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: alias-test.example.com
+    name: alias-test-${data.runToken}.example.com
     targetName: target.example.com
     targetType: A
     view: default

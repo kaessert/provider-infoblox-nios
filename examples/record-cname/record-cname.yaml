@@ -21,6 +21,18 @@
 #
 # Optional mutable fields: comment, ttl, useTtl, extAttrs.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
+# canonical is deliberately NOT tokenised: a CNAME target need not resolve
+# on WAPI, so this literal ("www.example.com") is not required to point at
+# anything real. It used to match record-a's pre-tokenisation identity;
+# now that record-a's name is tokenised the two no longer collide, so
+# leaving canonical literal here is a decision, not an oversight.
+#
 # ttl: 0 / useTtl: false below is not a placeholder — it is the exact
 # configuration that triggered a perpetual reconcile loop in an earlier
 # release: the controller kept comparing the submitted ttl value against
@@ -84,7 +96,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: alias.example.com
+    name: alias-${data.runToken}.example.com
     canonical: www.example.com
     view: default
     comment: Managed by Crossplane

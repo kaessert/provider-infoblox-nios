@@ -10,6 +10,10 @@
 # Distinct identity: the owner name below differs from record-alias.yaml's
 # so both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-alias.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
 apiVersion: recordalias.infobloxnios.m.crossplane.io/v1alpha1
 kind: AliasRecord
 metadata:
@@ -42,7 +46,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: alias-test-ns.example.com
+    name: alias-test-ns-${data.runToken}.example.com
     targetName: target-ns.example.com
     targetType: A
     view: default

@@ -10,6 +10,11 @@
 # Distinct identity: the alias name below differs from record-cname.yaml's
 # so both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-cname.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling. canonical
+# stays literal for the same reason documented in record-cname.yaml.
 apiVersion: recordcname.infobloxnios.m.crossplane.io/v1alpha1
 kind: CNAMERecord
 metadata:
@@ -44,7 +49,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: alias-ns.example.com
+    name: alias-ns-${data.runToken}.example.com
     canonical: www-ns.example.com
     view: default
     comment: Managed by Crossplane (namespaced)
