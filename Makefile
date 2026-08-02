@@ -95,9 +95,10 @@ UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,example
 UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml
 UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml
 # IPv6 variant of Network — WAPI resolves this to the ipv6network object
-# type at runtime instead of network. Kept as a separate gated target
-# rather than folded into UPTEST_MANIFESTS_NETWORK/e2e.network so a
-# regression on either address family fails independently.
+# type at runtime instead of network. Kept as a separate target (not
+# folded into UPTEST_MANIFESTS_NETWORK/e2e.network) so a regression on
+# either address family fails independently. Core tier: needs only NIOS
+# Grid Manager API credentials, same as its IPv4 sibling.
 UPTEST_MANIFESTS_NETWORK_V6 := examples/network/network-v6.yaml,examples/network/network-v6-namespaced.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
