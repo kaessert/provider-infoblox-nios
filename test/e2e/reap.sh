@@ -49,6 +49,20 @@
 # --literal-sweep. If deleted, setup.sh must re-provision them before any
 # subsequent run's DNS records or shared-network examples pass again.
 #
+# Two more zone_auth identities are Grid-baseline shared context that
+# test/setup.sh does NOT provision (they pre-exist on the shared Grid
+# Manager itself) but that record-ns's examples depend on as the
+# pre-existing zone a delegation record lives under (see EXCEPTIONS below):
+#   - zone_auth  fqdn=example.com        view=Internal
+#   - zone_auth  fqdn=example.com        view=External
+#   - zone_auth  fqdn=peatestinglab.com  view=Internal
+# is_denied() protects fqdn=example.com in EVERY view (not just default),
+# and fqdn=peatestinglab.com in every view, for the same reason: the
+# deny-list exists to protect shared context regardless of which script
+# provisioned it, and narrowing it to "only what setup.sh itself creates"
+# would leave a Grid-baseline zone unprotected against a broad or malformed
+# future query.
+#
 # ============================================================================
 # COVERAGE — every WAPI object type this provider's examples create
 # ============================================================================
@@ -92,14 +106,13 @@
 # record-ns: the "name" field is a PRE-EXISTING zone the record lives under
 #   (shared context — e.g. peatestinglab.com / example.com in the current
 #   examples), not this run's identity, and must never be matched or deleted
-#   by this script. Only "nameserver" is a candidate for tokenisation, and
-#   that decision has not shipped yet (open A/B question, tracked separately
-#   from this ticket). This script wires nameserver-token matching now so no
-#   further reaper change is needed once it lands; until then the query
-#   simply returns nothing, because no run writes a token into nameserver
-#   yet. record:ns objects predating any such change are handled by
+#   by this script. "nameserver" is the tokenised component (name/view stay
+#   fixed shared context) — every current example already writes
+#   nameserver as ns1[-ns]-${data.runToken}.example.com, so routine mode's
+#   nameserver-token match is live, not aspirational. record:ns objects
+#   predating that change (literal "ns1.example.com") are handled by
 #   --literal-sweep instead (see below), which matches the full (name,
-#   nameserver) pair — it never deletes by name alone.
+#   nameserver, view) triple — it never deletes by name alone.
 #
 # ipv4-shared-network: the object's own "name" tokenises and reaps normally.
 #   Its "networks" member list references Network objects that each belong
@@ -118,27 +131,66 @@
 # THE ONE-SHOT PRE-TOKENISATION SWEEP
 # ============================================================================
 # Before this mechanism existed, every run used the SAME literal identities
-# (www.example.com, test-dtc-pool, ...). After the rollout, no run creates
-# those literal identities any more — a Grid object still carrying one is
-# definitionally an orphan, of unknown age, from before tokenisation. That
-# makes a one-shot sweep possible, and it is a genuinely different operation
-# from the routine reap above:
+# (www.example.com, test-dtc-pool, ...). Once a resource family's rollout
+# wave has actually merged, no run creates that family's literal identities
+# any more, and a Grid object still carrying one is definitionally an
+# orphan of unknown age from before tokenisation.
+#
+# The rollout ships in four independent waves that land on main at
+# different times, so at any given moment some families are already
+# tokenised and others are not. A static literal table would go stale the
+# instant it shipped: a family whose wave had not yet merged would still
+# create the "pre-tokenisation" literal for real, and
+# --literal-sweep --apply would delete a concurrently running, live E2E
+# run's object — exactly the failure class this whole mechanism exists to
+# remove. So this table is NOT trusted at face value: before ANY entry is
+# queried, is_literal_live() re-derives liveness straight from examples/ at
+# runtime (see below) and skips the entry if the identity is still shipped
+# there. The table below only ever shrinks the amount of work verified —
+# it can never cause a live object to be deleted, regardless of which
+# waves have merged when this script runs.
+#
+# This is also a genuinely different operation from the routine reap above:
 #   - it matches fixed literal identities, not a caller-supplied token/prefix
 #   - it is opt-in (--literal-sweep) and mutually exclusive with --token /
 #     --net-prefix — routine and historical cleanup are never combined into
 #     one broader query
 #   - it is meant to run once, by a human or a one-off ant task, never as
 #     part of the automatic per-run cleanup a live E2E run performs
-# The literal table (LITERAL_SWEEP below) is the ground truth for what
-# examples/ currently ships pre-tokenisation, cross-checked directly against
-# every example manifest in this repo (not copied from an earlier draft of
-# this ticket — several of that draft's names do not match the shipped
-# examples, e.g. "example-ns.com" is zone-auth's namespaced fqdn, not
-# record-ns's identity, and record-alias's literal is "alias-test.example.com"
-# not "alias.example.com"). record-a's literals (www.example.com,
-# www-ns.example.com) are included for the historical record even though
-# IN-E2E-ISO-MECH already tokenised that family — any Grid object still
-# carrying them predates that change.
+# The literal table (LITERAL_SWEEP below) is the candidate set: what
+# examples/ shipped pre-tokenisation, cross-checked directly against every
+# example manifest in this repo at the time this table was written (not
+# copied from an earlier draft of this ticket — several of that draft's
+# names did not match the shipped examples, e.g. "example-ns.com" is
+# zone-auth's namespaced fqdn, not record-ns's identity, and record-alias's
+# literal is "alias-test.example.com" not "alias.example.com"). record-a's
+# literals (www.example.com, www-ns.example.com) are included for the
+# historical record even though IN-E2E-ISO-MECH already tokenised that
+# family — any Grid object still carrying them predates that change.
+#
+# ============================================================================
+# THE LIVENESS GUARD (is_literal_live)
+# ============================================================================
+# For each --literal-sweep table entry, only the field(s) that carry this
+# object type's RUN IDENTITY are checked for liveness — the same token_field
+# / addr_field columns the routine reaper above matches on (see
+# get_identity_fields()). Fields in the same entry that are shared Grid
+# CONTEXT, not identity, are deliberately excluded from the check: record:ns's
+# "name" is a pre-existing zone every run reuses on purpose (see EXCEPTIONS
+# above), so checking it would find a match on every run and permanently
+# skip record:ns's literal-sweep entries even after they become genuine
+# orphans. Checking only "nameserver" (record:ns's actual identity field)
+# avoids that false negative.
+#
+# The check itself greps that object type's OWN example directory
+# (examples/<family>/*.yaml, comments stripped) for the literal value as a
+# fixed string — scoped to one family's directory, not the whole examples/
+# tree, because the same literal string can legitimately appear as a
+# reference VALUE in an unrelated family's example (e.g. record-a's retired
+# identity "www.example.com" is still record-cname's live `canonical`
+# target and record-ptr's live `ptrdname` target — neither is record-a's
+# own identity). A whole-tree grep would treat those as false positives and
+# refuse to ever reap record-a's pre-tokenisation orphans.
 #
 # ============================================================================
 # USAGE
@@ -155,7 +207,11 @@
 #                        falls inside this prefix.
 #   --literal-sweep      One-shot historical mode. Mutually exclusive with
 #                        --token/--net-prefix. Matches the fixed literal
-#                        identities examples/ used before tokenisation.
+#                        identities examples/ used before tokenisation —
+#                        skipping (with a loud warning) any entry whose
+#                        identity is still shipped live in examples/ today,
+#                        so a not-yet-merged wave's still-literal identity
+#                        is never at risk (see THE LIVENESS GUARD above).
 #   --apply              Actually delete. Without it, every match is only
 #                        listed (dry-run is the default, deliberately —
 #                        cleanup runs unattended after E2E and a destructive
@@ -168,6 +224,12 @@
 # test/setup.sh). Idempotent: running with nothing left to reap exits 0 and
 # prints a summary, never an error.
 set -euo pipefail
+
+# Repo root, derived from this script's own location — not the caller's
+# CWD — so the examples/ liveness check (is_literal_live, below) resolves
+# correctly regardless of where reap.sh is invoked from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -184,7 +246,9 @@ Usage:
                         falls inside this prefix.
   --literal-sweep       One-shot historical mode. Mutually exclusive with
                         --token/--net-prefix. Matches the fixed literal
-                        identities examples/ used before tokenisation.
+                        identities examples/ used before tokenisation,
+                        skipping (with a warning) any entry still shipped
+                        live in examples/ today.
   --apply               Actually delete. Without it, every match is only
                         listed (dry-run is the default).
   --wapi-version=VER    Defaults to $INFOBLOX_WAPI_VERSION or v2.13.1,
@@ -275,8 +339,10 @@ wapi_search() {
   curl "${CURL_AUTH[@]}" -G "${WAPI_BASE}/${otype}" "$@"
 }
 
-# is_denied <object-type> <json-object> — true (0) if this object is one of
-# test/setup.sh's shared prerequisites and must never be reaped.
+# is_denied <object-type> <json-object> — true (0) if this object is shared
+# Grid context (test/setup.sh's provisioned prerequisites, or Grid-baseline
+# zones examples depend on as pre-existing context) and must never be
+# reaped.
 is_denied() {
   local otype="$1" obj="$2"
   case "${otype}" in
@@ -284,7 +350,16 @@ is_denied() {
       local fqdn view
       fqdn="$(jq -r '.fqdn // empty' <<<"${obj}")"
       view="$(jq -r '.view // empty' <<<"${obj}")"
-      [ "${fqdn}" = "example.com" ] && [ "${view}" = "default" ] && return 0
+      # example.com is protected in EVERY view, not just "default": the
+      # default-view zone is test/setup.sh's own prerequisite, but the
+      # Internal/External-view zones are Grid-baseline shared context that
+      # record-ns's examples depend on (see EXCEPTIONS in the header
+      # comment) and that no script in this repo provisions or can
+      # re-create. peatestinglab.com/Internal is the same kind of
+      # Grid-baseline context. Deny-list scope is "shared context this repo
+      # cannot afford to lose", not "only what setup.sh itself creates".
+      [ "${fqdn}" = "example.com" ] && return 0
+      [ "${fqdn}" = "peatestinglab.com" ] && [ "${view}" = "Internal" ] && return 0
       ;;
     network)
       local net nv
@@ -418,11 +493,136 @@ routine_reap() {
 }
 
 # ----------------------------------------------------------------------------
+# Liveness guard for --literal-sweep (see "THE LIVENESS GUARD" in the header
+# comment). Maps each WAPI object type to the examples/ family directory
+# that owns it, so a literal value can be checked against ONLY that family's
+# own manifests — never the whole examples/ tree, which would false-positive
+# on the same literal string appearing as an unrelated field's VALUE in a
+# different family's example (record-a's retired name vs. record-cname's
+# live `canonical` target, for instance).
+# ----------------------------------------------------------------------------
+OTYPE_EXAMPLE_DIR="
+record:a|record-a
+record:aaaa|record-aaaa
+record:alias|record-alias
+record:cname|record-cname
+record:mx|record-mx
+record:srv|record-srv
+record:txt|record-txt
+record:ns|record-ns
+record:host|host-record
+record:ptr|record-ptr
+zone_auth|zone-auth
+zone_delegated|zone-delegated
+zone_forward|zone-forward
+view|dns-view
+networkview|network-view
+dtc:pool|dtc-pool
+dtc:server|dtc-server
+dtc:lbdn|dtc-lbdn
+rangetemplate|range-template
+extensibleattributedef|extensible-attribute-def
+sharednetwork|ipv4-shared-network
+network|network
+networkcontainer|network-container
+range|range
+fixedaddress|fixed-address
+"
+
+# example_dir_for <object-type> — the examples/ subdirectory that owns this
+# WAPI object type, or empty if unknown.
+example_dir_for() {
+  local otype="$1" ot dir
+  while IFS='|' read -r ot dir; do
+    [ "${ot}" = "${otype}" ] && { echo "${dir}"; return 0; }
+  done <<<"${OTYPE_EXAMPLE_DIR}"
+  echo ""
+}
+
+# get_identity_fields <object-type> — the field name(s) that carry this
+# type's RUN IDENTITY (the same token_field / addr_field columns
+# routine_reap matches on), space-separated. A --literal-sweep entry's OTHER
+# fields (e.g. record:ns's "name" / "view", which are shared Grid context —
+# see EXCEPTIONS in the header comment) are deliberately excluded from the
+# liveness check: they are expected to match every run's example on
+# purpose, and checking them would make the entry look permanently "live".
+get_identity_fields() {
+  local otype="$1" ot tf af _arf out=""
+  while IFS='|' read -r ot tf af _arf; do
+    [ "${ot}" = "${otype}" ] || continue
+    [ -n "${tf}" ] && out="${tf}"
+    [ -n "${af}" ] && out="${out:+${out} }${af}"
+    break
+  done <<<"${NAMED_AND_ADDRESSED_TYPES}"
+  echo "${out}"
+}
+
+# is_literal_live <object-type> <value> — true (0) if this literal identity
+# value still appears, as a real field value (comments stripped), somewhere
+# in that object type's OWN examples/ family directory.
+#
+# Two precision requirements, both load-bearing:
+#   1. Scoped to ONE family's own directory (not the whole examples/ tree):
+#      the same literal string can legitimately appear as a reference VALUE
+#      in an unrelated family's example (record-a's retired identity
+#      "www.example.com" is still record-cname's live `canonical` target
+#      and record-ptr's live `ptrdname` target — neither is record-a's own
+#      identity). A whole-tree grep would treat those as false positives
+#      and refuse to ever reap record-a's pre-tokenisation orphans.
+#   2. End-anchored on the field value, not a bare substring: a family that
+#      has already been tokenised writes its identity as
+#      "<literal>-${data.runToken}", which contains the OLD literal as a
+#      prefix (e.g. dtc-lbdn's current "test-dtc-lbdn-${data.runToken}"
+#      contains the pre-tokenisation literal "test-dtc-lbdn"). A plain
+#      substring match would flag that family as still-live forever and
+#      the literal-sweep entry could never reap its genuine pre-rollout
+#      orphans. Anchoring the match to the end of the field's value (the
+#      literal must be the WHOLE value, not merely a prefix of it)
+#      distinguishes "still creates the bare literal" from "now creates a
+#      token-suffixed value that happens to start with it".
+#
+# Fails safe: an object type with no known examples/ mapping, or a family
+# directory that does not exist, is treated as LIVE (return 0) rather than
+# silently skipping verification — a --literal-sweep entry this script
+# cannot verify must never be reaped unattended.
+is_literal_live() {
+  local otype="$1" value="$2" dir examples_dir f
+  dir="$(example_dir_for "${otype}")"
+  if [ -z "${dir}" ]; then
+    return 0
+  fi
+  examples_dir="${REPO_ROOT}/examples/${dir}"
+  if [ ! -d "${examples_dir}" ]; then
+    return 0
+  fi
+  # Escape regex metacharacters in the literal value (fqdns and CIDRs
+  # contain "." and "/") before building the anchored pattern.
+  local escaped pattern
+  # shellcheck disable=SC2016 # sed program is a literal pattern, not meant to expand
+  escaped="$(printf '%s' "${value}" | sed -e 's/[.[\*^$()+?{}|\/]/\\&/g')"
+  # Match the value as a whole YAML scalar: preceded by start-of-line,
+  # whitespace, or a quote; followed only by optional whitespace/quotes and
+  # end-of-line. This rejects "<value>-${data.runToken}" (extra characters
+  # follow) while still matching "<value>", '"<value>"', and trailing
+  # whitespace variants.
+  pattern="(^|[[:space:]\"'])${escaped}([[:space:]\"']*)\$"
+  for f in "${examples_dir}"/*.yaml; do
+    [ -f "${f}" ] || continue
+    if grep -v '^[[:space:]]*#' "${f}" | grep -Eq -- "${pattern}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ----------------------------------------------------------------------------
 # Literal-sweep mode: exact-match pre-tokenisation identities.
 # ----------------------------------------------------------------------------
 # Each line: object-type|field=value[,field=value...]
-# Ground truth cross-checked directly against examples/ as it exists in this
-# repo — see the header comment above for corrections to any earlier draft.
+# Candidate set cross-checked directly against examples/ as it existed in
+# this repo when this table was written — see the header comment above for
+# corrections to any earlier draft, and THE LIVENESS GUARD for why this
+# table alone is never trusted to decide what gets deleted.
 LITERAL_SWEEP_TABLE="
 record:a|name=www.example.com
 record:a|name=www-ns.example.com
@@ -482,6 +682,7 @@ literal_sweep() {
     [ -z "${otype}" ] && continue
     local -a curlargs=()
     local reason="" fields=""
+    local -A field_values=()
     local IFS_SAVE="${IFS}"
     IFS=','
     local pair
@@ -490,8 +691,33 @@ literal_sweep() {
       curlargs+=(--data-urlencode "${field}=${value}")
       fields="${fields}${fields:+,}${field}"
       reason="${reason}${reason:+,}${field}=${value}"
+      field_values["${field}"]="${value}"
     done
     IFS="${IFS_SAVE}"
+
+    # THE LIVENESS GUARD: verify this entry's RUN-IDENTITY field(s) — not
+    # every field in the entry — are not still shipped live in examples/
+    # before ever issuing the WAPI query. This is what makes the table safe
+    # to ship even while some rollout waves have not merged yet: a family
+    # whose wave hasn't landed still creates this literal for real, and
+    # this check catches that and skips instead of reaping a live object.
+    local id_fields id_field live_hit=""
+    id_fields="$(get_identity_fields "${otype}")"
+    for id_field in ${id_fields}; do
+      local id_value="${field_values[${id_field}]:-}"
+      [ -z "${id_value}" ] && continue
+      if is_literal_live "${otype}" "${id_value}"; then
+        live_hit="${id_field}=${id_value}"
+        break
+      fi
+    done
+
+    if [ -n "${live_hit}" ]; then
+      echo "    SKIP  (still LIVE in examples/ — ${live_hit}) ${otype} [literal:${reason}]"
+      SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+      continue
+    fi
+
     # A single comma-joined _return_fields=... — WAPI rejects the additive
     # `_return_fields+=` form when the value is URL-encoded (the encoded
     # `+` is parsed as part of the option name, not "add to defaults"), and
