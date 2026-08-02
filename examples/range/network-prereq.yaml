@@ -19,12 +19,11 @@
 # own ${data.netRangeStartCluster}/${data.netRangeEndCluster} span is
 # nested inside this /27.
 #
-# This manifest is intentionally not update-tested (no
-# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
-# annotation): range.yaml's Create depends on this object's CIDR staying
-# stable for the whole run, and it is not itself a resource under test —
-# see examples/network/network.yaml for the general-purpose, independently
-# update-tested Network example.
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: range.yaml's Create
+# depends on this object's CIDR staying stable for the whole run, and it
+# is not itself a resource under test — see examples/network/network.yaml
+# for the general-purpose, independently update-tested Network example.
 apiVersion: network.infobloxnios.crossplane.io/v1alpha1
 kind: Network
 metadata:

@@ -16,12 +16,12 @@
 # (`make e2e` / CORE tier). fixed-address.yaml's own
 # ${data.netFixedAddrHostCluster} address is a host inside this /28.
 #
-# This manifest is intentionally not update-tested (no
-# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
-# annotation): fixed-address.yaml's allocation depends on this object's
-# CIDR staying stable for the whole run, and it is not itself a resource
-# under test — see examples/network/network.yaml for the general-purpose,
-# independently update-tested Network example.
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: fixed-address.yaml's
+# allocation depends on this object's CIDR staying stable for the whole
+# run, and it is not itself a resource under test — see
+# examples/network/network.yaml for the general-purpose, independently
+# update-tested Network example.
 apiVersion: network.infobloxnios.crossplane.io/v1alpha1
 kind: Network
 metadata:

@@ -18,12 +18,12 @@
 # another run's shared-network membership, even when both apply in the
 # same E2E run (`make e2e` / CORE tier).
 #
-# This manifest is intentionally not update-tested (no
-# crossplane.io/update-test / uptest.upbound.io/post-assert-hook
-# annotation): ipv4-shared-network.yaml's `networks` reference depends on
-# this object's CIDR staying stable for the whole run, and it is not
-# itself a resource under test — see examples/network/network.yaml for the
-# general-purpose, independently update-tested Network example.
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: ipv4-shared-network.yaml's
+# `networks` reference depends on this object's CIDR staying stable for
+# the whole run, and it is not itself a resource under test — see
+# examples/network/network.yaml for the general-purpose, independently
+# update-tested Network example.
 apiVersion: network.infobloxnios.crossplane.io/v1alpha1
 kind: Network
 metadata:
