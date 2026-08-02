@@ -2361,9 +2361,8 @@ func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
 }
 
 // TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests: see zoneauth's
-// identically-named test for the note on why a whitespace-only uid is
-// not covered — Kubernetes never assigns one, and this is a
-// cross-family validation-consistency finding tracked separately.
+// identically-named test. A whitespace-only uid is rejected the same
+// way — see TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests.
 func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
@@ -2383,6 +2382,30 @@ func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	m.mu.Unlock()
 	if createCalls != 0 || recordCount != 0 {
 		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests: see
+// zoneauth's identically-named test for the rationale.
+func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "")
+	cr.UID = types.UID("   ")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a whitespace-only uid", createCalls, recordCount)
 	}
 }
 

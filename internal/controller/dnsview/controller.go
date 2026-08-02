@@ -2144,7 +2144,7 @@ func newViewForGet() *ibclient.View {
 // into the object's extensible attributes in the same request that
 // creates it (identity.Stamp).
 func createView(conn ibclient.IBConnector, f dnsViewFields, uid string) (string, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return "", errors.New(errEmptyUID)
 	}
 	v := buildView(f)

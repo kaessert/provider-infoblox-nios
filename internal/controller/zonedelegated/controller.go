@@ -551,7 +551,7 @@ func observeFromZoneDelegated(externalID string, rec *ibclient.ZoneDelegated) ob
 // converted to the SDK's []ibclient.NameServer shape by the caller (see
 // cluster.go/namespaced.go).
 func createZoneDelegated(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, comment, nsGroup *string, disable, locked, useDelegatedTTL *bool, delegatedTTL *uint32, delegateTo []ibclient.NameServer, extAttrs map[string]string, uid string) (*ibclient.ZoneDelegated, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

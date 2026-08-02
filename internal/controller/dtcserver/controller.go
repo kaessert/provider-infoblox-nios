@@ -583,7 +583,7 @@ func observeFromDtcServer(externalID string, rec *ibclient.DtcServer) observedDT
 // resource's uid into the object's extensible attributes in the same
 // request that creates it (identity.Stamp).
 func createDtcServer(conn ibclient.IBConnector, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string, uid string) (*ibclient.DtcServer, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	dtcServer := ibclient.NewDtcServer(

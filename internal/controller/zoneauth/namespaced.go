@@ -2,6 +2,7 @@ package zoneauth
 
 import (
 	"context"
+	"strings"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -303,7 +304,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 // request, and records the server-assigned _ref as the external name.
 func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.ZoneAuth) (managed.ExternalCreation, error) {
 	uid := string(cr.GetUID())
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return managed.ExternalCreation{}, errors.New(errEmptyUID)
 	}
 	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {

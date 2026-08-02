@@ -572,7 +572,7 @@ func observeFromZoneForward(externalID string, rec *ibclient.ZoneForward) observ
 // identity stamp. forwardTo and forwardingServers are already converted
 // to the SDK's shape by the caller (see cluster.go/namespaced.go).
 func createZoneForward(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string, uid string) (*ibclient.ZoneForward, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

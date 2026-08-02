@@ -733,7 +733,7 @@ func buildDtcLbdn(name, lbMethod *string, patterns []string, pools []poolLink, a
 // Stamps the owning managed resource's uid into the object's extensible
 // attributes in the same request that creates it (identity.Stamp).
 func createDtcLbdn(conn ibclient.IBConnector, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string, uid string) (*ibclient.DtcLbdn, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	lbdn := buildDtcLbdn(name, lbMethod, patterns, pools, authZones, types, priority, persistence, topology, ttl, useTTL, comment, disable, extAttrs)

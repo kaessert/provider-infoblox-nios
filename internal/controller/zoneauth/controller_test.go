@@ -1912,11 +1912,9 @@ func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
 // before issuing any WAPI call. Stamping an empty identity value would
 // make every future ambiguity search match every unstamped object.
 //
-// A whitespace-only uid is not covered here: createZoneAuth's own guard
-// checks uid == "" without trimming, unlike identity.Resolve's ladder
-// (which does strings.TrimSpace before the same check) — tracked as a
-// standalone validation-consistency finding, not a functional risk,
-// since the Kubernetes API server never assigns a whitespace-only UID.
+// A whitespace-only uid is rejected the same way — createZoneAuth's
+// guard trims before the emptiness check, matching identity.Resolve's
+// ladder (see TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests).
 func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -1936,6 +1934,36 @@ func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	m.mu.Unlock()
 	if createCalls != 0 || recordCount != 0 {
 		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests proves a
+// whitespace-only uid is rejected the same way a blank one is —
+// createZoneAuth's guard trims before comparing, matching
+// identity.Resolve's ladder (see internal/clients/identity). Without the
+// trim, a whitespace-only uid would pass Create's guard and get stamped
+// verbatim into the object's extensible attributes, while Observe/Delete
+// (which route through identity.Resolve) would treat that same object as
+// unowned.
+func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.UID = types.UID("   ")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a whitespace-only uid", createCalls, recordCount)
 	}
 }
 

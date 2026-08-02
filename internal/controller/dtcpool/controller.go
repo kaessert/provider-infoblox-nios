@@ -961,7 +961,7 @@ func buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment *string, s
 // follow-up call, so there is no window in which the object exists
 // without its identity stamp.
 func createDtcPool(conn ibclient.IBConnector, name, lbPreferredMethod, lbAlternateMethod, comment *string, servers []serverLink, availability *string, quorum *uint32, lbPreferredTopology *string, lbDynamicRatioPreferred *dynRatio, lbAlternateTopology *string, lbDynamicRatioAlternate *dynRatio, monitors []poolMonitor, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.DtcPool, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	pool := buildDtcPool(name, lbPreferredMethod, lbAlternateMethod, comment, servers, availability, quorum, lbPreferredTopology, lbDynamicRatioPreferred, lbAlternateTopology, lbDynamicRatioAlternate, monitors, disable, ttl, useTTL, extAttrs)

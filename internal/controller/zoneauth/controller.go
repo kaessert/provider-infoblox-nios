@@ -902,7 +902,7 @@ func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 // uid into the object's extensible attributes in the same request that
 // creates it (identity.Stamp).
 func createZoneAuth(conn ibclient.IBConnector, f zoneAuthFields, uid string) (string, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return "", errors.New(errEmptyUID)
 	}
 	z := buildZoneAuthForCreate(f)
