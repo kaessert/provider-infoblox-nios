@@ -23,6 +23,14 @@
 #
 # Optional mutable fields: name, comment, ttl, useTtl, extAttrs.
 #
+# Identity is primarily the ADDRESS, not a name — correcting an earlier
+# classification of this resource as a pure named object. The controller's
+# ptrRecordExistsByNaturalKey searches on (view, ptrdname, name/ip)
+# together, but with `name` omitted from this example the reverse-mapping
+# name is derived entirely from ipv4Addr, so the address is what actually
+# disambiguates concurrent runs on WAPI; ptrdname here is payload (the
+# forward FQDN the PTR points to), not identity.
+#
 # E2E fixture note: PTR record creation requires a matching reverse-mapping
 # zone (record:ptr's reverse `zone_auth`) to already exist on the Grid for
 # ipv4Addr's network in the given view — WAPI returns 400
@@ -30,7 +38,17 @@
 # otherwise. This test Grid Manager only has a reverse zone for 10.1.1.0/24
 # in DNS view "Internal" (no reverse zone exists in view "default"), so this
 # example intentionally deviates from record-a's 192.0.2.0/24 (TEST-NET-1)
-# convention and view "default".
+# convention and view "default". test/setup.sh creates no per-run reverse
+# zone (ADR-IN-0007 keeps setup.sh a convergent, non-per-run provisioner),
+# and a 100.64.0.0/16 netPrefix address has no reverse zone at all, so this
+# resource cannot use the netPrefix mechanism the other IPAM-wave resources
+# use. Instead ${data.netPtrHostCluster} is a per-run host offset drawn
+# from a second, independent byte of the seed hash and confined to the
+# existing 10.1.1.0/24 reverse zone's address pool (see
+# test/e2e/gen-datasource.sh's header comment for the full derivation and
+# the documented, accepted collision-probability tradeoff versus
+# netPrefix's larger pool). record-ptr-namespaced.yaml uses the disjoint
+# ${data.netPtrHostNamespaced} half of that same pool.
 apiVersion: recordptr.infobloxnios.crossplane.io/v1alpha1
 kind: PTRRecord
 metadata:
@@ -82,7 +100,7 @@ metadata:
 spec:
   forProvider:
     ptrdname: www.example.com
-    ipv4Addr: 10.1.1.10
+    ipv4Addr: ${data.netPtrHostCluster}
     view: Internal
     comment: Managed by Crossplane
   providerConfigRef:

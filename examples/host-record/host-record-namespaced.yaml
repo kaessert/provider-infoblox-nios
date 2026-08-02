@@ -7,9 +7,12 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the host name below differs from host-record.yaml's
-# so both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same (view, name) WAPI identity.
+# Distinct identity: the host name and address below both differ from
+# host-record.yaml's so both examples can be applied to the same NIOS
+# Grid Manager at once without colliding on the same (view, name) WAPI
+# identity OR the same address — this resource's natural key is BOTH
+# name and address together (networkView, view, name, ipv4Addrs,
+# ipv6Addrs), see host-record.yaml for the full rationale.
 apiVersion: hostrecord.infobloxnios.m.crossplane.io/v1alpha1
 kind: HostRecord
 metadata:
@@ -60,9 +63,9 @@ metadata:
         skip: "only required/applicable when filterParams is set; not used by this example's static-address allocation"
 spec:
   forProvider:
-    name: test-host-ns.example.com
+    name: test-host-ns-${data.runToken}.example.com
     ipv4Addrs:
-      - ipv4Addr: 10.0.0.101
+      - ipv4Addr: ${data.netHostRecordNamespaced}
     view: default
     # configureForDns must be true — see host-record.yaml for the
     # rationale (WAPI rejects Create with enable_dns=false unless the
