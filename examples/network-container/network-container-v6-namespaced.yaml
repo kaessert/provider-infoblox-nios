@@ -1,0 +1,48 @@
+# NetworkContainer (IPv6 variant) is the namespace-scoped variant of the
+# Infoblox NIOS IPv6 network container. See network-container-v6.yaml for
+# the cluster-scoped variant and the dual-object-type rationale, and
+# network-container-namespaced.yaml for the IPv4 namespace-scoped variant —
+# this file only documents what differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the CIDR below differs from network-container-v6.yaml's
+# so both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same (network_view, network) WAPI identity.
+apiVersion: networkcontainer.infobloxnios.m.crossplane.io/v1alpha1
+kind: NetworkContainer
+metadata:
+  name: example-network-container-v6-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: networkcontainer/v1alpha1/networkcontainer
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # network-container.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-container-v6-namespaced.sh
+    # See network-container-v6.yaml for the dual-object-type guard
+    # rationale.
+    crossplane.io/expect-external-name-prefix: "ipv6networkcontainer/"
+    # See network-container-v6.yaml for the field coverage rationale.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6, namespaced)"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: allocatePrefixLen
+        skip: "only required when parentCidr or filterParams is set; not used by this example's static CIDR"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input, mutually exclusive with the static network CIDR this example uses"
+spec:
+  forProvider:
+    networkView: default
+    network: 2001:db8:e2e6:4::/64
+    comment: Managed by Crossplane (IPv6, namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

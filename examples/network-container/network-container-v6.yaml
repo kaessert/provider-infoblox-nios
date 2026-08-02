@@ -1,0 +1,64 @@
+# NetworkContainer (IPv6 variant) is a cluster-scoped Infoblox NIOS network
+# container backed by an IPv6 CIDR. See network-container.yaml for the IPv4
+# variant and full field documentation, and
+# network-container-v6-namespaced.yaml for the namespace-scoped IPv6
+# variant — this file only documents what differs.
+#
+# WAPI models IPv4 and IPv6 network containers as distinct object types
+# (`networkcontainer` vs `ipv6networkcontainer`). The controller selects
+# the object type at runtime from this `network` field's format (see
+# newEmptyNetworkContainer in the controller), so this example is the
+# standing gate that exercises the `ipv6networkcontainer` code path —
+# network-container.yaml alone never reaches it. This mirrors the identity
+# guard already proven for Network (examples/network/network-v6.yaml).
+#
+# CIDR: uses the IPv6 documentation range reserved by RFC 3849
+# (2001:db8::/32), never expected to appear in a real NIOS Grid config. The
+# sub-block below is distinct from network-container-v6-namespaced.yaml's
+# AND from network-v6.yaml/network-v6-namespaced.yaml's blocks
+# (2001:db8:e2e6:1::/64, 2001:db8:e2e6:2::/64) so all four examples can be
+# applied to the same Grid at once without colliding on the same
+# (network_view, network) WAPI identity.
+#
+# The assertion that makes this example meaningful: the post-assert hook
+# (crossplane.io/expect-external-name-prefix below) checks that the
+# resolved crossplane.io/external-name annotation is prefixed
+# "ipv6networkcontainer/", not merely that the resource reaches Ready. A
+# resource that was silently created against the wrong object type would
+# still reach Ready — only the external-name prefix reveals it.
+apiVersion: networkcontainer.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkContainer
+metadata:
+  name: example-network-container-v6
+  annotations:
+    meta.upbound.io/example-id: networkcontainer/v1alpha1/networkcontainer
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # network-container.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-container-v6.sh
+    # The dual-object-type identity guard — see the file header. The
+    # generic post-assert hook (test/hooks/run-update-tester.sh) reads
+    # this annotation and, when present, runs
+    # `update-tester check-external-name-prefix` right after Create,
+    # before the per-field update tests below.
+    crossplane.io/expect-external-name-prefix: "ipv6networkcontainer/"
+    # See network-container.yaml for the field coverage rationale —
+    # identical here, the only difference is the CIDR family.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6)"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: allocatePrefixLen
+        skip: "only required when parentCidr or filterParams is set; not used by this example's static CIDR"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input, mutually exclusive with the static network CIDR this example uses"
+spec:
+  forProvider:
+    networkView: default
+    network: 2001:db8:e2e6:3::/64
+    comment: Managed by Crossplane (IPv6)
+  providerConfigRef:
+    name: default

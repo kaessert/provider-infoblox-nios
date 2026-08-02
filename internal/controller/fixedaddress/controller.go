@@ -526,16 +526,32 @@ func isUpToDate(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
 }
 
 // isUpToDateAddress compares the address-identity fields.
+//
+// The mac/DUID comparison is family-aware: ibclient.NewEmptyFixedAddress
+// requests a different returnFields list per WAPI object type, and for
+// "ipv6fixedaddress" that list carries "duid", never "mac" — every GET for
+// an IPv6 fixed address comes back with fa.Mac == nil regardless of what
+// was sent. spec.forProvider.mac doubles as the DUID input for IPv6 (WAPI
+// requires it non-empty on create), so it must be compared against
+// fa.Duid — the field WAPI actually populates for that family — not
+// fa.Mac, which would never match and would trigger an Update on every
+// reconcile.
 func isUpToDateAddress(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
-	if f.isIPv6() {
+	isIPv6 := f.isIPv6()
+	if isIPv6 {
 		if strOrEmpty(f.IPv6Addr) != fa.IPv6Address {
 			return false
 		}
-	} else if strOrEmpty(f.IPv4Addr) != fa.IPv4Address {
-		return false
-	}
-	if strOrEmpty(f.MAC) != strOrEmpty(fa.Mac) {
-		return false
+		if strOrEmpty(f.MAC) != fa.Duid {
+			return false
+		}
+	} else {
+		if strOrEmpty(f.IPv4Addr) != fa.IPv4Address {
+			return false
+		}
+		if strOrEmpty(f.MAC) != strOrEmpty(fa.Mac) {
+			return false
+		}
 	}
 	if strOrEmpty(f.NetworkView) != fa.NetviewName {
 		return false
@@ -778,10 +794,16 @@ type observedFixedAddress struct {
 // observeFromFixedAddress extracts the fields mirrored by
 // FixedAddressObservation (the full-mirror AtProvider convention) from a
 // WAPI FixedAddress response fetched via GetFixedAddressByRef.
+//
+// The mac/DUID read-back is family-aware, mirroring isUpToDateAddress: for
+// "ipv6fixedaddress" objects WAPI's read path only ever returns the duid
+// field, never mac — fa.Mac is always nil regardless of what was sent. The
+// IPv6 family is derived from fa.IPv6Address (the response already carries
+// that), so status.atProvider.mac reports fa.Duid for IPv6 objects instead
+// of the always-empty fa.Mac. IPv4 behavior (fa.Mac) is unchanged.
 func observeFromFixedAddress(externalID string, fa *ibclient.FixedAddress) observedFixedAddress {
 	o := observedFixedAddress{
 		ID:                          externalID,
-		MAC:                         fa.Mac,
 		Name:                        fa.Name,
 		MatchClient:                 fa.MatchClient,
 		ExtAttrs:                    extAttrsFromEA(fa.Ea),
@@ -801,6 +823,16 @@ func observeFromFixedAddress(externalID string, fa *ibclient.FixedAddress) obser
 	if fa.IPv6Address != "" {
 		v := fa.IPv6Address
 		o.IPv6Addr = &v
+		// IPv6 family: WAPI never populates fa.Mac for
+		// "ipv6fixedaddress" objects, only fa.Duid. Report the DUID as
+		// the observed mac so status.atProvider.mac reflects reality
+		// instead of staying permanently empty.
+		if fa.Duid != "" {
+			v := fa.Duid
+			o.MAC = &v
+		}
+	} else {
+		o.MAC = fa.Mac
 	}
 	if fa.NetviewName != "" {
 		v := fa.NetviewName

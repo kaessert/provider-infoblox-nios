@@ -1,0 +1,121 @@
+# FixedAddress (IPv6 variant) is a cluster-scoped Infoblox NIOS DHCP fixed
+# address backed by ipv6addr (WAPI object type "ipv6fixedaddress"). See
+# fixed-address.yaml for the IPv4 variant and full field documentation, and
+# fixed-address-v6-namespaced.yaml for the namespace-scoped IPv6 variant —
+# this file only documents what differs.
+#
+# WAPI models IPv4 and IPv6 fixed addresses as distinct object types
+# ("fixedaddress" vs "ipv6fixedaddress"). The controller selects the object
+# type at runtime from whichever of ipv4addr/ipv6addr is set (see
+# newEmptyFixedAddress and fixedAddressFields.isIPv6 in the controller), so
+# this example is the standing gate that exercises the
+# "ipv6fixedaddress" code path — fixed-address.yaml alone never reaches it.
+# This mirrors the identity guard already proven for Network
+# (examples/network/network-v6.yaml) and NetworkContainer
+# (examples/network-container/network-container-v6.yaml).
+#
+# PREREQUISITE: like the IPv4 sibling, WAPI's AllocateIP call unconditionally
+# requires a parent Network object covering the address (see
+# fixed-address.yaml's ipv4addr field doc) — for an IPv6 address this means a
+# real "ipv6network" object covering 2001:db8:e2e6:5::/64 must already exist
+# on the Grid before this example's Create can succeed. This example does
+# NOT provision that network itself (mirroring how fixed-address.yaml relies
+# on test/setup.sh's prior creation of 10.0.0.0/24 rather than inventing a
+# Network resource inline). test/setup.sh creates the ipv6network directly
+# via a GET-guarded WAPI POST, decoupled from any managed resource's CRUD
+# lifecycle, before every E2E run.
+#
+# CIDR: uses the IPv6 documentation range reserved by RFC 3849
+# (2001:db8::/32), distinct from every other IPv6 example's sub-block
+# (network-v6: ::1/::2, network-container-v6: ::3, network-container-v6
+# namespaced: ::4) so it can be applied to the same Grid without colliding
+# on a pre-existing (network_view, network) identity.
+#
+# DUID: for an IPv6 fixed address, the `mac` field carries the DHCP Unique
+# Identifier (DUID) instead of a MAC address — AllocateIP rejects an empty
+# value for IPv6 (unlike IPv4, which defaults to the all-zero MAC when
+# omitted). WAPI's read path for an ipv6fixedaddress object only ever
+# requests the `duid` field back, never `mac` — the controller's up-to-date
+# comparison accounts for this and compares the spec value against the
+# observed DUID for the IPv6 family, so this field round-trips correctly
+# and is safe to value-test below. The DUID is unique per network — the
+# create-time value here (`...44:55`), this example's update-test target
+# (`...44:77`), and the namespaced sibling's create-time value (`...44:66`)
+# and update-test target (`...44:99`) are all four distinct so no two
+# FixedAddress objects sharing the 2001:db8:e2e6:5::/64 network ever
+# collide on the same DUID (WAPI rejects a duplicate DUID within one
+# network with IB.Data.Conflict).
+#
+# The assertion that makes this example meaningful: the post-assert hook
+# (crossplane.io/expect-external-name-prefix below) checks that the
+# resolved crossplane.io/external-name annotation is prefixed
+# "ipv6fixedaddress/", not merely that the resource reaches Ready. A
+# resource that was silently created against the wrong object type would
+# still reach Ready — only the external-name prefix reveals it.
+apiVersion: fixedaddress.infobloxnios.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-v6
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # fixed-address.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address-v6.sh
+    # The dual-object-type identity guard — see the file header. The
+    # generic post-assert hook (test/hooks/run-update-tester.sh) reads
+    # this annotation and, when present, runs
+    # `update-tester check-external-name-prefix` right after Create,
+    # before the per-field update tests below.
+    crossplane.io/expect-external-name-prefix: "ipv6fixedaddress/"
+    # comment, mac (DUID), and name are the mutable scalars exercised here
+    # — a narrower set than fixed-address.yaml's IPv4 sibling. matchClient,
+    # disable, useOptions, agentCircuitId, agentRemoteId,
+    # clientIdentifierPrependZero, dhcpClientIdentifier, and options are
+    # all skipped: WAPI's search/read call for an ipv6fixedaddress object
+    # requests a narrower field set than for fixedaddress and never
+    # confirms these back (unlike mac/duid, which the controller's
+    # up-to-date comparison already accounts for — see the DUID note in
+    # the file header), so value-testing any of them here would never
+    # converge.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6)"
+      - field: mac
+        value: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:77"
+      - field: name
+        value: "updated-fixed-address-v6"
+      - field: matchClient
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: disable
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: useOptions
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: ipv4addr
+        skip: "mutually exclusive with ipv6addr; this example uses ipv6addr"
+      - field: ipv6addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+      - field: networkView
+        skip: "only safely mutable prior to first apply per fixed-address.yaml's field documentation; not exercised post-create"
+      - field: network
+        skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv6addr"
+      - field: agentCircuitId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: agentRemoteId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: dhcpClientIdentifier
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: clientIdentifierPrependZero
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the update-test annotation header above) — value-testing it cannot converge"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target; also subject to the same read-path gap as the other DHCP-relay fields"
+spec:
+  forProvider:
+    ipv6addr: 2001:db8:e2e6:5::50
+    mac: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:55"
+    networkView: default
+    comment: Managed by Crossplane (IPv6)
+  providerConfigRef:
+    name: default
