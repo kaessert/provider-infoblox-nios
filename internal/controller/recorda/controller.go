@@ -462,7 +462,7 @@ func observeFromRecordA(externalID string, rec *ibclient.RecordA) observedARecor
 // createARecord (for callers that invoke it directly) run this check
 // first.
 func validateARecordCreateInputs(ipv4Addr, cidr *string, uid string) error {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return errors.New(errEmptyUID)
 	}
 	if strOrEmpty(cidr) != "" && strOrEmpty(ipv4Addr) != "" {
@@ -520,7 +520,7 @@ func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, commen
 // map — it is not a per-key merge — so omitting the stamp here would wipe
 // it off the object on the very first field update after create.
 func updateARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv4Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordA, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 

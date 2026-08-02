@@ -6,6 +6,14 @@
 // HTTP request/response envelope, so there is no internal REST client to
 // compose.
 //
+// MXRecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordmx
@@ -29,28 +37,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordmx/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordmx/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveMXRecord     = "cannot observe MXRecord"
-	errCreateMXRecord      = "cannot create MXRecord"
-	errUpdateMXRecord      = "cannot update MXRecord"
-	errDeleteMXRecord      = "cannot delete MXRecord"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveMXRecord           = "cannot observe MXRecord"
+	errCreateMXRecord            = "cannot create MXRecord"
+	errUpdateMXRecord            = "cannot update MXRecord"
+	errDeleteMXRecord            = "cannot delete MXRecord"
+	errEmptyUID                  = "cannot stamp MXRecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -107,14 +123,14 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 // from the given credentials. The Connector performs HTTP Basic Auth on
 // every request and only validates configuration locally — no network
 // round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -144,10 +160,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -326,7 +342,7 @@ func isUpToDate(name, mailExchanger *string, preference *int64, comment *string,
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -359,7 +375,7 @@ func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -434,8 +450,14 @@ func observeFromRecordMX(externalID string, rec *ibclient.RecordMX) observedMXRe
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createMXRecord issues the WAPI create call.
-func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
+// createMXRecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp).
+func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string, uid string) (*ibclient.RecordMX, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateMXRecord(
 		strOrEmpty(view),
 		strOrEmpty(name),
@@ -444,7 +466,7 @@ func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -457,8 +479,14 @@ func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *
 // view is immutable (the CRD's XValidation rule rejects any spec change
 // to it), so p.View is guaranteed to already equal the record's current
 // view; passing it here only satisfies the SDK's required parameter
-// without ever changing the value on the wire.
-func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string) (*ibclient.RecordMX, error) {
+// without ever changing the value on the wire. Every call re-asserts the
+// identity stamp (identity.Stamp) — a WAPI PUT carrying extattrs
+// replaces the whole map, not a per-key merge.
+func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string, uid string) (*ibclient.RecordMX, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateMXRecord(
 		ref,
 		strOrEmpty(view),
@@ -468,7 +496,7 @@ func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mai
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -478,70 +506,108 @@ func deleteMXRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// fetchMXRecord resolves the current MXRecord for the given external
-// name, tolerating _ref staleness. MX record _refs are unstable —
-// changing name, mailExchanger, or preference changes the record's
-// identity and therefore its _ref (live-verified against a real NIOS
-// Grid Manager). If the stored external name 404s, this falls back to a
-// direct search by the CR's own (view, name, mailExchanger, preference)
-// fields — the same identity tuple WAPI uses to compute the _ref — so
-// Observe can recover the record and refresh the external-name
-// annotation instead of permanently reporting the resource as deleted.
-//
-// Returns (record, refChanged, error). record is nil (with no error) when
-// the object genuinely does not exist. refChanged is true only when the
-// fallback search located the record under a different _ref than
-// externalID.
-func fetchMXRecord(objMgr ibclient.IBObjectManager, externalID string, view, name, mailExchanger *string, preference *int64) (*ibclient.RecordMX, bool, error) {
-	rec, err := objMgr.GetMXRecordByRef(externalID)
-	if err == nil {
-		return rec, false, nil
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(err) {
-		return nil, false, err
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
 
-	// The stored _ref is gone. A fallback search requires the identity
-	// fields GetMXRecord needs (view and name); without them there is no
-	// way to re-discover the object.
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" {
-		return nil, false, nil
-	}
-
-	rec, searchErr := objMgr.GetMXRecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(mailExchanger), preferenceOrZero(preference))
-	if searchErr != nil {
-		if isNotFound(searchErr) {
-			return nil, false, nil
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
 		}
-		return nil, false, searchErr
-	}
-	return rec, true, nil
-}
-
-// deleteMXRecordResolving404 issues the WAPI delete and, on a 404 against
-// the stored _ref, resolves the object's natural key before concluding it
-// is gone. A 404 on a derived handle is evidence the handle rotated
-// (see fetchMXRecord), not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteMXRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64) error {
-	delErr := deleteMXRecord(objMgr, ref)
-	if delErr == nil {
-		return nil
-	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteMXRecord)
-	}
-
-	rec, _, fetchErr := fetchMXRecord(objMgr, ref, view, name, mailExchanger, preference)
-	if fetchErr != nil {
-		return errors.Wrap(fetchErr, errDeleteMXRecord)
-	}
-	if rec != nil {
-		return staleref.RefusalError()
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+func resolveMXRecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordMX, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordMX](ctx, conn, ibclient.NewEmptyRecordMX, ref, uid)
+}
+
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordMX
+	obs          observedMXRecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+func observeMXRecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveMXRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordMX(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+func deleteMXRecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveMXRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteMXRecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteMXRecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteMXRecord)
+	default:
+		return errors.New("identity: unresolved MXRecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

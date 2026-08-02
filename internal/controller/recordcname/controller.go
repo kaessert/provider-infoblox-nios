@@ -6,6 +6,14 @@
 // DeleteCNAMERecord) instead of a generic HTTP request/response
 // envelope, so there is no internal REST client to compose.
 //
+// CNAMERecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordcname
@@ -29,28 +37,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveCNAMERecord  = "cannot observe CNAMERecord"
-	errCreateCNAMERecord   = "cannot create CNAMERecord"
-	errUpdateCNAMERecord   = "cannot update CNAMERecord"
-	errDeleteCNAMERecord   = "cannot delete CNAMERecord"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveCNAMERecord        = "cannot observe CNAMERecord"
+	errCreateCNAMERecord         = "cannot create CNAMERecord"
+	errUpdateCNAMERecord         = "cannot update CNAMERecord"
+	errDeleteCNAMERecord         = "cannot delete CNAMERecord"
+	errEmptyUID                  = "cannot stamp CNAMERecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -103,18 +119,19 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// from the given credentials. The Connector performs HTTP Basic Auth on
-// every request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials. The
+// Connector performs HTTP Basic Auth on every request and only
+// validates configuration locally — no network round-trip happens until
+// the first Observe/Create/Update/Delete call.
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -144,10 +161,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -280,7 +297,9 @@ func isNotFound(err error) bool {
 // isUpToDate compares the desired CNAMERecord fields against the observed
 // RecordCNAME. View is immutable (WAPI ties the object's _ref to
 // view+name; the UpdateCNAMERecord SDK method has no view parameter) and
-// is intentionally excluded from this comparison.
+// is intentionally excluded from this comparison. The Grid's extattrs
+// map is compared with the provider's own identity stamp stripped out
+// (identity.Strip).
 func isUpToDate(name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, rec *ibclient.RecordCNAME) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
@@ -304,7 +323,7 @@ func isUpToDate(name, canonical, comment *string, ttl *uint32, useTTL *bool, ext
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -312,8 +331,9 @@ func isUpToDate(name, canonical, comment *string, ttl *uint32, useTTL *bool, ext
 // isUpToDate does not see phantom drift on the next reconcile. Required
 // fields (name, canonical) and the immutable view field are never
 // late-initialized — view is always user-supplied (required on the CRD)
-// and name/canonical are always user-supplied too. Returns true if any
-// field was changed.
+// and name/canonical are always user-supplied too. extAttrs is
+// back-filled with the identity stamp stripped out (identity.Strip).
+// Returns true if any field was changed.
 func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string, rec *ibclient.RecordCNAME) bool {
 	changed := false
 
@@ -337,7 +357,7 @@ func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -408,8 +428,14 @@ func observeFromRecordCNAME(externalID string, rec *ibclient.RecordCNAME) observ
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createCNAMERecord issues the WAPI create call.
-func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
+// createCNAMERecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp).
+func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordCNAME, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateCNAMERecord(
 		strOrEmpty(view),
 		strOrEmpty(canonical),
@@ -417,14 +443,20 @@ func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, c
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
 // updateCNAMERecord issues the WAPI update call. view is intentionally
 // never passed — UpdateCNAMERecord has no view parameter (immutable
-// field).
-func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordCNAME, error) {
+// field). Every call re-asserts the identity stamp (identity.Stamp) — a
+// WAPI PUT carrying extattrs replaces the whole map, not a per-key
+// merge.
+func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordCNAME, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateCNAMERecord(
 		ref,
 		strOrEmpty(canonical),
@@ -432,7 +464,7 @@ func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canoni
 		boolOrFalse(useTTL),
 		ttlOrZero(ttl),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -442,51 +474,108 @@ func deleteCNAMERecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// cnameRecordExistsByNaturalKey reports whether a live CNAMERecord still
-// exists under the CR's own (view, canonical, name) identity — the same
-// tuple WAPI uses to compute the _ref. Used by Delete() when the stored
-// _ref 404s: a hit here means the _ref is merely stale, not that the
-// object is gone. GetCNAMERecord requires all three fields non-empty (it
-// returns a hard error, not a NotFoundError, when any is missing); when
-// any is missing there is no way to re-discover the object, so the
-// search is skipped (found=false) rather than treated as an error.
-func cnameRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, view, canonical, name *string) (bool, error) {
-	if strOrEmpty(view) == "" || strOrEmpty(canonical) == "" || strOrEmpty(name) == "" {
-		return false, nil
-	}
-	_, err := objMgr.GetCNAMERecord(strOrEmpty(view), strOrEmpty(canonical), strOrEmpty(name))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteCNAMERecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteCNAMERecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, canonical, name *string) error {
-	delErr := deleteCNAMERecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteCNAMERecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := cnameRecordExistsByNaturalKey(objMgr, view, canonical, name)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteCNAMERecord)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+func resolveCNAMERecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordCNAME, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordCNAME](ctx, conn, ibclient.NewEmptyRecordCNAME, ref, uid)
+}
+
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordCNAME
+	obs          observedCNAMERecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+func observeCNAMERecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveCNAMERecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordCNAME(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+func deleteCNAMERecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveCNAMERecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteCNAMERecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteCNAMERecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteCNAMERecord)
+	default:
+		return errors.New("identity: unresolved CNAMERecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

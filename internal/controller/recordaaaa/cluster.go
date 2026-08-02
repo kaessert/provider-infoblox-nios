@@ -20,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-recordaaaa.infobloxnios.crossplane.io"
@@ -41,7 +41,7 @@ type clusterConnector struct {
 
 // Connect tracks ProviderConfig usage, resolves the referenced
 // (legacy) ClusterProviderConfig-equivalent — the cluster-scoped
-// ProviderConfig — and returns an authenticated WAPI ObjectManager.
+// ProviderConfig — and returns an authenticated WAPI object manager.
 func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.TypedExternalClient[*clusterv1alpha1.AAAARecord], error) {
 	if err := c.usage.Track(ctx, cr); err != nil {
 		return nil, errors.Wrap(err, errTrackPCUsage)
@@ -73,97 +73,120 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.AAAA
 		sslVerify = *pc.Spec.SSLVerify
 	}
 
-	objMgr, err := newObjectManager(creds, sslVerify)
+	mgrConn, err := newObjectManager(creds, sslVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr}, nil
+	return &clusterExternal{
+		kube:   c.kube,
+		objMgr: mgrConn.Manager,
+		conn:   mgrConn.Connector,
+		// prober is left nil (defaults to identity.DefaultProber in
+		// ensureIdentityPrerequisite) so every controller in the process
+		// shares one TTL-bounded verdict cache per Grid endpoint.
+		endpoint: creds.Host,
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.AAAARecord].
 type clusterExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
+	// conn is the lower-level WAPI connector the identity ladder resolves
+	// against directly — it needs visibility into search match counts
+	// that objMgr's typed methods hide. See resolveAAAARecordIdentity.
+	conn ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
+	// new object. nil defaults to identity.DefaultProber — see
+	// ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// resolved by Connect from the ProviderConfig's Grid host. See
+	// ensureIdentityPrerequisite's empty-string fallback.
+	endpoint string
 }
 
-// Observe fetches the AAAARecord from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the AAAARecord through the shared UID-in-EA identity
+// ladder (ADR-IN-0006 §2/§3) and compares the result against the desired
+// spec. See observeAAAARecord for the ladder itself.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling GetAAAARecordByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetAAAARecordByRef(externalID)
+	res, err := observeAAAARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := aaaaRecordExistsByNaturalKey(e.objMgr, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.IPv6Addr)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveAAAARecord)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveAAAARecord)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromRecordAAAA(externalID, rec)
-	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = clusterv1alpha1.AAAARecordObservation{
-		Name:     o.Name,
-		IPv6Addr: o.IPv6Addr,
-		Comment:  o.Comment,
-		TTL:      o.TTL,
-		UseTTL:   o.UseTTL,
-		ExtAttrs: o.ExtAttrs,
-		View:     o.View,
+		Name:     res.obs.Name,
+		IPv6Addr: res.obs.IPv6Addr,
+		Comment:  res.obs.Comment,
+		TTL:      res.obs.TTL,
+		UseTTL:   res.obs.UseTTL,
+		ExtAttrs: res.obs.ExtAttrs,
+		View:     res.obs.View,
 		// Cidr/NetworkView are create-time-only allocation hints the WAPI
 		// never echoes back in a GET response — mirrored directly from
 		// ForProvider (informational only) rather than from the observed
 		// RecordAAAA.
 		Cidr:        p.Cidr,
 		NetworkView: p.NetworkView,
-		Ref:         o.Ref,
-		Zone:        o.Zone,
+		Ref:         res.obs.Ref,
+		Zone:        res.obs.Zone,
 	}
-	// Explicit assignment (rather than folding ID into the struct literal
-	// above) keeps the server-assigned identifier's provenance obvious at
-	// the call site — it always mirrors the external name used to fetch
-	// this record, not a field returned inside the WAPI response body.
-	cr.Status.AtProvider.ID = o.ID
+	cr.Status.AtProvider.ID = res.obs.ID
 
-	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, rec)
+	// A rotated or previously-unknown reference must be persisted
+	// through a path crossplane-runtime actually writes back to the API
+	// server. res.lateInit is already forced true alongside
+	// res.refreshedRef by observeAAAARecord for exactly this reason.
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	// An adopted object (ref resolved, no identity stamp yet) must never
+	// be reported up to date — see observeResult.adopted — so the next
+	// reconcile is guaranteed to call Update, which always re-asserts
+	// the identity stamp (see updateAAAARecord).
+	upToDate := isUpToDate(p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new AAAARecord and records the server-assigned
-// _ref as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalCreation, error) {
+// Create provisions a new AAAARecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request (see createAAAARecord), and records the server-assigned _ref
+// as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createAAAARecord(e.objMgr, p.Name, p.View, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView)
+	uid := string(cr.GetUID())
+
+	if err := validateAAAARecordCreateInputs(p.IPv6Addr, p.Cidr, uid); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createAAAARecord(e.objMgr, p.Name, p.View, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, p.Cidr, p.NetworkView, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateAAAARecord)
 	}
@@ -173,24 +196,22 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.AAAAReco
 }
 
 // Update patches the mutable AAAARecord fields. View (immutable) is
-// never sent — see updateAAAARecord. name and ipv6Addr are _ref-mutating
-// (UNSTABLE _ref): a successful update may return a different _ref than
-// the one used to issue the request, so the external-name annotation is
-// refreshed from the response below.
+// never sent — see updateAAAARecord. Every call re-asserts the identity
+// stamp (updateAAAARecord) since a WAPI PUT carrying extattrs replaces
+// the whole map rather than merging it — live-verified against a real
+// Grid.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateAAAARecord(e.objMgr, externalID, p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := updateAAAARecord(e.objMgr, externalID, p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateAAAARecord)
 	}
 
-	// UpdateAAAARecord always returns the object's current _ref. Per the
-	// resource facts (UNSTABLE _ref), changing name or ipv6Addr changes
-	// the object's _ref and the old _ref immediately 404s — so the
-	// external-name annotation must be refreshed here and the new _ref
-	// used for all subsequent operations.
+	// UpdateAAAARecord always returns the object's current _ref. Renaming
+	// (or changing ipv6Addr) mutates the _ref, so the external-name
+	// annotation must be refreshed here.
 	if rec.Ref != "" && rec.Ref != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
@@ -199,15 +220,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AAAARe
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the AAAARecord. A 404 on the stored _ref is not treated
-// as already-deleted by itself — see deleteAAAARecordResolving404 —
-// because the _ref is a derived handle that rotates whenever an identity
-// field changes, and a stale handle 404s exactly like a genuinely
-// deleted object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalDelete, error) {
+// Delete removes the AAAARecord, resolving through the shared identity
+// ladder first — see deleteAAAARecordIdentity for the full
+// ownership-verification rules a stale or rotated _ref must satisfy
+// before a delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteAAAARecordResolving404(e.objMgr, externalID, p.View, p.Name, p.IPv6Addr); err != nil {
+	if err := deleteAAAARecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

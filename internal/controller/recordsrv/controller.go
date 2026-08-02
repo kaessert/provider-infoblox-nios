@@ -6,6 +6,14 @@
 // request/response envelope, so there is no internal REST client to
 // compose.
 //
+// SRVRecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordsrv
@@ -29,28 +37,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordsrv/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordsrv/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveSRVRecord    = "cannot observe SRVRecord"
-	errCreateSRVRecord     = "cannot create SRVRecord"
-	errUpdateSRVRecord     = "cannot update SRVRecord"
-	errDeleteSRVRecord     = "cannot delete SRVRecord"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveSRVRecord          = "cannot observe SRVRecord"
+	errCreateSRVRecord           = "cannot create SRVRecord"
+	errUpdateSRVRecord           = "cannot update SRVRecord"
+	errDeleteSRVRecord           = "cannot delete SRVRecord"
+	errEmptyUID                  = "cannot stamp SRVRecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -107,14 +123,14 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 // from the given credentials. The Connector performs HTTP Basic Auth on
 // every request and only validates configuration locally — no network
 // round-trip happens until the first Observe/Create/Update/Delete call.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, error) {
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -144,10 +160,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -273,46 +289,6 @@ func isNotFound(err error) bool {
 	return convErr == nil && code == http.StatusNotFound
 }
 
-// fetchSRVRecord looks the record up by its stored _ref first. If that
-// _ref 404s — because a prior Update rotated it (name/target/priority/
-// weight/port are all _ref-mutating) and the refreshed annotation was
-// never persisted, e.g. a crash between the WAPI write succeeding and
-// the annotation Patch landing — it falls back to a natural-key search
-// using the CURRENT desired spec (view/name/target/port). That is safe
-// specifically because a rotated _ref only ever happens after the WAPI
-// write that rotated it already succeeded, so by the time this fallback
-// runs the backend's target/priority/weight/port already match spec.
-//
-// The returned bool reports whether the record was found via the
-// fallback (i.e. the _ref changed) so the caller can refresh the
-// external-name annotation and avoid repeating the fallback search on
-// every subsequent reconcile.
-func fetchSRVRecord(objMgr ibclient.IBObjectManager, externalID string, view, name, target *string, port *uint32) (*ibclient.RecordSRV, bool, error) {
-	rec, err := objMgr.GetSRVRecordByRef(externalID)
-	if err == nil {
-		return rec, false, nil
-	}
-	if !isNotFound(err) {
-		return nil, false, err
-	}
-
-	// The stored _ref is gone. A fallback search requires the identity
-	// fields GetSRVRecord needs (view, name, target, port); without them
-	// there is no way to re-discover the object.
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(target) == "" || port == nil {
-		return nil, false, nil
-	}
-
-	rec, searchErr := objMgr.GetSRVRecord(strOrEmpty(view), strOrEmpty(name), strOrEmpty(target), *port)
-	if searchErr != nil {
-		if isNotFound(searchErr) {
-			return nil, false, nil
-		}
-		return nil, false, searchErr
-	}
-	return rec, true, nil
-}
-
 // ── Field comparison / late-init ────────────────────────────────────────
 //
 // These helpers take pointers to the individual ForProvider fields rather
@@ -360,7 +336,7 @@ func isUpToDate(name, target, comment *string, priority, weight, port *uint32, t
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -393,7 +369,7 @@ func lateInitialize(comment **string, ttl **uint32, useTTL **bool, extAttrs *map
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -472,8 +448,14 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createSRVRecord issues the WAPI create call.
-func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+// createSRVRecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp).
+func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordSRV, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateSRVRecord(
 		view,
 		strOrEmpty(name),
@@ -484,7 +466,7 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -493,8 +475,14 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 // field). Because priority/weight/port/name/target are all included in
 // every PUT, and any of them changing causes NIOS to mint a new _ref, the
 // caller MUST re-read Ref from the response and refresh the external-name
-// annotation if it changed.
-func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordSRV, error) {
+// annotation if it changed. Every call re-asserts the identity stamp
+// (identity.Stamp) — a WAPI PUT carrying extattrs replaces the whole map,
+// not a per-key merge.
+func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordSRV, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.UpdateSRVRecord(
 		ref,
 		strOrEmpty(name),
@@ -505,7 +493,7 @@ func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, 
 		uint32PtrOrZero(ttl),
 		boolOrFalse(useTTL),
 		strOrEmpty(comment),
-		buildEA(extAttrs),
+		ea,
 	)
 }
 
@@ -515,31 +503,108 @@ func deleteSRVRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// deleteSRVRecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated (see fetchSRVRecord), not evidence the object was
-// removed: if the natural-key search still finds a live record,
-// deleting is refused because ownership of that record cannot be
-// verified from the search alone (see the staleref package doc for the
-// full rationale).
-func deleteSRVRecordResolving404(objMgr ibclient.IBObjectManager, ref string, view, name, target *string, port *uint32) error {
-	delErr := deleteSRVRecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
+
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteSRVRecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
 
-	rec, _, fetchErr := fetchSRVRecord(objMgr, ref, view, name, target, port)
-	if fetchErr != nil {
-		return errors.Wrap(fetchErr, errDeleteSRVRecord)
-	}
-	if rec != nil {
-		return staleref.RefusalError()
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+func resolveSRVRecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordSRV, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordSRV](ctx, conn, ibclient.NewEmptyRecordSRV, ref, uid)
+}
+
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordSRV
+	obs          observedSRVRecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+func observeSRVRecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveSRVRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordSRV(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+func deleteSRVRecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveSRVRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteSRVRecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteSRVRecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteSRVRecord)
+	default:
+		return errors.New("identity: unresolved SRVRecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

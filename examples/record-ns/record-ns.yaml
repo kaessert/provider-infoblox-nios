@@ -53,14 +53,23 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
     # Runs the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
-    # nameserver is the mutable scalar exercised here. It is
-    # intentionally NOT one of the record's identity fields (name,
-    # view). msDelegationName is skipped — it is the MS delegation
-    # point name, only persisted on Microsoft/AD-integrated zones; NIOS
-    # silently drops it (HTTP 200, field absent from the response) on
-    # ordinary Grid-managed zones like this example. addresses is a
-    # list of glue address records — not a safe scalar update-test
-    # target (see the uptest update-parameter note above).
+    # nameserver is the mutable scalar exercised here. Unlike the other
+    # 25 cataloged resources, NSRecord is NOT wired to the UID-in-EA
+    # identity ladder — record:ns has no extattrs field (live-verified,
+    # WAPI 2.12 _schema), so it keeps the pre-ladder natural-key fallback
+    # on view+name+nameserver instead. nameserver is itself one of that
+    # natural key's three components (live-verified by base64-decoding a
+    # record:ns _ref: "dns.bind_ns$.<view-id>.<reversed-zone>..<nameserver>"),
+    # so changing it rotates the _ref exactly like the ladder-backed
+    # identity fields on other resources — it is exercised here for the
+    # same reason record-srv exercises priority: to prove the refreshed
+    # external-name annotation persists across the rotation end-to-end.
+    # msDelegationName is skipped — it is the MS delegation point name,
+    # only persisted on Microsoft/AD-integrated zones; NIOS silently
+    # drops it (HTTP 200, field absent from the response) on ordinary
+    # Grid-managed zones like this example. addresses is a list of glue
+    # address records — not a safe scalar update-test target (see the
+    # uptest update-parameter note above).
     crossplane.io/update-test: |
       - field: nameserver
         value: "ns2.example.com"

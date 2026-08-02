@@ -696,10 +696,13 @@ func TestPTRRecordFieldCounts(t *testing.T) {
 }
 
 // TestPTRRecordPtrdnameHasReference verifies ptrdname is cataloged with a
-// Reference descriptor targeting the namespaced ARecord — PTRRecord's
-// ptrdname commonly names an ARecord's FQDN, so the generated type carries
-// the standard three-field reference pattern (value + Ref + Selector) even
-// though WAPI itself does not enforce that the target exists.
+// Reference descriptor targeting ARecord — PTRRecord's ptrdname commonly
+// names an ARecord's FQDN, so the generated type carries the standard
+// three-field reference pattern (value + Ref + Selector) even though WAPI
+// itself does not enforce that the target exists. TargetScope is left
+// empty so the generator mirrors the PTRRecord variant's own scope
+// (cluster PTRRecord references cluster ARecord; namespaced PTRRecord
+// references namespaced ARecord) rather than pinning to a single scope.
 func TestPTRRecordPtrdnameHasReference(t *testing.T) {
 	rd, ok := FindResource("recordptr")
 	if !ok {
@@ -719,8 +722,8 @@ func TestPTRRecordPtrdnameHasReference(t *testing.T) {
 		if f.Reference.TargetSlug != "recorda" {
 			t.Errorf("Ptrdname.Reference.TargetSlug = %q, want recorda", f.Reference.TargetSlug)
 		}
-		if f.Reference.TargetScope != "namespaced" {
-			t.Errorf("Ptrdname.Reference.TargetScope = %q, want namespaced", f.Reference.TargetScope)
+		if f.Reference.TargetScope != "" {
+			t.Errorf("Ptrdname.Reference.TargetScope = %q, want empty (mirrors source PTRRecord scope)", f.Reference.TargetScope)
 		}
 		if f.Reference.Extractor != "" {
 			t.Errorf("Ptrdname.Reference.Extractor = %q, want empty (default reference.ExternalName())", f.Reference.Extractor)
