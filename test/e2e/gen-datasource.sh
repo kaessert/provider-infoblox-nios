@@ -92,24 +92,31 @@
 #                 .120     netFixedAddrHostNamespaced    (FixedAddress ipv4addr, namespaced — inside the block above)
 #                 .128     netHostRecordCluster          (HostRecord ipv4Addr, cluster)
 #                 .129     netHostRecordNamespaced       (HostRecord ipv4Addr, namespaced)
-#                 .140-160 netRangeStartCluster/netRangeEndCluster           (Range, cluster — 21 addresses)
-#                 .161-181 netRangeStartNamespaced/netRangeEndNamespaced    (Range, namespaced — 21 addresses)
-#                 .182-254 reserved / unused — room to grow
+#                 .160/27  netRangeParentCluster         (prerequisite parent Network for Range, cluster)
+#                 .161-181 netRangeStartCluster/netRangeEndCluster          (Range, cluster — 21 addresses, inside the block above)
+#                 .192/27  netRangeParentNamespaced      (prerequisite parent Network for Range, namespaced)
+#                 .193-213 netRangeStartNamespaced/netRangeEndNamespaced    (Range, namespaced — 21 addresses, inside the block above)
+#                 .224-254 reserved / unused — room to grow
 #
-#               HostRecord and Range do not need their own parent Network
-#               object (HostRecord bypasses the requirement via
-#               configureForDns; Range's `network` field is omitted in the
-#               example, which live-testing confirmed does not require a
-#               pre-existing Network for the address span). FixedAddress's
-#               AllocateIP call unconditionally requires an existing parent
-#               Network covering the address, so its host offset is nested
-#               inside its own per-run parent-Network sub-block —
-#               provisioning that parent (Makefile prerequisite-bundling
-#               ordering, or an equivalent) is a separate concern from this
-#               script, which only reserves disjoint address space for it.
-#               IPv4SharedNetwork's member CIDR has the same prerequisite
-#               shape (WAPI validates shared-network membership against a
-#               real Network object) — same resolution.
+#               HostRecord does not need its own parent Network object (it
+#               bypasses the requirement via configureForDns). FixedAddress
+#               and Range both DO need one: FixedAddress's AllocateIP call
+#               and Range's CreateNetworkRange call each unconditionally
+#               require an existing parent Network covering the address —
+#               live-verified on the Grid for Range (WAPI 400
+#               IBDataConflictError: "Cannot find the parent network for
+#               the DHCP range ..." when no covering Network object
+#               exists), correcting an earlier assumption that Range's
+#               `network` field being omitted from the example meant no
+#               parent was required at all. Each's host/range offset is
+#               therefore nested inside its own per-run parent-Network
+#               sub-block — provisioning that parent (Makefile
+#               prerequisite-bundling ordering, or an equivalent) is a
+#               separate concern from this script, which only reserves
+#               disjoint address space for it. IPv4SharedNetwork's member
+#               CIDR has the same prerequisite shape (WAPI validates
+#               shared-network membership against a real Network object) —
+#               same resolution.
 #
 #               The concurrency ceiling is governed ENTIRELY by BLOCK_INDEX
 #               (one byte, 256 values) — the sub-block offsets are fixed
@@ -203,10 +210,12 @@ NET_FIXEDADDR_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.112/28"
 NET_FIXEDADDR_HOST_NAMESPACED="100.64.${BLOCK_INDEX}.120"
 NET_HOSTRECORD_CLUSTER="100.64.${BLOCK_INDEX}.128"
 NET_HOSTRECORD_NAMESPACED="100.64.${BLOCK_INDEX}.129"
-NET_RANGE_START_CLUSTER="100.64.${BLOCK_INDEX}.140"
-NET_RANGE_END_CLUSTER="100.64.${BLOCK_INDEX}.160"
-NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.161"
-NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.181"
+NET_RANGE_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.160/27"
+NET_RANGE_START_CLUSTER="100.64.${BLOCK_INDEX}.161"
+NET_RANGE_END_CLUSTER="100.64.${BLOCK_INDEX}.181"
+NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
+NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
+NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
 
 # ptrHost — record-ptr's separate, independently-drawn shared-pool
 # exception. PTR_OCTET is a second, independent byte of the hash so this
@@ -233,8 +242,10 @@ netFixedAddrParentNamespaced: "${NET_FIXEDADDR_PARENT_NAMESPACED}"
 netFixedAddrHostNamespaced: "${NET_FIXEDADDR_HOST_NAMESPACED}"
 netHostRecordCluster: "${NET_HOSTRECORD_CLUSTER}"
 netHostRecordNamespaced: "${NET_HOSTRECORD_NAMESPACED}"
+netRangeParentCluster: "${NET_RANGE_PARENT_CLUSTER}"
 netRangeStartCluster: "${NET_RANGE_START_CLUSTER}"
 netRangeEndCluster: "${NET_RANGE_END_CLUSTER}"
+netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
 netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
 netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"

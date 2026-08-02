@@ -89,8 +89,10 @@ const (
 	keyNetFixedAddrHostNamespaced   = "netFixedAddrHostNamespaced"
 	keyNetHostRecordCluster         = "netHostRecordCluster"
 	keyNetHostRecordNamespaced      = "netHostRecordNamespaced"
+	keyNetRangeParentCluster        = "netRangeParentCluster"
 	keyNetRangeStartCluster         = "netRangeStartCluster"
 	keyNetRangeEndCluster           = "netRangeEndCluster"
+	keyNetRangeParentNamespaced     = "netRangeParentNamespaced"
 	keyNetRangeStartNamespaced      = "netRangeStartNamespaced"
 	keyNetRangeEndNamespaced        = "netRangeEndNamespaced"
 	keyNetPtrHostCluster            = "netPtrHostCluster"
@@ -115,8 +117,10 @@ var requiredKeys = []string{
 	keyNetFixedAddrHostNamespaced,
 	keyNetHostRecordCluster,
 	keyNetHostRecordNamespaced,
+	keyNetRangeParentCluster,
 	keyNetRangeStartCluster,
 	keyNetRangeEndCluster,
+	keyNetRangeParentNamespaced,
 	keyNetRangeStartNamespaced,
 	keyNetRangeEndNamespaced,
 	keyNetPtrHostCluster,
@@ -198,6 +202,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetContainerCluster, keyNetContainerNamespaced,
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
+		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 	}
 	for _, key := range cidrKeys {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -248,6 +253,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		keyNetContainerCluster, keyNetContainerNamespaced,
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
+		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 	}
 	// Range is a contiguous [start, end] address span, not a CIDR.
 	rangeSpans := [][2]string{
@@ -285,13 +291,15 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		spans = append(spans, span{name: key, ips: map[string]bool{ip.String(): true}})
 	}
 
-	// FixedAddress's host is DELIBERATELY nested inside its own parent
-	// block (see the assertion below) — that one relationship is excluded
-	// from the blanket pairwise-disjoint sweep, everything else must not
-	// overlap with anything else.
+	// FixedAddress's host and Range's [start,end] span are DELIBERATELY
+	// nested inside their own parent blocks (see the assertions below) —
+	// those relationships are excluded from the blanket pairwise-disjoint
+	// sweep, everything else must not overlap with anything else.
 	allowedOverlap := map[[2]string]bool{
-		{keyNetFixedAddrParentCluster, keyNetFixedAddrHostCluster}:       true,
-		{keyNetFixedAddrParentNamespaced, keyNetFixedAddrHostNamespaced}: true,
+		{keyNetFixedAddrParentCluster, keyNetFixedAddrHostCluster}:                                  true,
+		{keyNetFixedAddrParentNamespaced, keyNetFixedAddrHostNamespaced}:                            true,
+		{keyNetRangeParentCluster, keyNetRangeStartCluster + ".." + keyNetRangeEndCluster}:          true,
+		{keyNetRangeParentNamespaced, keyNetRangeStartNamespaced + ".." + keyNetRangeEndNamespaced}: true,
 	}
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
@@ -311,6 +319,16 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 	// covering the per-run allocated address).
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostCluster, keyNetFixedAddrParentCluster)
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostNamespaced, keyNetFixedAddrParentNamespaced)
+
+	// Range's [start,end] span MUST fall entirely inside its own parent
+	// block — CreateNetworkRange requires an existing parent Network
+	// covering the address span (live-verified on the Grid: WAPI 400
+	// IBDataConflictError "Cannot find the parent network for the DHCP
+	// range ..." without one).
+	assertHostInsideCIDR(t, values, keyNetRangeStartCluster, keyNetRangeParentCluster)
+	assertHostInsideCIDR(t, values, keyNetRangeEndCluster, keyNetRangeParentCluster)
+	assertHostInsideCIDR(t, values, keyNetRangeStartNamespaced, keyNetRangeParentNamespaced)
+	assertHostInsideCIDR(t, values, keyNetRangeEndNamespaced, keyNetRangeParentNamespaced)
 }
 
 func assertHostInsideCIDR(t *testing.T, values map[string]string, hostKey, cidrKey string) {
@@ -417,14 +435,18 @@ func fromUint32(v uint32) net.IP {
 }
 
 // TestGenDatasourceFixedAddressHostNotNetworkOrBroadcast guards against an
-// off-by-one in the chosen host offsets: FixedAddress's host must be a
-// real usable address inside its /28 parent, not the network or broadcast
-// address of that block.
+// off-by-one in the chosen host offsets: FixedAddress's host (and, by the
+// same reasoning, Range's start/end) must be real usable addresses inside
+// their parent CIDR, not the network or broadcast address of that block.
 func TestGenDatasourceFixedAddressHostNotNetworkOrBroadcast(t *testing.T) {
 	values := runGenDatasource(t, "TestGenDatasourceFixedAddressHostNotNetworkOrBroadcast-seed")
 	for _, pair := range [][2]string{
 		{keyNetFixedAddrHostCluster, keyNetFixedAddrParentCluster},
 		{keyNetFixedAddrHostNamespaced, keyNetFixedAddrParentNamespaced},
+		{keyNetRangeStartCluster, keyNetRangeParentCluster},
+		{keyNetRangeEndCluster, keyNetRangeParentCluster},
+		{keyNetRangeStartNamespaced, keyNetRangeParentNamespaced},
+		{keyNetRangeEndNamespaced, keyNetRangeParentNamespaced},
 	} {
 		host := net.ParseIP(values[pair[0]])
 		_, cidr, err := net.ParseCIDR(values[pair[1]])
