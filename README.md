@@ -1196,6 +1196,40 @@ underlying SDK's update call has no parameters for either field. `networkView`
 references a NetworkView by name; this example uses the Grid's well-known
 "default" network view so it runs standalone without creating a NetworkView
 resource first.
+
+**Dynamic CIDR allocation.** Instead of a static `network` CIDR, a Network
+can be created with `filterParams` (an extensible-attribute search) plus
+`allocatePrefixLen` and `object`, and the controller allocates a free
+subnet from a matching parent object (e.g. a NetworkContainer) instead:
+
+```yaml
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-allocate
+spec:
+  forProvider:
+    networkView: default
+    filterParams:
+      "*Site": network-allocate-demo
+    allocatePrefixLen: 28
+    object: networkcontainer
+  providerConfigRef:
+    name: default
+```
+
+`filterParams` keys must carry the WAPI extensible-attribute search prefix
+`*` — `"*Site"`, not `"Site"`. A bare key is rejected by WAPI with
+`AdmConProtoError: Unknown argument/field: 'Site'`. The parent object
+(here, a NetworkContainer) must already exist and carry a matching
+extensible attribute (`Site: network-allocate-demo`) for the allocation to
+succeed — see `examples/network/network-allocate-parent.yaml` and
+`examples/network/network-allocate.yaml` for a runnable pair. The
+controller late-initializes `spec.forProvider.network` with the allocated
+CIDR once creation succeeds. A `parentCidr` field is also available for
+allocating from a fixed parent CIDR instead of an extensible-attribute
+search; `network`, `parentCidr`, and `filterParams` are mutually exclusive
+— exactly one must be set.
 (e.g. `zone_forward/ZG5zLnpvbmUk...:forward.example.com/default`).
 Crossplane stores this in the `crossplane.io/external-name` annotation — do
 not set it manually.
@@ -1210,6 +1244,16 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/network/network.yaml
 kubectl apply -f examples/network/network-namespaced.yaml
+```
+
+The dynamic-allocation pair (`network-allocate-parent.yaml` +
+`network-allocate.yaml`) is a hand-applied documentation example, not part
+of the automated end-to-end suite — see the comments in
+`examples/network/network-allocate.yaml` for why:
+
+```bash
+kubectl apply -f examples/network/network-allocate-parent.yaml
+kubectl apply -f examples/network/network-allocate.yaml
 ```
 
 ### DNSView

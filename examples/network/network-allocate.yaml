@@ -1,0 +1,60 @@
+# network-allocate.yaml — Network created via the EA-based dynamic
+# allocation path: filterParams + allocatePrefixLen + object, instead of a
+# static spec.forProvider.network CIDR. Apply network-allocate-parent.yaml
+# first — the controller resolves filterParams to that parent object
+# (matched by its extAttrs.Site value) via WAPI's AllocateNetworkByEA
+# call, allocates a free /allocatePrefixLen block from it, and
+# late-initializes spec.forProvider.network with the result. See
+# network.yaml for the static-CIDR path and full documentation of every
+# other field — this file only documents what's specific to the allocate
+# path.
+#
+# filterParams keys MUST carry the WAPI extensible-attribute search prefix
+# "*" — "*Site", not "Site". A bare key is rejected by WAPI with
+# `{"Error": "AdmConProtoError: Unknown argument/field: 'Site'", "code":
+# "Client.Ibap.Proto"}` (verified live against a NIOS Grid Manager). This
+# pair of manifests exists because filterParams had zero example coverage
+# anywhere in this repo before it, and the prefix requirement is easy to
+# get wrong.
+#
+# parentCidr-based allocation (the other create-time-only allocation input
+# on Network, alongside filterParams) remains unexercised by any example —
+# out of scope for this manifest, which documents only the EA-based path.
+#
+# NOT wired into `make e2e`. filterParams is a Grid-wide
+# extensible-attribute search: it matches ANY object carrying a matching
+# EA value, not just network-allocate-parent.yaml's. A concurrent E2E run
+# — or a leftover parent from a crashed run — could silently capture or
+# contend for this allocation on the shared Grid. Safe automated wiring
+# needs both the EA value and the parent CIDR to come from per-run
+# identity, sized so a single shared parent can't be exhausted by
+# concurrent runs; the existing uptest `${data.runToken}` /
+# `${data.netPrefix}` datasource values are close but not sufficient on
+# their own — `netPrefix` is one shared value per run, not scoped to this
+# resource pair, so a second addressed-object example adopting it directly
+# would collide with this one in the same run. That resource-scoped
+# sub-allocation is being handled as part of the broader E2E isolation
+# effort for IPAM resources; wiring this pair into `make e2e` is left to
+# that effort. Apply both manifests by hand against a live NIOS Grid
+# Manager to exercise this path.
+#
+# Live-verified end-to-end through the controller (not just a raw WAPI
+# probe) with a /25 parent and matching Site value: reached Ready/Synced
+# in ~25s, allocated a /28 child CIDR from the parent, external-name
+# "network/<opaque-b64-ref>:<allocated-cidr>/default", and
+# late-initialized spec.forProvider.network to the allocated CIDR.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-allocate
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+spec:
+  forProvider:
+    networkView: default
+    filterParams:
+      "*Site": network-allocate-demo
+    allocatePrefixLen: 28
+    object: networkcontainer
+  providerConfigRef:
+    name: default
