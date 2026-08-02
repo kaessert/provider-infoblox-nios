@@ -14,6 +14,17 @@ const (
 	eventReasonCannotUpdate = "CannotUpdateExternalResource"
 )
 
+// eventReasonCreated is the event reason emitted by the crossplane-runtime
+// managed reconciler on every external.Create() call. Counting occurrences
+// of this reason across a resource's entire lifecycle is the signal that
+// distinguishes a genuine identity-resolve RECOVERY from a silent
+// DUPLICATE: both outcomes leave the resource Ready with a
+// correctly-prefixed external-name (Create derives the WAPI object type
+// from the CIDR, not from how the prior identity was found), but only a
+// duplicate ever produces a second CreatedExternalResource event. See
+// RunResolveRecover.
+const eventReasonCreated = "CreatedExternalResource"
+
 // ConvergeOptions configures a convergence check run.
 type ConvergeOptions struct {
 	// PollInterval is the provider's poll interval; the check waits
@@ -204,6 +215,25 @@ func (r *Runner) waitGenerationSettled(timeout time.Duration) (settled bool, gen
 // of occurrences. This function sums each matching Item's .count instead
 // of counting Items (see sumEventOccurrences).
 func (r *Runner) countUpdateEvents(kind, name string) (int, error) {
+	return r.countEventsByReason(kind, name, eventReasonUpdated, eventReasonCannotUpdate)
+}
+
+// countCreateEvents counts occurrences of CreatedExternalResource events for
+// the given involvedObject kind/name, across the resource's ENTIRE
+// lifecycle (not a before/after delta like countUpdateEvents). Exactly one
+// occurrence is the expected outcome for a resource that has been created
+// once and recovered its identity via search (rather than a stored ref)
+// without duplicating — see RunResolveRecover.
+func (r *Runner) countCreateEvents(kind, name string) (int, error) {
+	return r.countEventsByReason(kind, name, eventReasonCreated)
+}
+
+// countEventsByReason lists cluster events and sums the aggregated
+// occurrence count of every event matching the given involvedObject
+// kind/name and any of the given reasons. Queries across all namespaces
+// because cluster-scoped managed resources may have their events recorded
+// outside the resource's own namespace.
+func (r *Runner) countEventsByReason(kind, name string, reasons ...string) (int, error) {
 	out, err := r.runRaw("get", "events", "--all-namespaces", "-o", "json")
 	if err != nil {
 		return 0, fmt.Errorf("listing events: %w", err)
@@ -214,7 +244,7 @@ func (r *Runner) countUpdateEvents(kind, name string) (int, error) {
 		return 0, fmt.Errorf("parsing events JSON: %w", err)
 	}
 
-	return sumEventOccurrences(list, kind, name), nil
+	return sumEventOccurrencesByReason(list, kind, name, reasons...), nil
 }
 
 // eventList mirrors the subset of a `kubectl get events -o json` response
@@ -241,12 +271,25 @@ type eventItem struct {
 // matching the given involvedObject kind/name and an update-related reason,
 // treating a zero .count as a single (non-aggregated) occurrence.
 func sumEventOccurrences(list eventList, kind, name string) int {
+	return sumEventOccurrencesByReason(list, kind, name, eventReasonUpdated, eventReasonCannotUpdate)
+}
+
+// sumEventOccurrencesByReason sums the aggregated .count field of every
+// event Item matching the given involvedObject kind/name and any of the
+// given reasons, treating a zero .count as a single (non-aggregated)
+// occurrence.
+func sumEventOccurrencesByReason(list eventList, kind, name string, reasons ...string) int {
+	want := make(map[string]bool, len(reasons))
+	for _, reason := range reasons {
+		want[reason] = true
+	}
+
 	var total int32
 	for _, it := range list.Items {
 		if it.InvolvedObject.Kind != kind || it.InvolvedObject.Name != name {
 			continue
 		}
-		if it.Reason != eventReasonUpdated && it.Reason != eventReasonCannotUpdate {
+		if !want[it.Reason] {
 			continue
 		}
 		n := it.Count

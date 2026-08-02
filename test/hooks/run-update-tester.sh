@@ -141,6 +141,20 @@ echo "==> run-update-tester: converge $MANIFEST"
 if grep -q 'crossplane.io/expect-external-name-prefix:' "$MANIFEST"; then
   echo "==> run-update-tester: check-external-name-prefix $MANIFEST"
   "$UPDATE_TESTER" check-external-name-prefix "$MANIFEST"
+
+  # A3. Ref-less identity-resolve recovery check — same gate, same manifest
+  # annotation. A2 above only proves the object type resolved correctly at
+  # CREATE time; it can never fail, because create-time object-type
+  # selection is independent of the identity-search hazard entirely (see
+  # the file header). This step drives the hazard's actual code path: it
+  # pauses reconciliation, strips crossplane.io/external-name, unpauses,
+  # and asserts the controller recovers to the SAME backend object
+  # (exactly one CreatedExternalResource event across the resource's
+  # lifecycle) instead of silently creating a duplicate. Runs before the
+  # per-field update tests below so its own patch/pause machinery never
+  # interleaves with theirs.
+  echo "==> run-update-tester: resolve-recover $MANIFEST"
+  "$UPDATE_TESTER" resolve-recover "$MANIFEST"
 fi
 
 # B. Per-field update tests.

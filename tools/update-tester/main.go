@@ -32,6 +32,7 @@
 //	update-tester validate <manifest.yaml> --types-file <path_to_types.go>
 //	update-tester converge <manifest.yaml> [--poll-interval 60s] [--ignore-fields a,b] [--timeout 120s]
 //	update-tester check-external-name-prefix <manifest.yaml> [--timeout 30]
+//	update-tester resolve-recover <manifest.yaml> [--timeout 120]
 package main
 
 import (
@@ -69,6 +70,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "resolve-recover":
+		if err := cmdResolveRecover(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -86,6 +92,7 @@ Usage:
   update-tester validate <manifest.yaml> --types-file <types.go>
   update-tester converge <manifest.yaml> [--poll-interval 60s] [--ignore-fields a,b] [--timeout 120s]
   update-tester check-external-name-prefix <manifest.yaml> [--timeout 30]
+  update-tester resolve-recover <manifest.yaml> [--timeout 120]
 
 Commands:
   run        Execute update tests against a live cluster
@@ -97,7 +104,14 @@ Commands:
              annotation has the prefix declared by the manifest's
              crossplane.io/expect-external-name-prefix annotation. For
              dual-object-type resources, where a wrong identity search
-             silently resolves against the other WAPI object type.`)
+             silently resolves against the other WAPI object type.
+  resolve-recover
+             Pause reconciliation, strip the crossplane.io/external-name
+             annotation, unpause, and assert the controller recovers to
+             the SAME backend object (exactly one CreatedExternalResource
+             event across the resource's lifecycle) rather than silently
+             creating a duplicate. Exercises the ref-less identity-search
+             path a standing ref-addressed lifecycle never reaches.`)
 }
 
 func cmdRun(args []string) error {
@@ -335,6 +349,58 @@ func cmdCheckExternalNamePrefix(args []string) error {
 	}
 	fmt.Printf("  ✓ external-name %q has expected prefix %q\n", name, m.ExpectExternalNamePrefix)
 	return nil
+}
+
+// cmdResolveRecover asserts that a dual-object-type resource recovers its
+// identity via search (rather than duplicating) when its
+// crossplane.io/external-name annotation is stripped and reconciliation is
+// resumed. See Runner.RunResolveRecover for the full algorithm and the
+// rationale for the two independent pass signals.
+func cmdResolveRecover(args []string) error {
+	fs := flag.NewFlagSet("resolve-recover", flag.ExitOnError)
+	timeout := fs.Int("timeout", 120, "Timeout in seconds for kubectl wait")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: update-tester resolve-recover <manifest.yaml> [--timeout 120]")
+	}
+	manifestPath := fs.Arg(0)
+
+	m, err := ParseManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+
+	runner := NewRunner(manifestPath, *timeout)
+	result, err := runner.RunResolveRecover(m)
+	if err != nil {
+		return err
+	}
+
+	printResolveRecoverResult(m, result)
+
+	if !result.Passed {
+		os.Exit(1)
+	}
+	return nil
+}
+
+// printResolveRecoverResult prints the outcome of a resolve-recover check.
+func printResolveRecoverResult(m *Manifest, r *ResolveRecoverResult) {
+	fmt.Printf("Resolve-recover check: %s/%s\n", m.Kind, m.Name)
+	fmt.Printf("  external-name before strip: %q\n", r.ExternalNameBefore)
+	fmt.Printf("  external-name after recovery: %q\n", r.ExternalNameAfter)
+	fmt.Printf("  %s events across lifecycle: %d\n", eventReasonCreated, r.CreateEventCount)
+	switch {
+	case r.Passed:
+		fmt.Printf("  ✓ recovery: %s\n", r.Message)
+	default:
+		fmt.Printf("  ✗ recovery: %s\n", r.Message)
+		for _, d := range r.Diagnostics {
+			fmt.Printf("    - %s\n", d)
+		}
+	}
 }
 
 // printConvergeResult prints the outcome of a convergence check.
