@@ -18,6 +18,7 @@ import (
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	cperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
@@ -31,6 +32,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -61,6 +63,18 @@ func (k *recordingKubeClient) Patch(_ context.Context, obj client.Object, _ clie
 }
 
 // ── generic helpers ─────────────────────────────────────────────────────────
+
+// testUIDCluster and testUIDNamespaced are the fixed metadata.uid values
+// the CR builders stamp onto their fixture CRs. Tests that seed a WAPI
+// record already carrying the provider's identity extensible attribute
+// (identity.Stamp) use these constants so the fixture's stamped uid
+// matches the CR's own uid — the identity ladder's "steady state"
+// (identity.OutcomeResolved) — unless a test is specifically exercising
+// adoption, rotation, or a foreign-owned object.
+const (
+	testUIDCluster    = "test-uid-cluster"
+	testUIDNamespaced = "test-uid-namespaced"
+)
 
 func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
@@ -105,7 +119,7 @@ func credentialsSecret(ns, name, host, username, password string) *corev1.Secret
 // Create()-assigned server ref.
 func newClusterHostRecord(crName, externalName string) *clusterv1alpha1.HostRecord {
 	cr := &clusterv1alpha1.HostRecord{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: testUIDCluster},
 		Spec: clusterv1alpha1.HostRecordSpec{
 			ResourceSpec: xpv1.ResourceSpec{
 				ProviderConfigReference: &xpv1.Reference{Name: "default"},
@@ -129,7 +143,7 @@ func newClusterHostRecord(crName, externalName string) *clusterv1alpha1.HostReco
 // newNamespacedHostRecord is the namespaced variant of newClusterHostRecord.
 func newNamespacedHostRecord(ns, crName, externalName, pcKind string) *namespacedv1alpha1.HostRecord {
 	cr := &namespacedv1alpha1.HostRecord{
-		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
+		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: testUIDNamespaced},
 		Spec: namespacedv1alpha1.HostRecordSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
 				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
@@ -167,6 +181,11 @@ type mockWapiServer struct {
 	records map[string]*ibclient.HostRecord
 	nextRef int
 
+	// searchCalls counts requests to the search endpoint (a GET with no
+	// _ref path segment) — used to prove the identity ladder actually
+	// issued a round trip rather than short-circuiting.
+	searchCalls int
+
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
@@ -176,10 +195,46 @@ type mockWapiServer struct {
 	// name change on a live Grid Manager) — used to exercise the
 	// controller's _ref instability handling on Update.
 	renameRefOnUpdate string
+
+	// ── identity EA-definition prerequisite probe state ─────────────
+	//
+	// eaDefExists controls whether GET .../extensibleattributedef
+	// reports the identity extensible attribute definition as present.
+	// Defaults to true (see newMockWapiServer) so tests that do not
+	// specifically exercise the prerequisite probe never trigger a
+	// create call for it.
+	eaDefExists bool
+	// eaDefCreateStatus, when non-zero, is the HTTP status the mock
+	// returns for a POST .../extensibleattributedef instead of
+	// succeeding — used to simulate a credential that cannot create the
+	// definition (401/403).
+	eaDefCreateStatus int
+	// eaDefCreateBody is the response body written alongside
+	// eaDefCreateStatus — a WAPI-shaped error payload.
+	eaDefCreateBody string
+	// eaDefSearchCalls/eaDefCreateCalls count requests to the
+	// extensibleattributedef existence-check and create endpoints,
+	// independent of searchCalls above.
+	eaDefSearchCalls int
+	eaDefCreateCalls int
+
+	// undefinedEASearch simulates a Grid where the identity extensible
+	// attribute definition itself does not exist: a GET search filtered
+	// by "*<EA name>" returns HTTP 400 ("AdmConProtoError: Unknown
+	// extensible attribute: ..."), instead of the ordinary empty-array
+	// "no matches" response. Only the identity-EA search path (a filter
+	// key prefixed with "*") is affected.
+	undefinedEASearch bool
 }
 
 func newMockWapiServer() *mockWapiServer {
-	return &mockWapiServer{records: map[string]*ibclient.HostRecord{}}
+	return &mockWapiServer{
+		records: map[string]*ibclient.HostRecord{},
+		// The identity EA definition is present by default so every
+		// pre-existing Create test sees the prerequisite as already
+		// satisfied and never exercises the create-definition path.
+		eaDefExists: true,
+	}
 }
 
 func (m *mockWapiServer) seed(rec *ibclient.HostRecord) string {
@@ -257,18 +312,80 @@ func (m *mockWapiServer) handler() http.Handler {
 		writeJSON(w, http.StatusOK, ref)
 	})
 
-	// Search endpoint (GetHostRecord): a GET with no _ref path segment,
-	// filtered by network_view/view/name/ipv4addr/ipv6addr query params.
-	// Registered as an exact literal path so Go's ServeMux prefers it
-	// over the {ref...} wildcard below for requests to precisely
-	// "record:host" (real _refs always carry additional path segments).
+	// Identity EA-definition prerequisite probe endpoints
+	// (internal/clients/identity.Prober.Ensure): the existence check and,
+	// when absent, the create attempt for the "Crossplane Internal ID"
+	// extensible attribute definition. eaDefExists defaults to true (see
+	// newMockWapiServer) so tests that never touch these fields see the
+	// prerequisite as already satisfied.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefSearchCalls++
+		exists := m.eaDefExists
+		m.mu.Unlock()
+
+		if !exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+			return
+		}
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefCreateCalls++
+		status := m.eaDefCreateStatus
+		body := m.eaDefCreateBody
+		m.mu.Unlock()
+
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+
+		m.mu.Lock()
+		m.eaDefExists = true
+		m.mu.Unlock()
+		writeJSON(w, http.StatusOK, "extensibleattributedef/test:"+url.QueryEscape(identity.EAKey))
+	})
+
+	// Search endpoint (GetHostRecord, and the identity ladder's EA
+	// search): a GET with no _ref path segment, filtered by
+	// network_view/view/name/ipv4addr/ipv6addr query params, and/or a
+	// "*<EA name>" extensible-attribute filter (the syntax
+	// identity.Resolve's searchByUID uses). Registered as an exact
+	// literal path so Go's ServeMux prefers it over the {ref...} wildcard
+	// below for requests to precisely "record:host" (real _refs always
+	// carry additional path segments).
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:host", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.searchCalls++
+		m.mu.Unlock()
+
 		q := r.URL.Query()
 		networkView := q.Get("network_view")
 		view := q.Get("view")
 		name := q.Get("name")
 		ipv4addr := q.Get("ipv4addr")
 		ipv6addr := q.Get("ipv6addr")
+
+		eaFilters := map[string]string{}
+		for k, vals := range q {
+			if strings.HasPrefix(k, "*") && len(vals) > 0 {
+				eaFilters[strings.TrimPrefix(k, "*")] = vals[0]
+			}
+		}
+
+		m.mu.Lock()
+		undefinedEA := m.undefinedEASearch
+		m.mu.Unlock()
+		if len(eaFilters) > 0 && undefinedEA {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"Error":"AdmConProtoError: Unknown extensible attribute: ` + identity.EAKey + `","code":"Client.Ibap.Proto","text":"Unknown extensible attribute: ` + identity.EAKey + `"}`))
+			return
+		}
 
 		m.mu.Lock()
 		var matches []ibclient.HostRecord
@@ -293,6 +410,21 @@ func (m *mockWapiServer) handler() http.Handler {
 				if addr != ipv6addr {
 					continue
 				}
+			}
+			eaMismatch := false
+			for k, v := range eaFilters {
+				got, ok := rec.Ea[k]
+				if !ok {
+					eaMismatch = true
+					break
+				}
+				if s, ok := got.(string); !ok || s != v {
+					eaMismatch = true
+					break
+				}
+			}
+			if eaMismatch {
+				continue
 			}
 			matches = append(matches, *rec)
 		}
@@ -438,6 +570,11 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	if err != nil {
 		t.Fatalf("cannot build test host record client: %v", err)
 	}
+	// prober is set to a fresh instance (not nil) so tests never share
+	// identity.DefaultProber's process-wide TTL cache across httptest
+	// servers — otherwise one test's cached verdict would leak into
+	// another's assertions about the prerequisite probe.
+	hc.prober = identity.NewProber()
 	return hc
 }
 
@@ -456,7 +593,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Comment:     stringPtr("hello"),
 		Ttl:         uint32Ptr(300),
 		UseTtl:      boolPtr(true),
-		Ea:          ibclient.EA{"env": "prod"},
+		Ea:          identity.Stamp(ibclient.EA{"env": "prod"}, testUIDCluster),
 		Disable:     boolPtr(false),
 	})
 
@@ -509,9 +646,8 @@ func TestClusterObserveNotFound(t *testing.T) {
 // call) when the external-name still equals the CR's Kubernetes name — the
 // pre-create state for a server-assigned external-name strategy.
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -524,6 +660,13 @@ func TestObservePreCreateState(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -639,7 +782,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 // correctly mirrored into AtProvider (full-mirror AtProvider convention).
 // These three fields fall outside the ObjectManager.GetHostRecordByRef
 // wrapper's fixed default return-field set, so this test also pins the
-// getHostRecordByRef field-set extension (see its doc comment).
+// newEmptyHostRecordForIdentity field-set extension (see its doc comment).
 func TestClusterObserveFullMirror(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -711,8 +854,8 @@ func TestClusterCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
-		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
+	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
+		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
 	}
 }
 
@@ -726,6 +869,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "original-network-view",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -865,7 +1009,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default")})
+	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default"), Ea: identity.Stamp(nil, testUIDCluster)})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", ref)
@@ -920,7 +1064,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 // still live under a different _ref. Deleting that record would be
 // unverifiable ownership, so Delete() must refuse and leave the record
 // in place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -930,30 +1074,28 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/stale-ref:host.example.com/default")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a rotated object via identity search: %v", err)
 	}
 
 	m.mu.Lock()
 	_, stillExists := m.records[liveRef]
 	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	if stillExists {
+		t.Error("Delete: recovered object still present after Delete")
 	}
 }
 
 // TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
+// companion happy path: a 404 against the stored _ref, and an
+// identity-EA search that finds nothing, means the object really is
+// gone.
 func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -963,46 +1105,83 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	cr := newClusterHostRecord("my-hostrecord", "record:host/stale-ref:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
 	}
 }
 
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRecoversRotatedRefAndPersistsAnnotation is the
+// Observe()-side counterpart: crossplane-runtime's managed reconciler
+// calls Observe() before Delete() on the deletion path, and if Observe()
+// reports ResourceExists:false the reconciler never calls Delete() at
+// all — it just clears the finalizer, orphaning the Grid object. The
+// identity ladder recovers the rotated reference here too, and Observe
+// must persist it via ResourceLateInitialized so a later reconcile does
+// not repeat the search.
+func TestClusterObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.HostRecord{
+	newRef := m.seed(&ibclient.HostRecord{
 		Name:        stringPtr("host.example.com"),
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newClusterHostRecord("my-hostrecord", "record:host/stale-ref:host.example.com/default")
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for a rotated object recovered by identity search, got false")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true so the refreshed reference is persisted, got false")
+	}
+	if got := meta.GetExternalName(cr); got != newRef {
+		t.Errorf("Observe: external-name = %q, want the recovered reference %q", got, newRef)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[newRef]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestClusterObserveRefusesOnForeignIdentity verifies that Observe
+// surfaces a HandleReuseError (Synced=False, no mutating call) when the
+// stored _ref resolves to an object whose identity attribute belongs to
+// a different owner.
+func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	foreignRef := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, "someone-elses-uid"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", foreignRef)
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when the resolved object's identity attribute belongs to a different owner, got nil")
+	}
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want it to wrap a *identity.HandleReuseError", err)
 	}
 }
 
@@ -1121,7 +1300,8 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 }
 
 func TestNamespacedObservePreCreateState(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -1134,6 +1314,13 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -1269,8 +1456,8 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
-		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
+	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
+		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
 	}
 }
 
@@ -1355,7 +1542,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default")})
+	ref := m.seed(&ibclient.HostRecord{Name: stringPtr("host.example.com"), View: stringPtr("default"), Ea: identity.Stamp(nil, testUIDNamespaced)})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", ref, "ProviderConfig")
@@ -1400,7 +1587,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 // TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
 // namespaced-scope counterpart of
 // TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+func TestNamespacedDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1410,58 +1597,90 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDNamespaced),
 	})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/stale-ref:host.example.com/default", "ProviderConfig")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a rotated object via identity search: %v", err)
 	}
 
 	m.mu.Lock()
 	_, stillExists := m.records[liveRef]
 	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	if stillExists {
+		t.Error("Delete: recovered object still present after Delete")
 	}
 }
 
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
+// TestNamespacedObserveRecoversRotatedRefAndPersistsAnnotation is the
 // namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRecoversRotatedRefAndPersistsAnnotation.
+func TestNamespacedObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.HostRecord{
+	newRef := m.seed(&ibclient.HostRecord{
 		Name:        stringPtr("host.example.com"),
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDNamespaced),
 	})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
 	cr := newNamespacedHostRecord("default", "my-hostrecord", "record:host/stale-ref:host.example.com/default", "ProviderConfig")
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for a rotated object recovered by identity search, got false")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true so the refreshed reference is persisted, got false")
+	}
+	if got := meta.GetExternalName(cr); got != newRef {
+		t.Errorf("Observe: external-name = %q, want the recovered reference %q", got, newRef)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[newRef]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
+	}
+}
+
+// TestNamespacedObserveRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterObserveRefusesOnForeignIdentity.
+func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	foreignRef := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, "someone-elses-uid"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
+	cr := newNamespacedHostRecord("default", "my-hostrecord", foreignRef, "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when the resolved object's identity attribute belongs to a different owner, got nil")
+	}
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want it to wrap a *identity.HandleReuseError", err)
 	}
 }
 
@@ -2142,6 +2361,7 @@ func TestClusterObserveLateInitializesIpv4AddrsAfterCidrAllocation(t *testing.T)
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.55")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -2179,6 +2399,7 @@ func TestClusterObserveLateInitializesIpv6AddrsAfterCidrAllocation(t *testing.T)
 		Ipv6Addrs:   []ibclient.HostRecordIpv6Addr{{Ipv6Addr: stringPtr("2001:db8::99")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -2215,6 +2436,7 @@ func TestClusterObserveIgnoresCreateOnlyAllocationFieldsInIsUpToDate(t *testing.
 		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
 		NetworkView: "default",
 		View:        stringPtr("default"),
+		Ea:          identity.Stamp(nil, testUIDCluster),
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
@@ -2255,6 +2477,14 @@ func TestClusterObserveIgnoresCreateOnlyAllocationFieldsInIsUpToDate(t *testing.
 func newFilterAllocationServer(t *testing.T, allocRef string, allocatedRec *ibclient.HostRecord, capturedBody *ibclient.IpNextAvailable) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
+	// The identity-prerequisite probe (ensureIdentityPrerequisite) runs
+	// unconditionally before every Create — report the definition as
+	// already present so this narrowly-scoped allocation-path test never
+	// exercises that unrelated code path.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
 	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/record:host", func(w http.ResponseWriter, r *http.Request) {
 		body, err := readAll(r.Body)
 		if err != nil {
@@ -2385,5 +2615,119 @@ func TestNewHostRecordClientWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 				t.Fatal("newHostRecordClientWithScheme: expected non-nil client")
 			}
 		})
+	}
+}
+
+// ── Identity: stamp isolation from spec.forProvider ─────────────────────
+
+// TestLateInitializeStripsIdentityEAFromExtAttrs proves the reserved
+// identity extensible attribute (identity.EAKey) never leaks into
+// spec.forProvider.extAttrs via late-init — the CRD schema's CEL rule
+// rejects a user-supplied value for that key, so back-filling it would
+// permanently break the resource.
+func TestLateInitializeStripsIdentityEAFromExtAttrs(t *testing.T) {
+	var comment, view *string
+	var ttl *uint32
+	var useTTL, configureForDNS, disable *bool
+	extAttrs := map[string]string(nil)
+	var aliases []string
+	var ipv4Addrs []ipv4AddrValue
+	var ipv6Addrs []ipv6AddrValue
+
+	rec := &ibclient.HostRecord{
+		Ea: identity.Stamp(ibclient.EA{"env": "prod"}, testUIDCluster),
+	}
+
+	changed := lateInitialize(&comment, &ttl, &useTTL, &extAttrs, &view, &configureForDNS, &disable, &aliases, &ipv4Addrs, &ipv6Addrs, rec)
+	if !changed {
+		t.Fatal("lateInitialize: want changed=true, got false")
+	}
+	if _, present := extAttrs[identity.EAKey]; present {
+		t.Errorf("lateInitialize: extAttrs = %v, must not contain the reserved identity key %q", extAttrs, identity.EAKey)
+	}
+	if !extAttrsEqual(extAttrs, map[string]string{"env": "prod"}) {
+		t.Errorf("lateInitialize: extAttrs = %v, want {env: prod}", extAttrs)
+	}
+}
+
+// TestIsUpToDateIgnoresIdentityEA proves isUpToDate compares extAttrs
+// with the identity stamp stripped, so an object freshly stamped by
+// Create/Update never appears out of date merely because the Grid's
+// extattrs map carries a key the CRD schema does not expose.
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	rec := &ibclient.HostRecord{
+		Name: stringPtr("host.example.com"),
+		Ea:   identity.Stamp(ibclient.EA{"env": "prod"}, testUIDCluster),
+	}
+
+	p := hostRecordCompareFields{
+		Name:     stringPtr("host.example.com"),
+		ExtAttrs: map[string]string{"env": "prod"},
+	}
+
+	got := isUpToDate(p, rec)
+	if !got {
+		t.Error("isUpToDate: want true when spec.forProvider.extAttrs matches the Grid map with the identity stamp stripped, got false")
+	}
+}
+
+// TestClusterObserveAtProviderExtAttrsIncludesIdentityKey proves
+// status.atProvider.extAttrs mirrors the Grid's full extattrs map,
+// identity stamp included.
+func TestClusterObserveAtProviderExtAttrsIncludesIdentityKey(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+		Ea:          identity.Stamp(ibclient.EA{"env": "prod"}, testUIDCluster),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
+	cr := newClusterHostRecord("my-hostrecord", ref)
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	if got := cr.Status.AtProvider.ExtAttrs[identity.EAKey]; got != testUIDCluster {
+		t.Errorf("AtProvider.ExtAttrs[%q] = %q, want %q (full Grid EA mirror, stamp included)", identity.EAKey, got, testUIDCluster)
+	}
+}
+
+// ── Identity: empty-uid refusal ──────────────────────────────────────────
+
+func TestCreateHostRecordRefusesEmptyUID(t *testing.T) {
+	p := hostRecordCompareFields{
+		Name:      stringPtr("host.example.com"),
+		View:      stringPtr("default"),
+		Ipv4Addrs: []ipv4AddrValue{{Ipv4Addr: "10.0.0.1"}},
+	}
+	_, err := createHostRecord(nil, p, stringPtr("default"), nil, nil, "")
+	if err == nil {
+		t.Fatal("createHostRecord: expected an error for an empty uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createHostRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateHostRecordRefusesEmptyUID(t *testing.T) {
+	p := hostRecordCompareFields{
+		Name:      stringPtr("host.example.com"),
+		View:      stringPtr("default"),
+		Ipv4Addrs: []ipv4AddrValue{{Ipv4Addr: "10.0.0.1"}},
+	}
+	_, err := updateHostRecord(nil, "record:host/test1:host.example.com/default", p, "")
+	if err == nil {
+		t.Fatal("updateHostRecord: expected an error for an empty uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateHostRecord: error = %v, want it to mention the empty uid", err)
 	}
 }

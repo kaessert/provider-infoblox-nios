@@ -7,6 +7,14 @@
 // request/response envelope, so there is no internal REST client to
 // compose.
 //
+// HostRecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package hostrecord
@@ -30,7 +38,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -57,7 +65,16 @@ const (
 	errFilterParamsWithCidr     = "filterParams cannot be combined with ipv4Cidr or ipv6Cidr"
 	errFilterParamsRequiresType = "ipAddressType is required when filterParams is set"
 	errUnexpectedAllocationType = "unexpected response type from AllocateNextAvailableIp"
+
+	errEmptyUID                  = "cannot stamp HostRecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -112,11 +129,23 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 
 // hostRecordClient bundles the SDK's high-level ObjectManager (used for the
 // CreateHostRecord/UpdateHostRecord/DeleteHostRecord convenience wrappers)
-// together with the lower-level Connector it wraps. Observe uses the
-// Connector directly — see getHostRecordByRef for why.
+// together with the lower-level Connector it wraps. The identity ladder
+// resolves against the Connector directly — see
+// newEmptyHostRecordForIdentity for why — because it operates below
+// ObjectManager's typed methods so it can see search match counts.
 type hostRecordClient struct {
 	objMgr ibclient.IBObjectManager
 	conn   ibclient.IBConnector
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
+	// new object. nil defaults to identity.DefaultProber — see
+	// ensureIdentityPrerequisite.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key,
+	// set by Connect from the ProviderConfig's Grid host after
+	// construction. See ensureIdentityPrerequisite's empty-string
+	// fallback.
+	endpoint string
 }
 
 // newHostRecordClient constructs an authenticated hostRecordClient from the
@@ -169,8 +198,8 @@ func newHostRecordClientWithScheme(creds *nioCredentials, sslVerify bool, scheme
 	}, nil
 }
 
-// getHostRecordByRef fetches a HostRecord by its WAPI _ref, extending the
-// ObjectManager.GetHostRecordByRef wrapper's fixed default field set
+// newEmptyHostRecordForIdentity builds a HostRecord template extending
+// the ObjectManager.GetHostRecordByRef wrapper's fixed default field set
 // (extattrs, ipv4addrs, ipv6addrs, name, view, zone, comment,
 // network_view, aliases, use_ttl, ttl, configure_for_dns — see
 // ibclient.NewEmptyHostRecord) with three response-only fields that
@@ -186,11 +215,16 @@ func newHostRecordClientWithScheme(creds *nioCredentials, sslVerify bool, scheme
 // ObjectManager.SearchHostRecordByAltId), so this stays entirely within
 // the SDK's supported API — it just skips the ObjectManager convenience
 // wrapper's hard-coded field list for the read path.
-func getHostRecordByRef(conn ibclient.IBConnector, ref string) (*ibclient.HostRecord, error) {
+//
+// This also serves as the newEmpty constructor the identity ladder
+// (identity.Resolve) uses for both its by-ref GET and its EA-filtered
+// search — both need the same extended field set so a resolved object's
+// Observation is never missing these three fields regardless of which
+// ladder rung found it.
+func newEmptyHostRecordForIdentity() *ibclient.HostRecord {
 	rec := ibclient.NewEmptyHostRecord()
 	rec.SetReturnFields(append(rec.ReturnFields(), "disable", "dns_name", "dns_aliases"))
-	err := conn.GetObject(rec, ref, ibclient.NewQueryParams(false, nil), &rec)
-	return rec, err
+	return rec
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -538,7 +572,7 @@ func isUpToDate(p hostRecordCompareFields, rec *ibclient.HostRecord) bool {
 			return false
 		}
 	}
-	return extAttrsEqual(p.ExtAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(p.ExtAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitString back-fills dst from src when dst is unset and src
@@ -662,7 +696,7 @@ func lateInitialize(
 	if boolOrFalse(*useTTL) {
 		changed = lateInitUint32(ttl, rec.Ttl) || changed
 	}
-	changed = lateInitExtAttrs(extAttrs, rec.Ea) || changed
+	changed = lateInitExtAttrs(extAttrs, identity.Strip(rec.Ea)) || changed
 	changed = lateInitString(view, rec.View) || changed
 	changed = lateInitBool(configureForDNS, rec.EnableDns) || changed
 	changed = lateInitBool(disable, rec.Disable) || changed
@@ -700,7 +734,7 @@ type observedHostRecord struct {
 
 // observeFromHostRecord extracts the fields mirrored by
 // HostRecordObservation (the full-mirror AtProvider convention) from a
-// WAPI HostRecord response fetched via getHostRecordByRef.
+// WAPI HostRecord response resolved via the identity ladder.
 func observeFromHostRecord(externalID string, rec *ibclient.HostRecord) observedHostRecord {
 	o := observedHostRecord{
 		ID:        externalID,
@@ -796,7 +830,10 @@ func validateHostRecordAllocation(p hostRecordCompareFields, ipv4Cidr, ipv6Cidr 
 // validateHostRecordAllocation). networkView is a create-time-only
 // parameter — it is immutable, so it is passed here but never again on
 // Update.
-func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string) (*ibclient.HostRecord, error) {
+func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string, uid string) (*ibclient.HostRecord, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	ipv4Addr, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
 	ipv6Addr, duid := firstIpv6AddrAndDuid(p.Ipv6Addrs)
 	enableDhcp := firstConfigureForDHCPv4(p.Ipv4Addrs) || firstConfigureForDHCPv6(p.Ipv6Addrs)
@@ -816,7 +853,7 @@ func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields
 		boolOrFalse(p.UseTTL),
 		uint32OrZero(p.TTL),
 		strOrEmpty(p.Comment),
-		buildEA(p.ExtAttrs),
+		identity.Stamp(buildEA(p.ExtAttrs), uid),
 		p.Aliases,
 		boolOrFalse(p.Disable),
 	)
@@ -834,7 +871,10 @@ func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields
 // interface{} — for objectType "record:host" this is always a
 // *ibclient.HostRecord (see ObjectManager.AllocateNextAvailableIp), but
 // the type assertion is still checked defensively.
-func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView *string, filterParams map[string]string, ipAddressType string) (*ibclient.HostRecord, error) {
+func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView *string, filterParams map[string]string, ipAddressType string, uid string) (*ibclient.HostRecord, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	_, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
 	_, duid := firstIpv6AddrAndDuid(p.Ipv6Addrs)
 	enableDhcp := firstConfigureForDHCPv4(p.Ipv4Addrs) || firstConfigureForDHCPv6(p.Ipv6Addrs)
@@ -853,7 +893,7 @@ func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostReco
 		objectParams,
 		nil, // params (_parameters) — no additional WAPI search filters beyond objectParams
 		false,
-		buildEA(p.ExtAttrs),
+		identity.Stamp(buildEA(p.ExtAttrs), uid),
 		strOrEmpty(p.Comment),
 		boolOrFalse(p.Disable),
 		nil, // n — allocate a single address
@@ -884,22 +924,27 @@ func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostReco
 // createHostRecord handles both the static-address and CIDR-based
 // allocation cases (the SDK itself decides between them based on whether
 // ipv4Cidr/ipv6Cidr is non-empty).
-func provisionHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string, filterParams map[string]string, ipAddressType *string) (*ibclient.HostRecord, error) {
+func provisionHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string, filterParams map[string]string, ipAddressType *string, uid string) (*ibclient.HostRecord, error) {
 	if err := validateHostRecordAllocation(p, ipv4Cidr, ipv6Cidr, filterParams, ipAddressType); err != nil {
 		return nil, err
 	}
 	if len(filterParams) > 0 {
-		return allocateNextAvailableHostRecord(objMgr, p, networkView, filterParams, strOrEmpty(ipAddressType))
+		return allocateNextAvailableHostRecord(objMgr, p, networkView, filterParams, strOrEmpty(ipAddressType), uid)
 	}
-	return createHostRecord(objMgr, p, networkView, ipv4Cidr, ipv6Cidr)
+	return createHostRecord(objMgr, p, networkView, ipv4Cidr, ipv6Cidr, uid)
 }
 
 // updateHostRecord issues the WAPI update call. networkView is never
 // passed (immutable field) — UpdateHostRecord accepts a netView parameter
 // but the SDK itself never forwards it to the underlying object (it
 // always hard-codes an empty network_view on update), so this wrapper
-// mirrors that by passing "" explicitly.
-func updateHostRecord(objMgr ibclient.IBObjectManager, ref string, p hostRecordCompareFields) (*ibclient.HostRecord, error) {
+// mirrors that by passing "" explicitly. Every call re-asserts the
+// identity stamp (identity.Stamp) — a WAPI PUT carrying extattrs replaces
+// the whole map, not a per-key merge.
+func updateHostRecord(objMgr ibclient.IBObjectManager, ref string, p hostRecordCompareFields, uid string) (*ibclient.HostRecord, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	ipv4Addr, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
 	ipv6Addr, duid := firstIpv6AddrAndDuid(p.Ipv6Addrs)
 	enableDhcp := firstConfigureForDHCPv4(p.Ipv4Addrs) || firstConfigureForDHCPv6(p.Ipv6Addrs)
@@ -920,7 +965,7 @@ func updateHostRecord(objMgr ibclient.IBObjectManager, ref string, p hostRecordC
 		boolOrFalse(p.UseTTL),
 		uint32OrZero(p.TTL),
 		strOrEmpty(p.Comment),
-		buildEA(p.ExtAttrs),
+		identity.Stamp(buildEA(p.ExtAttrs), uid),
 		p.Aliases,
 		boolOrFalse(p.Disable),
 	)
@@ -932,64 +977,123 @@ func deleteHostRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// hostRecordExistsByNaturalKey reports whether a live HostRecord still
-// exists under the CR's own (networkView, view, name, ipv4Addr, ipv6Addr)
-// identity — the same fields WAPI uses to compute the _ref. Used by
-// Delete() when the stored _ref 404s: a hit here means the _ref is merely
-// stale, not that the object is gone. GetHostRecord always filters on
-// name regardless of emptiness, so an empty name makes the search
-// unreliable (it would match every record) — the search is skipped
-// (found=false) in that case rather than treated as an error. Only the
-// first ipv4/ipv6 address entry is used, mirroring the same
-// first-entry-only limitation documented on ipv4AddrsEqual: those are the
-// only addresses this provider's SDK wrappers ever send to WAPI, so they
-// are the only addresses that can participate in the object's identity
-// from this provider's point of view. GetHostRecord itself returns
-// (nil, nil) — not a *NotFoundError — when the search matches nothing, so
-// both a nil result and a classified-404 error are treated as "not
-// found".
-func hostRecordExistsByNaturalKey(objMgr ibclient.IBObjectManager, networkView, view, name *string, ipv4Addrs []ipv4AddrValue, ipv6Addrs []ipv6AddrValue) (bool, error) {
-	if strOrEmpty(name) == "" {
-		return false, nil
-	}
-	ipv4Addr, _ := firstIpv4AddrAndMAC(ipv4Addrs)
-	ipv6Addr, _ := firstIpv6AddrAndDuid(ipv6Addrs)
-	rec, err := objMgr.GetHostRecord(strOrEmpty(networkView), strOrEmpty(view), strOrEmpty(name), ipv4Addr, ipv6Addr)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	if rec == nil {
-		return false, nil
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteHostRecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live record, deleting is refused
-// because ownership of that record cannot be verified from the search
-// alone (see the staleref package doc for the full rationale).
-func deleteHostRecordResolving404(objMgr ibclient.IBObjectManager, ref string, networkView, view, name *string, ipv4Addrs []ipv4AddrValue, ipv6Addrs []ipv6AddrValue) error {
-	delErr := deleteHostRecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteHostRecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := hostRecordExistsByNaturalKey(objMgr, networkView, view, name, ipv4Addrs, ipv6Addrs)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteHostRecord)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name. When the
+// annotation still holds the framework's NameAsExternalName default (the
+// CR's own Kubernetes name) no real WAPI _ref has ever been assigned, so
+// this reports "" rather than handing the ladder a value that can never
+// resolve.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveHostRecordIdentity resolves the HostRecord identified by
+// ref/uid through the shared UID-in-EA ladder — see recorda's
+// resolveARecordIdentity for the full rationale. newEmptyHostRecordForIdentity
+// (not the bare ibclient.NewEmptyHostRecord) supplies the extended
+// return-fields template so a resolved object's disable/dns_name/
+// dns_aliases fields are populated regardless of which ladder rung found
+// it.
+func resolveHostRecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.HostRecord, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.HostRecord](ctx, conn, newEmptyHostRecordForIdentity, ref, uid)
+}
+
+// hostRecordObserveResult bundles the shared parts of resolving a
+// HostRecord through the identity ladder during Observe — common to both
+// scopes, which differ only in their concrete CRD types and how they
+// translate hostRecordCompareFields to/from their generated Ipv4Addrs/
+// Ipv6Addrs types.
+type hostRecordObserveResult struct {
+	exists       bool
+	rec          *ibclient.HostRecord
+	adopted      bool
+	refreshedRef string
+}
+
+func observeHostRecordIdentity(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string) (hostRecordObserveResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveHostRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return hostRecordObserveResult{}, prereqErr
+			}
+		}
+		return hostRecordObserveResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return hostRecordObserveResult{exists: false}, nil
+	}
+
+	res := hostRecordObserveResult{
+		exists:  true,
+		rec:     rec,
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+	}
+	return res, nil
+}
+
+// deleteHostRecordIdentity issues the WAPI delete for the HostRecord this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity for the full rationale (identical pattern).
+func deleteHostRecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveHostRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteHostRecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteHostRecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteHostRecord)
+	default:
+		return errors.New("identity: unresolved HostRecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

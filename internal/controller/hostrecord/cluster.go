@@ -19,8 +19,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-hostrecord.infobloxnios.crossplane.io"
@@ -77,6 +77,7 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Host
 	if err != nil {
 		return nil, err
 	}
+	hc.endpoint = creds.Host
 
 	return &clusterExternal{kube: c.kube, client: hc}, nil
 }
@@ -167,42 +168,23 @@ func clusterIpv6AddrsFromValues(vals []ipv6AddrValue) []clusterv1alpha1.HostReco
 	return out
 }
 
-// Observe fetches the HostRecord from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
-
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling getHostRecordByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := getHostRecordByRef(e.client.conn, externalID)
+// Observe resolves the HostRecord through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalObservation, error) {
+	res, err := observeHostRecordIdentity(ctx, e.client.conn, e.client.prober, e.client.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			cf := clusterCompareFields(&cr.Spec.ForProvider)
-			found, searchErr := hostRecordExistsByNaturalKey(e.client.objMgr, cr.Spec.ForProvider.NetworkView, cf.View, cf.Name, cf.Ipv4Addrs, cf.Ipv6Addrs)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveHostRecord)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveHostRecord)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	rec := res.rec
 
-	o := observeFromHostRecord(externalID, rec)
+	o := observeFromHostRecord(rec.Ref, rec)
 	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = clusterv1alpha1.HostRecordObservation{
 		Name:            o.Name,
@@ -235,6 +217,10 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 	// this record, not a field returned inside the WAPI response body.
 	cr.Status.AtProvider.ID = o.ID
 
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
+	}
+
 	localIpv4 := clusterIpv4AddrsToValues(p.Ipv4Addrs)
 	localIpv6 := clusterIpv6AddrsToValues(p.Ipv6Addrs)
 	lateInit := lateInitialize(&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs, &p.View, &p.ConfigureForDNS, &p.Disable, &p.Aliases, &localIpv4, &localIpv6, rec)
@@ -242,24 +228,44 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.HostRec
 		p.Ipv4Addrs = clusterIpv4AddrsFromValues(localIpv4)
 		p.Ipv6Addrs = clusterIpv6AddrsFromValues(localIpv6)
 	}
+	if res.refreshedRef != "" {
+		lateInit = true
+	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(clusterCompareFields(p), rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(clusterCompareFields(p), rec),
+		ResourceUpToDate:        upToDate,
 		ResourceLateInitialized: lateInit,
 	}, nil
 }
 
-// Create provisions a new HostRecord and records the server-assigned _ref
-// as the external name. Dispatches to one of three provisioning
-// strategies — see provisionHostRecord.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalCreation, error) {
+// Create provisions a new HostRecord, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+// Dispatches to one of three provisioning strategies — see
+// provisionHostRecord.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalCreation, error) {
 	p := &cr.Spec.ForProvider
-	rec, err := provisionHostRecord(e.client.objMgr, clusterCompareFields(p), p.NetworkView, p.Ipv4Cidr, p.Ipv6Cidr, p.FilterParams, p.IpAddressType)
+	uid := string(cr.GetUID())
+
+	if uid == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	cf := clusterCompareFields(p)
+	if err := validateHostRecordAllocation(cf, p.Ipv4Cidr, p.Ipv6Cidr, p.FilterParams, p.IpAddressType); err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, errCreateHostRecord)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.client.prober, e.client.conn, e.client.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := provisionHostRecord(e.client.objMgr, cf, p.NetworkView, p.Ipv4Cidr, p.Ipv6Cidr, p.FilterParams, p.IpAddressType, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateHostRecord)
 	}
@@ -269,12 +275,13 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.HostReco
 }
 
 // Update patches the mutable HostRecord fields. networkView (immutable) is
-// never sent — see updateHostRecord.
+// never sent — see updateHostRecord. Every call re-asserts the identity
+// stamp.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalUpdate, error) {
 	p := &cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateHostRecord(e.client.objMgr, externalID, clusterCompareFields(p))
+	rec, err := updateHostRecord(e.client.objMgr, externalID, clusterCompareFields(p), string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateHostRecord)
 	}
@@ -292,16 +299,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.HostRe
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the HostRecord. A 404 on the stored _ref is not treated
-// as already-deleted by itself — see deleteHostRecordResolving404 —
-// because the _ref is a derived handle that rotates whenever an identity
-// field changes, and a stale handle 404s exactly like a genuinely
-// deleted object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalDelete, error) {
+// Delete removes the HostRecord, resolving through the shared identity
+// ladder first.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := &cr.Spec.ForProvider
-	cf := clusterCompareFields(p)
-	if err := deleteHostRecordResolving404(e.client.objMgr, externalID, p.NetworkView, cf.View, cf.Name, cf.Ipv4Addrs, cf.Ipv6Addrs); err != nil {
+	if err := deleteHostRecordIdentity(ctx, e.client.conn, e.client.objMgr, e.client.prober, e.client.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil
