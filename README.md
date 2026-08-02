@@ -1247,13 +1247,14 @@ kubectl apply -f examples/network/network-namespaced.yaml
 ```
 
 The dynamic-allocation pair (`network-allocate-parent.yaml` +
-`network-allocate.yaml`) is a hand-applied documentation example, not part
-of the automated end-to-end suite — see the comments in
-`examples/network/network-allocate.yaml` for why:
+`network-allocate.yaml`) uses per-run `${data.*}` placeholders for the
+parent CIDR and the shared `Site` extensible-attribute search value, so a
+literal `kubectl apply` does not produce a valid manifest. Run it through
+the provider's end-to-end suite instead, which resolves the placeholders
+and applies the parent before the child:
 
 ```bash
-kubectl apply -f examples/network/network-allocate-parent.yaml
-kubectl apply -f examples/network/network-allocate.yaml
+make e2e.network-allocate
 ```
 
 ### DNSView
