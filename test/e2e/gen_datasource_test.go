@@ -95,6 +95,7 @@ const (
 	keyNetRangeParentNamespaced     = "netRangeParentNamespaced"
 	keyNetRangeStartNamespaced      = "netRangeStartNamespaced"
 	keyNetRangeEndNamespaced        = "netRangeEndNamespaced"
+	keyNetAllocParentCluster        = "netAllocParentCluster"
 	keyNetPtrHostCluster            = "netPtrHostCluster"
 	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
 	keyNetV6NetworkCluster          = "netV6NetworkCluster"
@@ -125,6 +126,7 @@ var requiredKeys = []string{
 	keyNetRangeParentNamespaced,
 	keyNetRangeStartNamespaced,
 	keyNetRangeEndNamespaced,
+	keyNetAllocParentCluster,
 	keyNetPtrHostCluster,
 	keyNetPtrHostNamespaced,
 	keyNetV6NetworkCluster,
@@ -207,6 +209,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
+		keyNetAllocParentCluster,
 	}
 	for _, key := range cidrKeys {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -258,6 +261,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
+		keyNetAllocParentCluster,
 	}
 	// Range is a contiguous [start, end] address span, not a CIDR.
 	rangeSpans := [][2]string{

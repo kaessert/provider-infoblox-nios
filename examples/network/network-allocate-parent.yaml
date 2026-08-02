@@ -5,37 +5,56 @@
 # controller resolves a covering parent object and allocates a subnet from
 # it via WAPI's AllocateNetworkByEA call. That behavior needs a real parent
 # object carrying a matching extensible attribute to allocate from — this
-# manifest is that parent. Apply this file before network-allocate.yaml.
-#
-# Documentation-only example — see network-allocate.yaml for why this pair
-# is NOT wired into `make e2e`.
+# manifest is that parent. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_NETWORK_ALLOCATE) applies this manifest before
+# network-allocate.yaml so the parent object exists first — same pattern as
+# examples/fixed-address/network-prereq.yaml and examples/range/
+# network-prereq.yaml.
 #
 # External name: server-assigned, same as network-container.yaml (this is
 # a WAPI networkcontainer object, not a distinct resource type).
 #
-# network: 172.27.0.0/16 — chosen to not collide with any other example's
-# hardcoded CIDR in this repo (network.yaml: 198.51.100.0/24,
-# network-namespaced.yaml: 198.51.101.0/24, network-container.yaml:
-# 172.25.0.0/16, network-container-namespaced.yaml: 172.26.0.0/16). Not
-# reserved on any real Grid — re-check for collisions before reuse.
+# ${data.netAllocParentCluster}: a per-run /27 reserved specifically for
+# this prerequisite (see test/e2e/gen-datasource.sh's sub-allocation map),
+# disjoint from every other addressed example's sub-block. The /27 (32
+# addresses) gives network-allocate.yaml's /28 allocatePrefixLen request
+# (16 addresses) one full spare /28 sibling block inside the parent, so
+# AllocateNetworkByEA has room to pick without tripping over the parent's
+# own network/broadcast addresses. No namespaced sibling exists for this
+# pair yet, so there is no ${data.netAllocParentNamespaced} key.
 #
 # extAttrs.Site: the search key network-allocate.yaml's filterParams
-# matches on. The "Site" extensible attribute definition already exists as
-# a common default on NIOS Grid Manager (confirmed via
-# GET /wapi/v2.12/extensibleattributedef during manifest verification) —
-# no ExtensibleAttributeDef resource is required as a prerequisite.
+# matches on. Set to ${data.runToken} (the same per-run token used
+# elsewhere for NAMED objects) rather than a fixed literal — filterParams
+# is a Grid-wide extensible-attribute search that matches ANY object
+# carrying the value, so a fixed literal would let a concurrent run's
+# search match this run's parent (or vice versa) even though the two runs'
+# CIDR sub-blocks never overlap. The "Site" extensible attribute
+# definition already exists as a common default on NIOS Grid Manager
+# (confirmed via GET /wapi/v2.12/extensibleattributedef during manifest
+# verification) — no ExtensibleAttributeDef resource is required as a
+# prerequisite.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation:
+# network-allocate.yaml's allocation depends on this object's CIDR and EA
+# value staying stable for the whole run, and it is not itself a resource
+# under test — see examples/network-container/network-container.yaml for
+# the general-purpose, independently update-tested NetworkContainer
+# example.
 apiVersion: networkcontainer.infobloxnios.crossplane.io/v1alpha1
 kind: NetworkContainer
 metadata:
   name: example-network-allocate-parent
   annotations:
     meta.upbound.io/example-id: networkcontainer/v1alpha1/networkcontainer
+    uptest.upbound.io/timeout: "120"
 spec:
   forProvider:
     networkView: default
-    network: 172.27.0.0/16
+    network: ${data.netAllocParentCluster}
     extAttrs:
-      Site: network-allocate-demo
+      Site: ${data.runToken}
     comment: Prerequisite parent for network-allocate.yaml (EA-based dynamic allocation demo)
   providerConfigRef:
     name: default
