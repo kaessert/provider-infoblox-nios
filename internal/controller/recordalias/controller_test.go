@@ -1047,6 +1047,45 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	}
 }
 
+// TestClusterDeleteRefusesOnForeignIdentity verifies the identity
+// ladder's ownership check: when the stored _ref resolves directly to an
+// object whose identity extensible attribute names a different owner,
+// Delete() must refuse rather than destroy someone else's object.
+func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	foreignRef := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		View:       &view,
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		Ea:         identity.Stamp(nil, "someone-elses-uid"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newClusterAliasRecord("my-alias", foreignRef)
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
+	}
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want it to wrap a *identity.HandleReuseError", err)
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[foreignRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: foreign record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
 // TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
 // companion happy path: a 404 against the stored _ref, and an
 // identity-EA search that finds nothing, means the object really is
@@ -1522,6 +1561,43 @@ func TestNamespacedDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	m.mu.Unlock()
 	if stillExists {
 		t.Error("Delete: recovered object still present after Delete")
+	}
+}
+
+// TestNamespacedDeleteRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterDeleteRefusesOnForeignIdentity.
+func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	foreignRef := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		View:       &view,
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		Ea:         identity.Stamp(nil, "someone-elses-uid"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", foreignRef, "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
+	}
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want it to wrap a *identity.HandleReuseError", err)
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[foreignRef]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: foreign record was removed despite the refusal — DELETE must not have been issued against it")
 	}
 }
 
