@@ -35,12 +35,14 @@ metadata:
     meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
     uptest.upbound.io/timeout: "120"
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template.sh
-    # comment, numberOfAddresses, offset, useOptions, and
-    # cloudApiCompatible are the mutable scalars exercised here. name is
-    # also mutable (RangeTemplate's Update call accepts every Create
-    # parameter, including name), but renaming can change the WAPI
-    # `_ref` (like ARecord); that rotation is already exercised by
-    # controller unit tests, so it is skipped here. serverAssociationType
+    # comment, numberOfAddresses, offset, and useOptions are the mutable
+    # scalars exercised here. name is also mutable (RangeTemplate's Update
+    # call accepts every Create parameter, including name), but renaming
+    # can change the WAPI `_ref` (like ARecord); that rotation is already
+    # exercised by controller unit tests, so it is skipped here.
+    # cloudApiCompatible is provider-owned (the controller always sends
+    # cloud_api_compatible=true on the wire) so it cannot be exercised as
+    # a spec-driven update — see the skip rationale below. serverAssociationType
     # and its dependents (failoverAssociation, member) require a
     # specific, mutually-consistent combination of Grid objects
     # (an existing failover association or Grid member) not modeled by
@@ -58,7 +60,7 @@ metadata:
       - field: useOptions
         value: true
       - field: cloudApiCompatible
-        value: true
+        skip: "provider-owned: the controller always sends cloud_api_compatible=true on the wire (see wapiCloudAPICompatible) because the unconditional identity-EA stamp is cloud-compatible and the Grid rejects attaching it to a cloud-incompatible template object. lateInitialize back-fills spec to true after Create, so value:true is a no-op; value:false never converges because isUpToDate compares the Grid value against the constant, not the spec."
       - field: name
         skip: "renaming a range template can change the WAPI _ref (like ARecord); not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: serverAssociationType
