@@ -1905,6 +1905,44 @@ func TestIsUpToDateDetectsUseTTLTransition(t *testing.T) {
 	}
 }
 
+// TestIsUpToDateIgnoresUnsetTypesAgainstServerDefault proves the types
+// comparison is skipped when spec.forProvider.types is left unset. WAPI
+// assigns a non-empty server default ([A, AAAA]) even when types is
+// omitted from Create, so an empty spec value and that default are
+// unrelated quantities — comparing them unconditionally can never
+// converge (the same class of bug the useTtl-gated ttl comparison above
+// fixes for ttl).
+func TestIsUpToDateIgnoresUnsetTypesAgainstServerDefault(t *testing.T) {
+	rec := &ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+		Types:    []string{"A", "AAAA"},
+	}
+
+	got := isUpToDate(rec.Name, stringPtr(rec.LbMethod), rec.Patterns, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, rec)
+	if !got {
+		t.Error("isUpToDate: want true when spec.types is unset and only the server-assigned default types differ, got false (non-convergent drift comparison)")
+	}
+}
+
+// TestIsUpToDateDetectsTypesDriftWhenSet proves the types comparison
+// still fires normally once the user has explicitly set spec.types — the
+// skip only applies to the unset case.
+func TestIsUpToDateDetectsTypesDriftWhenSet(t *testing.T) {
+	rec := &ibclient.DtcLbdn{
+		Name:     stringPtr("my-lbdn"),
+		LbMethod: "ROUND_ROBIN",
+		Patterns: []string{"*.example.com"},
+		Types:    []string{"A", "AAAA"},
+	}
+
+	got := isUpToDate(rec.Name, stringPtr(rec.LbMethod), rec.Patterns, nil, nil, []string{"A"}, nil, nil, nil, nil, nil, nil, nil, nil, rec)
+	if got {
+		t.Error("isUpToDate: want false when spec.types is explicitly set and differs from observed types, got true (drift not detected)")
+	}
+}
+
 func TestIsUpToDateExtAttrsEmptyVsNil(t *testing.T) {
 	rec := &ibclient.DtcLbdn{
 		Name:     stringPtr("my-lbdn"),

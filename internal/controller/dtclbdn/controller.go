@@ -527,8 +527,17 @@ func collectionFieldsUpToDate(patterns []string, pools []poolLink, authZones []s
 	if !stringSlicesEqual(authZones, authZonesFromSDK(rec.AuthZones)) {
 		return false
 	}
-	if !stringSlicesEqual(types, rec.Types) {
-		return false
+	// Only compare types when the user has explicitly set it in spec.
+	// WAPI assigns a non-empty server default (e.g. [A, AAAA]) whenever
+	// the field is omitted from Create, so an empty spec value never
+	// equals the observed default — comparing it unconditionally would
+	// report drift, trigger Update, and see the identical "drift" again
+	// on the next Observe (infinite reconcile loop). Mirrors the
+	// useTTL-gated ttl comparison above.
+	if len(types) > 0 {
+		if !stringSlicesEqual(types, rec.Types) {
+			return false
+		}
 	}
 	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
 }
@@ -537,8 +546,13 @@ func collectionFieldsUpToDate(patterns []string, pools []poolLink, authZones []s
 // persistence, topology, ttl, useTtl, comment, disable, extattrs) from the
 // observed DtcLbdn into spec so isUpToDate does not see phantom drift on
 // the next reconcile. Required fields (name, lbMethod, patterns) and
-// user-managed collections (pools, authZones, types) are never
-// late-initialized. Returns true if any field was changed.
+// user-managed collections (pools, authZones) are never late-initialized.
+// types is also never late-initialized — it is user-managed like
+// pools/authZones — but unlike those two, WAPI assigns it a non-empty
+// server default ([A, AAAA]) even when the user omits it from spec, so
+// collectionFieldsUpToDate skips the types comparison entirely when spec
+// leaves it unset (see the comment there). Returns true if any field was
+// changed.
 func lateInitialize(priority, persistence **uint32, topology **string, ttl **uint32, useTTL **bool, comment **string, disable **bool, extAttrs *map[string]string, rec *ibclient.DtcLbdn) bool {
 	changed := lateInitUint32(priority, rec.Priority)
 	changed = lateInitUint32(persistence, rec.Persistence) || changed
