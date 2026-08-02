@@ -15,6 +15,13 @@
 # sub-block below is distinct from network-v6-namespaced.yaml's so both
 # examples can be applied to the same Grid at once without colliding on the
 # same (network_view, network) WAPI identity.
+#
+# The assertion that makes this example meaningful: the post-assert hook
+# (crossplane.io/expect-external-name-prefix below) checks that the
+# resolved crossplane.io/external-name annotation is prefixed
+# "ipv6network/", not merely that the resource reaches Ready. A resource
+# that was silently created against the wrong object type would still
+# reach Ready — only the external-name prefix reveals it.
 apiVersion: network.infobloxnios.crossplane.io/v1alpha1
 kind: Network
 metadata:
@@ -25,6 +32,12 @@ metadata:
     # uptest.upbound.io/update-parameter is intentionally omitted — see
     # network.yaml for the rationale.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-v6.sh
+    # The dual-object-type identity guard — see the file header. The
+    # generic post-assert hook (test/hooks/run-update-tester.sh) reads
+    # this annotation and, when present, runs
+    # `update-tester check-external-name-prefix` right after Create,
+    # before the per-field update tests below.
+    crossplane.io/expect-external-name-prefix: "ipv6network/"
     # See network.yaml for the field coverage rationale — identical here,
     # the only difference is the CIDR family.
     crossplane.io/update-test: |

@@ -137,7 +137,7 @@ echo "==> run-update-tester: converge $MANIFEST"
 # reconciler creates a duplicate while still reporting Ready — invisible to
 # a plain Ready assertion. Runs right after Create (before the per-field
 # update tests below) because object type is fixed at Create and should
-# never need re-checking after. See examples/network-v6/network-v6.yaml.
+# never need re-checking after. See examples/network/network-v6.yaml.
 if grep -q 'crossplane.io/expect-external-name-prefix:' "$MANIFEST"; then
   echo "==> run-update-tester: check-external-name-prefix $MANIFEST"
   "$UPDATE_TESTER" check-external-name-prefix "$MANIFEST"
