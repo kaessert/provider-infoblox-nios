@@ -576,7 +576,7 @@ func createZoneDelegated(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat
 // identity stamp since a WAPI PUT carrying extattrs replaces the whole
 // map rather than merging it.
 func updateZoneDelegated(objMgr ibclient.IBObjectManager, ref string, comment, nsGroup *string, disable, locked, useDelegatedTTL *bool, delegatedTTL *uint32, delegateTo []ibclient.NameServer, extAttrs map[string]string, uid string) (*ibclient.ZoneDelegated, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

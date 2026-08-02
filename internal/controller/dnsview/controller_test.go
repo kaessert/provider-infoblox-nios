@@ -2748,6 +2748,44 @@ func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests proves the
+// Update path rejects a whitespace-only uid the same way Create does —
+// updateView's guard trims before comparing, matching
+// identity.Resolve's ladder. Without the trim, a whitespace-only uid
+// would pass Update's guard and get re-stamped verbatim into the
+// object's extensible attributes, while Observe/Delete (which route
+// through identity.Resolve) would treat that same object as unowned.
+func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.View{
+		Name:    stringPtr("my-view"),
+		Comment: stringPtr("old comment"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterDNSView("my-dnsview", ref)
+	cr.UID = types.UID("   ")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	lastUpdateBody := m.lastUpdateBody
+	comment := m.records[ref].Comment
+	m.mu.Unlock()
+	if lastUpdateBody != nil {
+		t.Errorf("Update: PUT body = %s, want no PUT request issued for a whitespace-only uid", lastUpdateBody)
+	}
+	if comment == nil || *comment != "old comment" {
+		t.Errorf("Update: Comment = %v, want unchanged 'old comment' — a whitespace-only uid must not mutate the object", comment)
+	}
+}
+
 // ── rotation: persistence round-trips through a client ──────────────────
 
 func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {

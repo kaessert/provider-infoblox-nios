@@ -508,7 +508,7 @@ func createOrAllocateNetworkContainer(objMgr ibclient.IBObjectManager, networkVi
 // map — it is not a per-key merge — so omitting the stamp here would wipe
 // it off the object on the very first field update after create.
 func updateNetworkContainer(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

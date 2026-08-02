@@ -918,7 +918,7 @@ func createZoneAuth(conn ibclient.IBConnector, f zoneAuthFields, uid string) (st
 // identity stamp since a WAPI PUT carrying extattrs replaces the whole
 // map rather than merging it.
 func updateZoneAuth(conn ibclient.IBConnector, ref string, f zoneAuthFields, uid string) error {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return errors.New(errEmptyUID)
 	}
 	z := buildZoneAuthForUpdate(f)

@@ -541,6 +541,42 @@ func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests proves the
+// Update path rejects a whitespace-only uid before issuing any WAPI
+// call — updateRange's guard trims before comparing, matching
+// identity.Resolve's ladder (see internal/clients/identity). Without the
+// trim, a whitespace-only uid would pass Update's guard and get
+// re-stamped verbatim into the object's extensible attributes, while
+// Observe/Delete (which route through identity.Resolve) would treat
+// that same object as unowned.
+func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20"), Comment: stringPtr("old comment")}
+	rng.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rng)
+
+	cr := newClusterRange("my-range", ref)
+	cr.UID = "   "
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	comment := m.ranges[ref].Comment
+	if comment == nil || *comment != "old comment" {
+		t.Errorf("Update: Comment = %v, want unchanged 'old comment' — a whitespace-only uid must not mutate the object", comment)
+	}
+}
+
 // ── Delete ───────────────────────────────────────────────────────────────
 
 func TestClusterDeleteSuccess(t *testing.T) {

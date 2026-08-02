@@ -2162,7 +2162,7 @@ func createView(conn ibclient.IBConnector, f dnsViewFields, uid string) (string,
 // Returns the object's current _ref, which differs from ref whenever
 // name changed (DNSView is in the _ref-unstable resource group).
 func updateView(conn ibclient.IBConnector, ref string, f dnsViewFields, uid string) (string, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return "", errors.New(errEmptyUID)
 	}
 	v := buildView(f)

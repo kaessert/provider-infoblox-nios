@@ -1443,6 +1443,48 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests proves the
+// Update path rejects a whitespace-only uid before issuing any WAPI
+// call — updateARecord's guard trims before comparing, matching
+// identity.Resolve's ladder (see internal/clients/identity). Without
+// the trim, a whitespace-only uid would pass Update's guard and get
+// re-stamped verbatim into the object's extensible attributes, while
+// Observe/Delete (which route through identity.Resolve) would treat
+// that same object as unowned.
+func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Comment:  stringPtr("old comment"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterARecord("my-arecord", ref)
+	cr.UID = types.UID("   ")
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Fatal("Update: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	lastUpdateBody := m.lastUpdateBody
+	comment := m.records[ref].Comment
+	m.mu.Unlock()
+	if lastUpdateBody != nil {
+		t.Errorf("Update: PUT body = %s, want no PUT request issued for a whitespace-only uid", lastUpdateBody)
+	}
+	if comment == nil || *comment != "old comment" {
+		t.Errorf("Update: Comment = %v, want unchanged 'old comment' — a whitespace-only uid must not mutate the object", comment)
+	}
+}
+
 // TestClusterUpdateRefreshesExternalNameOnRename verifies the UNSTABLE
 // _ref contract for ARecord: renaming a record (a _ref-mutating field)
 // mints a new _ref, and Update() must persist the refreshed
