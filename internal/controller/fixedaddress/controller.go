@@ -526,16 +526,32 @@ func isUpToDate(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
 }
 
 // isUpToDateAddress compares the address-identity fields.
+//
+// The mac/DUID comparison is family-aware: ibclient.NewEmptyFixedAddress
+// requests a different returnFields list per WAPI object type, and for
+// "ipv6fixedaddress" that list carries "duid", never "mac" — every GET for
+// an IPv6 fixed address comes back with fa.Mac == nil regardless of what
+// was sent. spec.forProvider.mac doubles as the DUID input for IPv6 (WAPI
+// requires it non-empty on create), so it must be compared against
+// fa.Duid — the field WAPI actually populates for that family — not
+// fa.Mac, which would never match and would trigger an Update on every
+// reconcile.
 func isUpToDateAddress(f fixedAddressFields, fa *ibclient.FixedAddress) bool {
-	if f.isIPv6() {
+	isIPv6 := f.isIPv6()
+	if isIPv6 {
 		if strOrEmpty(f.IPv6Addr) != fa.IPv6Address {
 			return false
 		}
-	} else if strOrEmpty(f.IPv4Addr) != fa.IPv4Address {
-		return false
-	}
-	if strOrEmpty(f.MAC) != strOrEmpty(fa.Mac) {
-		return false
+		if strOrEmpty(f.MAC) != fa.Duid {
+			return false
+		}
+	} else {
+		if strOrEmpty(f.IPv4Addr) != fa.IPv4Address {
+			return false
+		}
+		if strOrEmpty(f.MAC) != strOrEmpty(fa.Mac) {
+			return false
+		}
 	}
 	if strOrEmpty(f.NetworkView) != fa.NetviewName {
 		return false

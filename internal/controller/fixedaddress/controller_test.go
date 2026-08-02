@@ -803,6 +803,56 @@ func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
 	}
 }
 
+// TestIsUpToDateIPv6ComparesDuidNotMac reproduces the shape every real
+// ipv6fixedaddress GET returns: ibclient.NewEmptyFixedAddress(true) only
+// ever requests "duid" in returnFields, never "mac", so fa.Mac is always
+// nil for this WAPI object type. spec.forProvider.mac (the DUID input, a
+// value WAPI requires non-empty for every IPv6 fixed address) must
+// therefore be compared against fa.Duid, not fa.Mac — otherwise isUpToDate
+// can never converge and the reconciler calls Update forever.
+func TestIsUpToDateIPv6ComparesDuidNotMac(t *testing.T) {
+	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::10", Duid: "00:11:22:33:44:55:66:77", Mac: nil}
+	fa.Ea = identity.Stamp(nil, "some-uid")
+
+	f := fixedAddressFields{IPv6Addr: stringPtr("2001:db8::10"), MAC: stringPtr("00:11:22:33:44:55:66:77")}
+	if !isUpToDate(f, fa) {
+		t.Fatal("expected isUpToDate to compare spec.mac against fa.Duid for IPv6 (fa.Mac is always nil for ipv6fixedaddress), got false")
+	}
+}
+
+// TestIsUpToDateIPv6DetectsDuidDrift confirms the comparison is not simply
+// short-circuited to true — a genuine DUID mismatch must still be
+// reported as drift.
+func TestIsUpToDateIPv6DetectsDuidDrift(t *testing.T) {
+	fa := &ibclient.FixedAddress{IPv6Address: "2001:db8::10", Duid: "00:11:22:33:44:55:66:77", Mac: nil}
+	fa.Ea = identity.Stamp(nil, "some-uid")
+
+	f := fixedAddressFields{IPv6Addr: stringPtr("2001:db8::10"), MAC: stringPtr("aa:bb:cc:dd:ee:ff:00:11")}
+	if isUpToDate(f, fa) {
+		t.Fatal("expected isUpToDate to report drift when spec.mac (DUID) differs from fa.Duid")
+	}
+}
+
+// TestIsUpToDateIPv4StillComparesMac confirms the IPv4 family is
+// unaffected by the IPv6 family-aware comparison — it must keep comparing
+// against fa.Mac even when fa.Duid happens to carry a stray value (the
+// SDK's ipv4 returnFields never request "duid", but the struct field
+// exists on the shared Go type).
+func TestIsUpToDateIPv4StillComparesMac(t *testing.T) {
+	fa := &ibclient.FixedAddress{IPv4Address: "10.0.0.10", Mac: stringPtr("00:11:22:33:44:55"), Duid: "ignored-for-ipv4"}
+	fa.Ea = identity.Stamp(nil, "some-uid")
+
+	f := fixedAddressFields{IPv4Addr: stringPtr("10.0.0.10"), MAC: stringPtr("00:11:22:33:44:55")}
+	if !isUpToDate(f, fa) {
+		t.Fatal("expected isUpToDate to compare spec.mac against fa.Mac for IPv4, ignoring fa.Duid")
+	}
+
+	drifted := fixedAddressFields{IPv4Addr: stringPtr("10.0.0.10"), MAC: stringPtr("aa:bb:cc:dd:ee:ff")}
+	if isUpToDate(drifted, fa) {
+		t.Fatal("expected isUpToDate to report drift when spec.mac differs from fa.Mac for IPv4")
+	}
+}
+
 func TestClusterDisconnectIsNoop(t *testing.T) {
 	e := &clusterExternal{}
 	if err := e.Disconnect(context.Background()); err != nil {
