@@ -8,9 +8,11 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the CIDR below differs from network-v6.yaml's so both
-# examples can be applied to the same NIOS Grid Manager at once without
-# colliding on the same (network_view, network) WAPI identity.
+# Distinct identity: ${data.netV6NetworkNamespaced} is a different,
+# disjoint per-run IPv6 block from ${data.netV6NetworkCluster} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) so both examples can be
+# applied to the same NIOS Grid Manager at once without colliding on the
+# same (network_view, network) WAPI identity.
 apiVersion: network.infobloxnios.m.crossplane.io/v1alpha1
 kind: Network
 metadata:
@@ -41,7 +43,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 2001:db8:e2e6:2::/64
+    network: ${data.netV6NetworkNamespaced}
     comment: Managed by Crossplane (IPv6, namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig

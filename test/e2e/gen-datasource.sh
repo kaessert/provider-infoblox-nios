@@ -130,6 +130,42 @@
 #               This is a real, documented bound (ADR-IN-0007), not one
 #               this script tries to eliminate.
 #
+# ── netV6 — IPv6 ADDRESSED objects (Network's ipv6network variant) ────────
+#
+#   netV6NetworkCluster / netV6NetworkNamespaced — Network's IPv6 variant
+#               (WAPI object type `ipv6network`, selected when the example's
+#               `network` field holds an IPv6 CIDR instead of an IPv4 one)
+#               has the same no-independent-name-field problem as its IPv4
+#               sibling and needs its own per-run sub-block for the same
+#               reason. It reuses the SAME BLOCK_INDEX byte netPrefix
+#               already draws — no second hash byte — so this does not add
+#               a new collision surface on top of the birthday bound
+#               documented above; it only spends one more fixed offset
+#               inside a draw that already happened.
+#
+#               Address family: 2001:db8::/32 (RFC 3849 IPv6 documentation
+#               prefix, the IPv6 analogue of 100.64.0.0/16 above — reserved
+#               for exactly this kind of test partitioning, never expected
+#               to appear in a real Grid config). BLOCK_INDEX is rendered as
+#               a 2-digit lowercase hex string (netV6Hex) and spliced into
+#               the third hextet; the fourth hextet is a fixed 1 (cluster)
+#               or 2 (namespaced) — the IPv6 analogue of netPrefix's own
+#               sub-block offsets, so the two scopes can never collide with
+#               each other within one run regardless of which BLOCK_INDEX is
+#               drawn:
+#
+#                 netV6NetworkCluster:    2001:db8:<netV6Hex>:1::/64
+#                 netV6NetworkNamespaced: 2001:db8:<netV6Hex>:2::/64
+#
+#               This is deliberately NOT 2001:db8::/64 (i.e. third and
+#               fourth hextet both zero): record-aaaa's example payload
+#               addresses (2001:db8::10, ::11, ::20, ::21) already live
+#               there, and a generated block with the fourth hextet fixed
+#               at zero could literally reproduce one of those literals. A
+#               nonzero fourth hextet (1 or 2) rules that out unconditionally
+#               — it never lands in the third-and-fourth-both-zero /64 no
+#               matter what BLOCK_INDEX hashes to.
+#
 # ── ptrHost — record-ptr's reverse-zone exception ──────────────────────────
 #
 #   ptrHostCluster / ptrHostNamespaced — PTRRecord needs a reverse-mapping
@@ -217,6 +253,15 @@ NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
 NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
 NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
 
+# netV6Network{Cluster,Namespaced} — Network's IPv6 (ipv6network) variant,
+# see the header comment's netV6 section. Reuses BLOCK_INDEX (same byte
+# netPrefix drew, no second hash byte) rendered as 2-digit lowercase hex and
+# spliced into the third hextet; the fourth hextet (1/2) is a fixed,
+# non-hashed offset that keeps the two scopes disjoint from each other.
+NET_V6_HEX="$(printf '%02x' "${BLOCK_INDEX}")"
+NET_V6_NETWORK_CLUSTER="2001:db8:${NET_V6_HEX}:1::/64"
+NET_V6_NETWORK_NAMESPACED="2001:db8:${NET_V6_HEX}:2::/64"
+
 # ptrHost — record-ptr's separate, independently-drawn shared-pool
 # exception. PTR_OCTET is a second, independent byte of the hash so this
 # draw is not perfectly correlated with BLOCK_INDEX.
@@ -248,6 +293,8 @@ netRangeEndCluster: "${NET_RANGE_END_CLUSTER}"
 netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
 netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
+netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
+netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
 netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"
 netPtrHostNamespaced: "${NET_PTRHOST_NAMESPACED}"
 DATASOURCE

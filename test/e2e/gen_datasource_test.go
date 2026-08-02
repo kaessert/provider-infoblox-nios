@@ -97,6 +97,8 @@ const (
 	keyNetRangeEndNamespaced        = "netRangeEndNamespaced"
 	keyNetPtrHostCluster            = "netPtrHostCluster"
 	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
+	keyNetV6NetworkCluster          = "netV6NetworkCluster"
+	keyNetV6NetworkNamespaced       = "netV6NetworkNamespaced"
 )
 
 // requiredKeys is every key gen-datasource.sh's sub-allocation map
@@ -125,6 +127,8 @@ var requiredKeys = []string{
 	keyNetRangeEndNamespaced,
 	keyNetPtrHostCluster,
 	keyNetPtrHostNamespaced,
+	keyNetV6NetworkCluster,
+	keyNetV6NetworkNamespaced,
 }
 
 func TestGenDatasourceEmitsAllKeys(t *testing.T) {
@@ -380,6 +384,107 @@ func TestGenDatasourcePtrHostWithinReverseZone(t *testing.T) {
 	}
 	if namespacedLast < 129 || namespacedLast > 254 {
 		t.Errorf("netPtrHostNamespaced last octet %d out of documented range [129,254]", namespacedLast)
+	}
+}
+
+// blockIndexFromDatasource re-derives the run's BLOCK_INDEX byte from
+// netPrefix's third octet — the same value both the IPv4 sub-blocks and
+// the IPv6 network keys are supposed to share.
+func blockIndexFromDatasource(t *testing.T, values map[string]string) byte {
+	t.Helper()
+	_, prefixNet, err := net.ParseCIDR(values[keyNetPrefix])
+	if err != nil {
+		t.Fatalf("netPrefix %q invalid: %v", values[keyNetPrefix], err)
+	}
+	return prefixNet.IP.To4()[2]
+}
+
+// TestGenDatasourceV6NetworkFormat asserts netV6NetworkCluster and
+// netV6NetworkNamespaced are both valid /64 CIDRs carved from the RFC 3849
+// IPv6 documentation prefix (2001:db8::/32) — the IPv6 analogue of
+// TestGenDatasourceNetPrefixFormat.
+func TestGenDatasourceV6NetworkFormat(t *testing.T) {
+	values := runGenDatasource(t, "TestGenDatasourceV6NetworkFormat-seed")
+	_, docPrefix, err := net.ParseCIDR("2001:db8::/32")
+	if err != nil {
+		t.Fatalf("net.ParseCIDR(2001:db8::/32): %v", err)
+	}
+
+	for _, key := range []string{keyNetV6NetworkCluster, keyNetV6NetworkNamespaced} {
+		ip, ipNet, err := net.ParseCIDR(values[key])
+		if err != nil {
+			t.Fatalf("%s=%q is not a valid CIDR: %v", key, values[key], err)
+		}
+		ones, bits := ipNet.Mask.Size()
+		if ones != 64 || bits != 128 {
+			t.Errorf("%s=%q is not a /64: mask is /%d (bits=%d)", key, values[key], ones, bits)
+		}
+		if !docPrefix.Contains(ip) {
+			t.Errorf("%s=%q is not carved from 2001:db8::/32", key, values[key])
+		}
+	}
+}
+
+// TestGenDatasourceV6NetworkSharesBlockIndex asserts the IPv6 network
+// keys are derived from the SAME BLOCK_INDEX byte as netPrefix (rendered
+// as 2-digit lowercase hex in the third hextet) — the whole point of
+// reusing the draw instead of hashing a second byte.
+func TestGenDatasourceV6NetworkSharesBlockIndex(t *testing.T) {
+	values := runGenDatasource(t, "TestGenDatasourceV6NetworkSharesBlockIndex-seed")
+	blockIndex := blockIndexFromDatasource(t, values)
+	wantHex := fmt.Sprintf("%02x", blockIndex)
+
+	for _, key := range []string{keyNetV6NetworkCluster, keyNetV6NetworkNamespaced} {
+		ip, _, err := net.ParseCIDR(values[key])
+		if err != nil {
+			t.Fatalf("%s=%q invalid: %v", key, values[key], err)
+		}
+		// ip.String() renders the canonical, zero-compressed form
+		// (e.g. "2001:db8:7:1::"); split on ":" to pull out the third
+		// hextet directly rather than assuming a fixed string offset.
+		parts := strings.Split(ip.String(), ":")
+		if len(parts) < 3 {
+			t.Fatalf("%s=%q did not parse into enough hextets: %v", key, values[key], parts)
+		}
+		if got := parts[2]; got != wantHex {
+			t.Errorf("%s=%q has third hextet %q, want %q (netPrefix's BLOCK_INDEX in hex)", key, values[key], got, wantHex)
+		}
+	}
+}
+
+// TestGenDatasourceV6NetworkDisjoint asserts the cluster and namespaced
+// IPv6 network blocks never overlap each other, and neither ever lands in
+// the 2001:db8::/64 zero subnet record-aaaa's example payload addresses
+// already occupy (2001:db8::10, ::11, ::20, ::21).
+func TestGenDatasourceV6NetworkDisjoint(t *testing.T) {
+	for _, seed := range []string{"a", "b", "c", "some-longer-seed-value", "e2e-abc123", "TestGenDatasourceV6NetworkDisjoint-seed"} {
+		values := runGenDatasource(t, seed)
+
+		_, cluster, err := net.ParseCIDR(values[keyNetV6NetworkCluster])
+		if err != nil {
+			t.Fatalf("seed %q: %s=%q invalid: %v", seed, keyNetV6NetworkCluster, values[keyNetV6NetworkCluster], err)
+		}
+		_, namespaced, err := net.ParseCIDR(values[keyNetV6NetworkNamespaced])
+		if err != nil {
+			t.Fatalf("seed %q: %s=%q invalid: %v", seed, keyNetV6NetworkNamespaced, values[keyNetV6NetworkNamespaced], err)
+		}
+		if cluster.String() == namespaced.String() {
+			t.Errorf("seed %q: netV6NetworkCluster and netV6NetworkNamespaced must never be equal: both are %s", seed, cluster)
+		}
+		if cluster.Contains(namespaced.IP) || namespaced.Contains(cluster.IP) {
+			t.Errorf("seed %q: netV6NetworkCluster=%s and netV6NetworkNamespaced=%s overlap", seed, cluster, namespaced)
+		}
+
+		_, zeroSubnet, err := net.ParseCIDR("2001:db8::/64")
+		if err != nil {
+			t.Fatalf("net.ParseCIDR(2001:db8::/64): %v", err)
+		}
+		if zeroSubnet.Contains(cluster.IP) {
+			t.Errorf("seed %q: netV6NetworkCluster=%s lands in the 2001:db8::/64 zero subnet record-aaaa's examples already occupy", seed, cluster)
+		}
+		if zeroSubnet.Contains(namespaced.IP) {
+			t.Errorf("seed %q: netV6NetworkNamespaced=%s lands in the 2001:db8::/64 zero subnet record-aaaa's examples already occupy", seed, namespaced)
+		}
 	}
 }
 
