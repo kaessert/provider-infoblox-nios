@@ -9,6 +9,12 @@
 # populates it. Create is synchronous — WAPI's POST returns the `_ref`
 # immediately (200/201), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same LBDN display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
+#
 # Required fields:
 #   name: DTC LBDN display name (not DNS-related).
 #   lbMethod: load balancing method used to select a pool from those
@@ -85,10 +91,10 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-lbdn
+    name: test-dtc-lbdn-${data.runToken}
     lbMethod: ROUND_ROBIN
     patterns:
-      - "*.example.com"
+      - "*.${data.runToken}.example.com"
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

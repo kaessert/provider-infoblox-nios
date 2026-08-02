@@ -8,6 +8,12 @@
 # annotation. Do not set that annotation manually — the controller
 # populates it.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, fqdn) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
 # Required fields:
 #   fqdn:      FQDN of the forward zone. Immutable after creation (CEL
 #              rule enforced) — the UpdateZoneForward SDK call has no
@@ -57,7 +63,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    fqdn: forward.example.com
+    fqdn: forward-${data.runToken}.example.com
     forwardTo:
       - name: ns1.forwarder.com
         address: 10.0.0.1

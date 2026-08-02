@@ -11,6 +11,12 @@
 # Distinct identity: the name below differs from dtc-lbdn.yaml's so both
 # examples can be applied to the same NIOS Grid Manager at once without
 # colliding on the same DTC LBDN display name.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same LBDN display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
 apiVersion: dtclbdn.infobloxnios.m.crossplane.io/v1alpha1
 kind: DTCLBDN
 metadata:
@@ -56,10 +62,10 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-lbdn-ns
+    name: test-dtc-lbdn-ns-${data.runToken}
     lbMethod: ROUND_ROBIN
     patterns:
-      - "*.namespaced.example.com"
+      - "*.namespaced.${data.runToken}.example.com"
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig
