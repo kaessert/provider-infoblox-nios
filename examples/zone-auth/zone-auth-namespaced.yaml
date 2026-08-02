@@ -9,7 +9,14 @@
 #
 # Distinct identity: the fqdn below differs from zone-auth.yaml's so both
 # examples can be applied to the same NIOS Grid Manager at once without
-# colliding on the same (view, fqdn) WAPI identity.
+# colliding on the same (view, fqdn) WAPI identity. Like zone-auth.yaml, it
+# is deliberately not a child of "example.com" — test/setup.sh
+# pre-provisions that zone out-of-band as a parent-zone prerequisite for
+# the DNS record examples.
+#
+# ${data.runToken}: see zone-auth.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
 #
 # gridPrimary + useGridZoneTimer: see zone-auth.yaml for why both are
 # required for the soa_* fields to round-trip through WAPI at all.
@@ -56,7 +63,7 @@ metadata:
         skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
 spec:
   forProvider:
-    fqdn: example-ns.com
+    fqdn: example-ns-${data.runToken}.com
     view: default
     comment: Managed by Crossplane (namespaced)
     useGridZoneTimer: true

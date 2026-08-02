@@ -3,7 +3,7 @@
 # namespace-scoped variant used by namespaced (ModernManaged) resources.
 #
 # External name: server-assigned. WAPI returns an opaque `_ref` string
-# (e.g. "zone_auth/ZG5zLnpvbmUk...:zoneauth-example.com/default") from
+# (e.g. "zone_auth/ZG5zLnpvbmUk...:zoneauth-abc1234567.com/default") from
 # Create; Crossplane stores it in the crossplane.io/external-name
 # annotation. Do not set that annotation manually — the controller
 # populates it.
@@ -11,17 +11,25 @@
 # Create behavior: sync — the WAPI POST returns the new object's `_ref`
 # immediately (HTTP 201), so the default uptest timeout is sufficient.
 #
-# Distinct identity: fqdn uses "zoneauth-example.com", NOT "example.com" —
-# the shared E2E setup script (test/setup.sh) pre-provisions a zone_auth
-# object for "example.com" in the default view out-of-band (as a WAPI
-# parent-zone prerequisite for the DNS record examples), so a ZoneAuth CR
-# also targeting "example.com"/default would collide with that
-# pre-existing object on Create (IB.Data.Conflict).
+# Distinct identity: fqdn uses "zoneauth-${data.runToken}.com", NOT
+# "example.com" — the shared E2E setup script (test/setup.sh)
+# pre-provisions a zone_auth object for "example.com" in the default view
+# out-of-band (as a WAPI parent-zone prerequisite for the DNS record
+# examples), so a ZoneAuth CR also targeting "example.com"/default would
+# collide with that pre-existing object on Create (IB.Data.Conflict).
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (fqdn, view) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which WAPI
+# rejects outright as an invalid DNS label — exactly the pre-isolation
+# behavior this guards against.
 #
 # Required fields:
-#   fqdn: fully-qualified domain name of the zone, e.g. "zoneauth-example.com".
-#         Immutable after creation (CEL rule enforced) — WAPI rejects a PUT
-#         that changes it with "Field is not allowed for update".
+#   fqdn: fully-qualified domain name of the zone, e.g.
+#         "zoneauth-${data.runToken}.com". Immutable after creation (CEL
+#         rule enforced) — WAPI rejects a PUT that changes it with
+#         "Field is not allowed for update".
 #
 # Optional immutable fields: view, zoneFormat (both fixed at creation —
 # WAPI rejects a PUT that changes either: view with "Cannot move zones
@@ -100,7 +108,7 @@ metadata:
         skip: "collection field describing external DNS server topology; not exercised via per-field diff testing"
 spec:
   forProvider:
-    fqdn: zoneauth-example.com
+    fqdn: zoneauth-${data.runToken}.com
     view: default
     comment: Managed by Crossplane
     useGridZoneTimer: true

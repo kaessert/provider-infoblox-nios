@@ -3,16 +3,23 @@
 # namespace-scoped variant used by namespaced (ModernManaged) resources.
 #
 # External name: server-assigned. WAPI returns an opaque `_ref` string
-# (e.g. "zone_forward/ZG5zLnpvbmUk...:forward.example.com/default") from
+# (e.g. "zone_forward/ZG5zLnpvbmUk...:forward-abc1234567.example.com/default") from
 # Create; Crossplane stores it in the crossplane.io/external-name
 # annotation. Do not set that annotation manually — the controller
 # populates it.
 #
-# ${data.runToken}: injected by uptest from the --data-source file (see
-# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
-# NIOS Grid never request the same (view, fqdn) WAPI identity. Left
-# literal ("${data.runToken}") if no datasource is supplied, which is
-# exactly the pre-isolation behavior this guards against.
+# Distinct identity: fqdn is a child of "example.com", the auth zone
+# test/setup.sh pre-provisions in the default view as a shared prerequisite
+# for the DNS record examples. ${data.runToken} is injected by uptest from
+# the --data-source file (see test/e2e/gen-datasource.sh) so concurrent E2E
+# runs never request the same (fqdn, view) WAPI identity — the parent zone
+# itself stays shared and untokenised. Left literal ("${data.runToken}") if
+# no datasource is supplied, which WAPI rejects outright as an invalid DNS
+# label — exactly the pre-isolation behavior this guards against.
+#
+# forwardTo[].address is left literal: the tokenised fqdn above already
+# makes each run's zone unique, so the forwarding targets need no per-run
+# identity of their own.
 #
 # Required fields:
 #   fqdn:      FQDN of the forward zone. Immutable after creation (CEL
