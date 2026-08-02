@@ -2166,3 +2166,29 @@ func TestUpdateTXTRecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateTXTRecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateTXTRecordRefusesWhitespaceUID and
+// TestUpdateTXTRecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateTXTRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createTXTRecord(nil, stringPtr("default"), stringPtr("host.example.com"), stringPtr("v=spf1 -all"), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createTXTRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createTXTRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateTXTRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updateTXTRecord(nil, "record:txt/test1:host.example.com/default", stringPtr("host.example.com"), stringPtr("v=spf1 -all"), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updateTXTRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateTXTRecord: error = %v, want it to mention the empty uid", err)
+	}
+}

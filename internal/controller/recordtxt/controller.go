@@ -437,7 +437,7 @@ func observeFromRecordTXT(externalID string, rec *ibclient.RecordTXT) observedTX
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp).
 func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordTXT, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
@@ -459,7 +459,7 @@ func createTXTRecord(objMgr ibclient.IBObjectManager, view, name, text, comment 
 // object rather than replacing it wholesale. Every call re-asserts the
 // identity stamp (identity.Stamp) so the merge never drops it.
 func updateTXTRecord(objMgr ibclient.IBObjectManager, ref string, name, text, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordTXT, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

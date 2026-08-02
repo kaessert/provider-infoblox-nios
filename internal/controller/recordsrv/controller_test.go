@@ -2231,3 +2231,29 @@ func TestUpdateSRVRecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateSRVRecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateSRVRecordRefusesWhitespaceUID and
+// TestUpdateSRVRecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateSRVRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createSRVRecord(nil, "default", stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), nil, uint32Ptr(10), uint32Ptr(20), uint32Ptr(5060), nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createSRVRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createSRVRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateSRVRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updateSRVRecord(nil, "record:srv/test1:_sip._tcp.example.com/default", stringPtr("_sip._tcp.example.com"), stringPtr("sipserver.example.com"), nil, uint32Ptr(10), uint32Ptr(20), uint32Ptr(5060), nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updateSRVRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateSRVRecord: error = %v, want it to mention the empty uid", err)
+	}
+}

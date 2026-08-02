@@ -452,7 +452,7 @@ func observeFromRecordSRV(externalID string, rec *ibclient.RecordSRV) observedSR
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp).
 func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordSRV, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
@@ -479,7 +479,7 @@ func createSRVRecord(objMgr ibclient.IBObjectManager, view string, name, target,
 // (identity.Stamp) — a WAPI PUT carrying extattrs replaces the whole map,
 // not a per-key merge.
 func updateSRVRecord(objMgr ibclient.IBObjectManager, ref string, name, target, comment *string, priority, weight, port *uint32, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordSRV, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

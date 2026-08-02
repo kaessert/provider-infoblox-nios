@@ -448,7 +448,7 @@ func observeFromRecordPTR(externalID string, rec *ibclient.RecordPTR) observedRe
 // stamp an empty value), and cidr/ipv4Addr/ipv6Addr are mutually
 // exclusive.
 func validatePTRRecordCreateInputs(ipv4Addr, ipv6Addr, cidr *string, uid string) error {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return errors.New(errEmptyUID)
 	}
 	if strOrEmpty(cidr) != "" && (strOrEmpty(ipv4Addr) != "" || strOrEmpty(ipv6Addr) != "") {
@@ -506,7 +506,7 @@ func createPTRRecord(objMgr ibclient.IBObjectManager, ptrdname, name, ipv4Addr, 
 // Every call re-asserts the identity stamp (identity.Stamp) — a WAPI PUT
 // carrying extattrs replaces the whole map, not a per-key merge.
 func updatePTRRecord(objMgr ibclient.IBObjectManager, ref string, ptrdname, name, ipv4Addr, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordPTR, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ipAddr := strOrEmpty(ipv4Addr)

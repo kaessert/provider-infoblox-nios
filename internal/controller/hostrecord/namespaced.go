@@ -2,6 +2,7 @@ package hostrecord
 
 import (
 	"context"
+	"strings"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -278,7 +279,7 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	p := &cr.Spec.ForProvider
 	uid := string(cr.GetUID())
 
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return managed.ExternalCreation{}, errors.New(errEmptyUID)
 	}
 	cf := namespacedCompareFields(p)

@@ -446,7 +446,7 @@ func observeFromRecordAAAA(externalID string, rec *ibclient.RecordAAAA) observed
 // checks a create call requires: uid must be set (identity.Stamp cannot
 // stamp an empty value), and cidr/ipv6Addr are mutually exclusive.
 func validateAAAARecordCreateInputs(ipv6Addr, cidr *string, uid string) error {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return errors.New(errEmptyUID)
 	}
 	if strOrEmpty(cidr) != "" && strOrEmpty(ipv6Addr) != "" {
@@ -503,7 +503,7 @@ func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, com
 // omitting the stamp here would wipe it off the object on the first
 // field update after create.
 func updateAAAARecord(objMgr ibclient.IBObjectManager, ref string, name, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordAAAA, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 

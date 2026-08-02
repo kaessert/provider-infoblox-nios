@@ -454,7 +454,7 @@ func observeFromRecordMX(externalID string, rec *ibclient.RecordMX) observedMXRe
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp).
 func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string, uid string) (*ibclient.RecordMX, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
@@ -483,7 +483,7 @@ func createMXRecord(objMgr ibclient.IBObjectManager, view, name, mailExchanger *
 // identity stamp (identity.Stamp) — a WAPI PUT carrying extattrs
 // replaces the whole map, not a per-key merge.
 func updateMXRecord(objMgr ibclient.IBObjectManager, ref string, view, name, mailExchanger *string, preference *int64, ttl *uint32, useTTL *bool, comment *string, extAttrs map[string]string, uid string) (*ibclient.RecordMX, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

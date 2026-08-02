@@ -2186,3 +2186,29 @@ func TestUpdateCNAMERecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateCNAMERecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateCNAMERecordRefusesWhitespaceUID and
+// TestUpdateCNAMERecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateCNAMERecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createCNAMERecord(nil, stringPtr("alias.example.com"), stringPtr("default"), stringPtr("target.example.com"), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createCNAMERecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createCNAMERecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateCNAMERecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updateCNAMERecord(nil, "record:cname/test1:alias.example.com/default", stringPtr("alias.example.com"), stringPtr("target.example.com"), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updateCNAMERecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateCNAMERecord: error = %v, want it to mention the empty uid", err)
+	}
+}

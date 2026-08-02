@@ -432,7 +432,7 @@ func observeFromRecordCNAME(externalID string, rec *ibclient.RecordCNAME) observ
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp).
 func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordCNAME, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
@@ -453,7 +453,7 @@ func createCNAMERecord(objMgr ibclient.IBObjectManager, name, view, canonical, c
 // WAPI PUT carrying extattrs replaces the whole map, not a per-key
 // merge.
 func updateCNAMERecord(objMgr ibclient.IBObjectManager, ref string, name, canonical, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordCNAME, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

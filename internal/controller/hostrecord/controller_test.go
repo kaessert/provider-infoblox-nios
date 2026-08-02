@@ -2731,3 +2731,54 @@ func TestUpdateHostRecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateHostRecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateHostRecordRefusesWhitespaceUID,
+// TestAllocateNextAvailableHostRecordRefusesWhitespaceUID and
+// TestUpdateHostRecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateHostRecordRefusesWhitespaceUID(t *testing.T) {
+	p := hostRecordCompareFields{
+		Name:      stringPtr("host.example.com"),
+		View:      stringPtr("default"),
+		Ipv4Addrs: []ipv4AddrValue{{Ipv4Addr: "10.0.0.1"}},
+	}
+	_, err := createHostRecord(nil, p, stringPtr("default"), nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createHostRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createHostRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestAllocateNextAvailableHostRecordRefusesWhitespaceUID(t *testing.T) {
+	p := hostRecordCompareFields{
+		Name: stringPtr("host.example.com"),
+		View: stringPtr("default"),
+	}
+	_, err := allocateNextAvailableHostRecord(nil, p, stringPtr("default"), map[string]string{"*key": "val"}, "IPV4", "   ")
+	if err == nil {
+		t.Fatal("allocateNextAvailableHostRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("allocateNextAvailableHostRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateHostRecordRefusesWhitespaceUID(t *testing.T) {
+	p := hostRecordCompareFields{
+		Name:      stringPtr("host.example.com"),
+		View:      stringPtr("default"),
+		Ipv4Addrs: []ipv4AddrValue{{Ipv4Addr: "10.0.0.1"}},
+	}
+	_, err := updateHostRecord(nil, "record:host/test1:host.example.com/default", p, "   ")
+	if err == nil {
+		t.Fatal("updateHostRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateHostRecord: error = %v, want it to mention the empty uid", err)
+	}
+}

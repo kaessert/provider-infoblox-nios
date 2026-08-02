@@ -831,7 +831,7 @@ func validateHostRecordAllocation(p hostRecordCompareFields, ipv4Cidr, ipv6Cidr 
 // parameter — it is immutable, so it is passed here but never again on
 // Update.
 func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView, ipv4Cidr, ipv6Cidr *string, uid string) (*ibclient.HostRecord, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ipv4Addr, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
@@ -872,7 +872,7 @@ func createHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields
 // *ibclient.HostRecord (see ObjectManager.AllocateNextAvailableIp), but
 // the type assertion is still checked defensively.
 func allocateNextAvailableHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFields, networkView *string, filterParams map[string]string, ipAddressType string, uid string) (*ibclient.HostRecord, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	_, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)
@@ -942,7 +942,7 @@ func provisionHostRecord(objMgr ibclient.IBObjectManager, p hostRecordCompareFie
 // identity stamp (identity.Stamp) — a WAPI PUT carrying extattrs replaces
 // the whole map, not a per-key merge.
 func updateHostRecord(objMgr ibclient.IBObjectManager, ref string, p hostRecordCompareFields, uid string) (*ibclient.HostRecord, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ipv4Addr, mac := firstIpv4AddrAndMAC(p.Ipv4Addrs)

@@ -456,7 +456,7 @@ func observeFromRecordAlias(externalID string, rec *ibclient.RecordAlias) observ
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp).
 func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordAlias, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
@@ -489,7 +489,7 @@ func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, 
 // (identity.Stamp) — a WAPI PUT carrying extattrs replaces the whole
 // map, not a per-key merge.
 func updateAliasRecord(conn ibclient.IBConnector, ref string, name, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (string, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return "", errors.New(errEmptyUID)
 	}
 

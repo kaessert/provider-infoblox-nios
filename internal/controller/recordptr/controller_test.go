@@ -2456,3 +2456,29 @@ func TestUpdatePTRRecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updatePTRRecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreatePTRRecordRefusesWhitespaceUID and
+// TestUpdatePTRRecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreatePTRRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createPTRRecord(nil, stringPtr("host.example.com"), nil, stringPtr("10.0.0.1"), nil, stringPtr("default"), nil, nil, nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createPTRRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createPTRRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdatePTRRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updatePTRRecord(nil, "record:ptr/test1:host.example.com/default", stringPtr("host.example.com"), nil, stringPtr("10.0.0.1"), nil, nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updatePTRRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updatePTRRecord: error = %v, want it to mention the empty uid", err)
+	}
+}

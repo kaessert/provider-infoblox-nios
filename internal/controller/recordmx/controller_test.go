@@ -2265,3 +2265,29 @@ func TestUpdateMXRecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateMXRecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateMXRecordRefusesWhitespaceUID and
+// TestUpdateMXRecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateMXRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createMXRecord(nil, stringPtr("default"), stringPtr("example.com"), stringPtr("mail.example.com"), int64Ptr(10), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createMXRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createMXRecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateMXRecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updateMXRecord(nil, "record:mx/test1:example.com/default", stringPtr("default"), stringPtr("example.com"), stringPtr("mail.example.com"), int64Ptr(10), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updateMXRecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateMXRecord: error = %v, want it to mention the empty uid", err)
+	}
+}

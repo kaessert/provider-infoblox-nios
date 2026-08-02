@@ -2486,3 +2486,29 @@ func TestUpdateAAAARecordRefusesEmptyUID(t *testing.T) {
 		t.Errorf("updateAAAARecord: error = %v, want it to mention the empty uid", err)
 	}
 }
+
+// TestCreateAAAARecordRefusesWhitespaceUID and
+// TestUpdateAAAARecordRefusesWhitespaceUID: a whitespace-only uid is not
+// empty by a literal "" comparison, but it is not a usable identity
+// either — the guard must trim before checking, matching the shared
+// identity resolution ladder's own TrimSpace check.
+
+func TestCreateAAAARecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := createAAAARecord(nil, stringPtr("host.example.com"), stringPtr("default"), stringPtr("2001:db8::1"), nil, nil, nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("createAAAARecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("createAAAARecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+func TestUpdateAAAARecordRefusesWhitespaceUID(t *testing.T) {
+	_, err := updateAAAARecord(nil, "record:aaaa/test1:host.example.com/default", stringPtr("host.example.com"), stringPtr("2001:db8::1"), nil, nil, nil, nil, "   ")
+	if err == nil {
+		t.Fatal("updateAAAARecord: expected an error for a whitespace-only uid, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.uid is empty") {
+		t.Errorf("updateAAAARecord: error = %v, want it to mention the empty uid", err)
+	}
+}
