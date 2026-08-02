@@ -10,6 +10,11 @@
 # Distinct identity: the owner name below differs from record-txt.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-txt.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling. text
+# stays literal here too — see record-txt.yaml for why.
 apiVersion: recordtxt.infobloxnios.m.crossplane.io/v1alpha1
 kind: TXTRecord
 metadata:
@@ -38,7 +43,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: txt-ns.example.com
+    name: txt-ns-${data.runToken}.example.com
     text: "v=spf1 -all"
     view: default
     comment: Managed by Crossplane (namespaced)

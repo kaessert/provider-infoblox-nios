@@ -10,6 +10,17 @@
 # Create behavior: sync — the WAPI POST returns the new object's `_ref`
 # immediately (HTTP 200/201), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
+# text is deliberately NOT tokenised: WAPI record:txt uniqueness is keyed
+# on (view, zone, name); the tokenised name already makes the record
+# unique per run, so duplicate text content across concurrent runs is
+# legal.
+#
 # Required fields:
 #   name: owner name in FQDN format. WAPI ties the record's `_ref` to
 #         (view, zone, name); the controller re-syncs the annotation if a
@@ -57,7 +68,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: txt.example.com
+    name: txt-${data.runToken}.example.com
     text: "v=spf1 -all"
     view: default
     comment: Managed by Crossplane

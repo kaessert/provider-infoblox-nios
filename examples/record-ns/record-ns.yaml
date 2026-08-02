@@ -39,6 +39,19 @@
 # zone-apex name here, not a subdomain, and confirm the target zone/view
 # permits manual NS records before applying this example elsewhere.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh). Unlike this provider's other DNS record
+# examples, `name` here CANNOT carry the token: it must be a
+# pre-provisioned Grid zone-apex ("Cannot add a manual NS record" above),
+# so it and `view` are shared context, not identity. `nameserver` is the
+# only tokenisable component of this record's natural key
+# `(name, view, nameserver)` (see nsRecordExistsByNaturalKey's doc
+# comment in internal/controller/recordns/controller.go — (name, view)
+# alone is not unique) and is tokenised here so concurrent runs against
+# the same shared zone-apex/view don't request the same WAPI identity.
+# Left literal ("${data.runToken}") if no datasource is supplied, which
+# is exactly the pre-isolation behavior this guards against.
+#
 # Optional mutable fields: msDelegationName. (addresses can also be
 # changed after creation, but as a list it is not a safe uptest
 # update-parameter target — see the annotation note below.)
@@ -53,17 +66,29 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
     # Runs the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
-    # nameserver is the mutable scalar exercised here. Unlike the other
-    # 25 cataloged resources, NSRecord is NOT wired to the UID-in-EA
-    # identity ladder — record:ns has no extattrs field (live-verified,
-    # WAPI 2.12 _schema), so it keeps the pre-ladder natural-key fallback
-    # on view+name+nameserver instead. nameserver is itself one of that
+    # nameserver is NOT value-tested here even though it is the record's
+    # only mutable field, and that is deliberate: nameserver is part of
+    # this record's natural key (name, view, nameserver) — see the
+    # ${data.runToken} comment above — because name/view are shared
+    # Grid context across every concurrent run of this scope. A literal
+    # update-test value (e.g. "ns2.example.com") would make every
+    # concurrent run's record converge on the same (name, view,
+    # nameserver) triple the instant Update ran: isolation would hold
+    # through Create and break during Update. See the skip reason below.
+    #
+    # Context for that trade-off: unlike the other 25 cataloged
+    # resources, NSRecord is NOT wired to the UID-in-EA identity ladder
+    # — record:ns has no extattrs field (live-verified, WAPI 2.12
+    # _schema), so it keeps the pre-ladder natural-key fallback on
+    # view+name+nameserver instead. nameserver is itself one of that
     # natural key's three components (live-verified by base64-decoding a
     # record:ns _ref: "dns.bind_ns$.<view-id>.<reversed-zone>..<nameserver>"),
-    # so changing it rotates the _ref exactly like the ladder-backed
-    # identity fields on other resources — it is exercised here for the
-    # same reason record-srv exercises priority: to prove the refreshed
-    # external-name annotation persists across the rotation end-to-end.
+    # so changing it rotates the _ref. Skipping it here therefore costs
+    # NSRecord's own end-to-end coverage of external-name refresh across
+    # a _ref rotation; that path remains covered by unit tests and by
+    # the ladder-backed resources' update-tests, which exercise the same
+    # Update()/external-name-refresh code but reach it via the ladder
+    # rather than the natural-key fallback.
     # msDelegationName is skipped — it is the MS delegation point name,
     # only persisted on Microsoft/AD-integrated zones; NIOS silently
     # drops it (HTTP 200, field absent from the response) on ordinary
@@ -72,7 +97,7 @@ metadata:
     # uptest update-parameter note above).
     crossplane.io/update-test: |
       - field: nameserver
-        value: "ns2.example.com"
+        skip: "part of this record's natural key (name, view, nameserver); name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component and must not be set to a shared literal value — doing so would converge every concurrent run onto the same natural key at Update time. Mutability is exercised structurally by every other DNS record's update-test via the shared _ref-rotation-on-update code path (see record-a.yaml's name skip and record-srv.yaml's priority field)"
       - field: msDelegationName
         skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses
@@ -80,7 +105,7 @@ metadata:
 spec:
   forProvider:
     name: peatestinglab.com
-    nameserver: ns1.example.com
+    nameserver: ns1-${data.runToken}.example.com
     addresses:
       - address: 192.0.2.53
         autoCreatePtr: false

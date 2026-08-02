@@ -10,6 +10,16 @@
 # Create behavior: sync — the WAPI POST returns the new object's `_ref`
 # immediately (HTTP 201), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, zone, name) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
+# ipv6Addr is deliberately NOT tokenised: AAAA uniqueness on WAPI is
+# (name, view), not (name, view, ipv6Addr), so duplicate addresses across
+# concurrent runs are legal — only name needs to vary.
+#
 # Required fields:
 #   name:     owner name in FQDN format. WAPI ties the record's `_ref` to
 #             (view, zone, name); the controller re-syncs the annotation
@@ -81,7 +91,7 @@ metadata:
         skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
-    name: www6.example.com
+    name: www6-${data.runToken}.example.com
     ipv6Addr: "2001:db8::10"
     view: default
     comment: Managed by Crossplane
