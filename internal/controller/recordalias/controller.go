@@ -6,6 +6,14 @@
 // DeleteAliasRecord) instead of a generic HTTP request/response envelope,
 // so there is no internal REST client to compose.
 //
+// AliasRecord is wired to the UID-in-EA object-identity ladder (see
+// recorda's package doc for the full rationale): the WAPI _ref this
+// resource's create call returns is a derived handle, not a stable
+// backend-assigned ID, so this controller stamps the managed resource's
+// own metadata.uid onto the Grid object as an extensible attribute and
+// resolves every Observe/Delete through the shared identity.Resolve
+// ladder instead of trusting the stored _ref alone.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
 package recordalias
@@ -29,28 +37,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordalias/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveAliasRec     = "cannot observe AliasRecord"
-	errCreateAliasRecord   = "cannot create AliasRecord"
-	errUpdateAliasRecord   = "cannot update AliasRecord"
-	errDeleteAliasRecord   = "cannot delete AliasRecord"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveAliasRec           = "cannot observe AliasRecord"
+	errCreateAliasRecord         = "cannot create AliasRecord"
+	errUpdateAliasRecord         = "cannot update AliasRecord"
+	errDeleteAliasRecord         = "cannot delete AliasRecord"
+	errEmptyUID                  = "cannot stamp AliasRecord identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -103,24 +119,21 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 	return &nioCredentials{Host: host, Username: username, Password: password}, nil
 }
 
-// newObjectManager constructs an authenticated ibclient.IBObjectManager
-// (and the underlying IBConnector it wraps) from the given credentials.
-// The Connector performs HTTP Basic Auth on every request and only
-// validates configuration locally — no network round-trip happens until
-// the first Observe/Create/Update/Delete call.
-//
-// The raw IBConnector is also returned (alongside the ObjectManager) so
-// Update can issue a partial PUT that omits the immutable `view` field —
-// see updateAliasRecord's doc comment for why the generated
-// UpdateAliasRecord wrapper cannot be used for that.
-func newObjectManager(creds *nioCredentials, sslVerify bool) (ibclient.IBObjectManager, ibclient.IBConnector, error) {
+// newObjectManager constructs an authenticated
+// identity.ManagerAndConnector from the given credentials — the SDK's
+// high-level ObjectManager for the ordinary CRUD calls, and the
+// lower-level Connector both the identity ladder and Update's
+// hand-built partial PUT need directly (see updateAliasRecord's doc
+// comment for why the generated UpdateAliasRecord wrapper cannot be
+// used).
+func newObjectManager(creds *nioCredentials, sslVerify bool) (identity.ManagerAndConnector, error) {
 	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
 }
 
 // newObjectManagerWithScheme is the scheme/port-parameterized variant of
 // newObjectManager used by unit tests to point the SDK at a plain-HTTP
 // httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBObjectManager, ibclient.IBConnector, error) {
+func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
 	hostConfig := ibclient.HostConfig{
 		Scheme:  scheme,
 		Host:    creds.Host,
@@ -150,10 +163,10 @@ func newObjectManagerWithScheme(creds *nioCredentials, sslVerify bool, scheme, p
 		&ibclient.WapiHttpRequestor{},
 	)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, errNewObjectManager)
+		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
 	}
 
-	return ibclient.NewObjectManager(conn, "", ""), conn, nil
+	return identity.NewManagerAndConnector(conn), nil
 }
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
@@ -320,7 +333,7 @@ func isUpToDate(name, targetName, targetType, comment *string, disable *bool, tt
 			return false
 		}
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -357,7 +370,7 @@ func lateInitialize(comment **string, disable **bool, ttl **uint32, useTTL **boo
 		changed = true
 	}
 	if len(*extAttrs) == 0 {
-		if fromRec := extAttrsFromEA(rec.Ea); len(fromRec) > 0 {
+		if fromRec := extAttrsFromEA(identity.Strip(rec.Ea)); len(fromRec) > 0 {
 			*extAttrs = fromRec
 			changed = true
 		}
@@ -439,8 +452,14 @@ func observeFromRecordAlias(externalID string, rec *ibclient.RecordAlias) observ
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
-// createAliasRecord issues the WAPI create call.
-func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string) (*ibclient.RecordAlias, error) {
+// createAliasRecord issues the WAPI create call, stamping the owning
+// managed resource's uid into the object's extensible attributes in the
+// same request that creates it (identity.Stamp).
+func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (*ibclient.RecordAlias, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 	return objMgr.CreateAliasRecord(
 		strOrEmpty(name),
 		strOrEmpty(view),
@@ -448,7 +467,7 @@ func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, 
 		strOrEmpty(targetType),
 		strOrEmpty(comment),
 		boolOrFalse(disable),
-		buildEA(extAttrs),
+		ea,
 		uint32OrZero(ttl),
 		boolOrFalse(useTTL),
 	)
@@ -466,14 +485,21 @@ func createAliasRecord(objMgr ibclient.IBObjectManager, name, view, targetName, 
 // Building the RecordAlias payload by hand (leaving View nil, which the
 // `omitempty` JSON tag then drops) and issuing the PUT directly through
 // the IBConnector this ObjectManager wraps is the only way to honor that
-// contract with this SDK.
-func updateAliasRecord(conn ibclient.IBConnector, ref string, name, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string) (string, error) {
+// contract with this SDK. Every call re-asserts the identity stamp
+// (identity.Stamp) — a WAPI PUT carrying extattrs replaces the whole
+// map, not a per-key merge.
+func updateAliasRecord(conn ibclient.IBConnector, ref string, name, targetName, targetType, comment *string, disable *bool, ttl *uint32, useTTL *bool, extAttrs map[string]string, uid string) (string, error) {
+	if uid == "" {
+		return "", errors.New(errEmptyUID)
+	}
+
 	n := strOrEmpty(name)
 	tn := strOrEmpty(targetName)
 	c := strOrEmpty(comment)
 	d := boolOrFalse(disable)
 	t := uint32OrZero(ttl)
 	u := boolOrFalse(useTTL)
+	ea := identity.Stamp(buildEA(extAttrs), uid)
 
 	rec := &ibclient.RecordAlias{
 		Name:       &n,
@@ -483,7 +509,7 @@ func updateAliasRecord(conn ibclient.IBConnector, ref string, name, targetName, 
 		Disable:    &d,
 		Ttl:        &t,
 		UseTtl:     &u,
-		Ea:         buildEA(extAttrs),
+		Ea:         ea,
 	}
 
 	return conn.UpdateObject(rec, ref)
@@ -495,75 +521,112 @@ func deleteAliasRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// aliasRecordExistsByNaturalKey reports whether a live AliasRecord still
-// exists under the CR's own (view, name, targetName, targetType)
-// identity — the same tuple WAPI uses to compute the _ref. The full
-// four-field tuple is required (not merely name+view) because
-// name+view alone is not unique for this resource: multiple AliasRecord
-// objects can share the same name and view while pointing at different
-// targets. Used by Delete() when the stored _ref 404s: a hit here means
-// the _ref is merely stale, not that the object is gone. AliasRecord has
-// no single-object natural-key getter, so this issues the search
-// directly through the raw connector with a server-side query filter and
-// answers from the match count.
-//
-// This deliberately bypasses ibclient.IBObjectManager.GetAllAliasRecord:
-// that method re-wraps a genuinely empty result with
-// fmt.Errorf("failed getting Alias Record: %s", err), which flattens the
-// SDK's typed *ibclient.NotFoundError into a plain string no classifier
-// can unwrap — isNotFound would then see neither a typed error nor an
-// HTTP status code in the message and misreport a clean "nothing
-// matched" result as a hard error. Calling conn.GetObject directly lets
-// the SDK's connector return the *ibclient.NotFoundError unwrapped, so
-// isNotFound classifies it correctly.
-//
-// All four fields are required non-empty; when any is missing there is
-// no way to re-discover the object, so the search is skipped
-// (found=false) rather than treated as an error.
-func aliasRecordExistsByNaturalKey(conn ibclient.IBConnector, view, name, targetName, targetType *string) (bool, error) {
-	if strOrEmpty(view) == "" || strOrEmpty(name) == "" || strOrEmpty(targetName) == "" || strOrEmpty(targetType) == "" {
-		return false, nil
-	}
-	sf := map[string]string{
-		"view":        strOrEmpty(view),
-		"name":        strOrEmpty(name),
-		"target_name": strOrEmpty(targetName),
-		"target_type": strOrEmpty(targetType),
-	}
-	var res []ibclient.RecordAlias
-	err := conn.GetObject(ibclient.NewEmptyAliasRecord(), "", ibclient.NewQueryParams(false, sf), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteAliasRecordResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the
-// handle rotated, not evidence the object was removed: if the
-// natural-key search still finds a live alias record, deleting is
-// refused because ownership of that record cannot be verified from the
-// search alone (see the staleref package doc for the full rationale).
-func deleteAliasRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, view, name, targetName, targetType *string) error {
-	delErr := deleteAliasRecord(objMgr, ref)
-	if delErr == nil {
-		return nil
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteAliasRecord)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := aliasRecordExistsByNaturalKey(conn, view, name, targetName, targetType)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteAliasRecord)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveAliasRecordIdentity resolves through the shared UID-in-EA
+// ladder. The newEmpty constructor is ibclient.NewEmptyAliasRecord — NOT
+// the naming-convention-matching NewEmptyRecordAlias, which does not
+// exist in this SDK.
+func resolveAliasRecordIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.RecordAlias, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.RecordAlias](ctx, conn, ibclient.NewEmptyAliasRecord, ref, uid)
+}
+
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.RecordAlias
+	obs          observedAliasRecord
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+func observeAliasRecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, disable **bool, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveAliasRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromRecordAlias(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, disable, ttl, useTTL, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+func deleteAliasRecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveAliasRecordIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteAliasRecord)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteAliasRecord(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteAliasRecord)
+	default:
+		return errors.New("identity: unresolved AliasRecord outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────
