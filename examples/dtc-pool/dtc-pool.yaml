@@ -45,13 +45,11 @@ metadata:
     # disable, useTtl, and ttl are the mutable scalars exercised here.
     # lbPreferredMethod moves to ALL_AVAILABLE and lbAlternateMethod to
     # ROUND_ROBIN — both need no companion topology/dynamic-ratio settings
-    # (unlike TOPOLOGY or DYNAMIC_RATIO). ALL_AVAILABLE replaces an
-    # earlier SOURCE_IP_HASH target: the generated CRD schema lists
-    # SOURCE_IP_HASH as a legal lb_preferred_method enum value, but a
-    # live-Grid WAPI update rejected it with 400 ("valid values are:
-    # GLOBAL_AVAILABILITY, RATIO, ROUND_ROBIN, TOPOLOGY, ALL_AVAILABLE,
-    # DYNAMIC_RATIO") — this Grid's WAPI version does not accept it for
-    # this field, so ALL_AVAILABLE is used instead. availability moves to
+    # (unlike TOPOLOGY or DYNAMIC_RATIO). ALL_AVAILABLE is used because the
+    # live Grid's WAPI does not accept SOURCE_IP_HASH for lb_preferred_method
+    # ("valid values are: GLOBAL_AVAILABILITY, RATIO, ROUND_ROBIN, TOPOLOGY,
+    # ALL_AVAILABLE, DYNAMIC_RATIO"); the CRD's lbPreferredMethod enum
+    # matches that same set and does not offer SOURCE_IP_HASH. availability moves to
     # ANY, not QUORUM: a live-Grid WAPI update confirmed QUORUM requires
     # the pool to already have at least one associated health monitor
     # ("Pool ... contains only 0 effective monitors but requires at least
