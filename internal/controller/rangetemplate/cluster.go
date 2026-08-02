@@ -207,7 +207,7 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.Range
 	// be reported up to date — see observeResult.adopted — so the next
 	// reconcile is guaranteed to call Update, which always re-asserts the
 	// identity stamp (see updateRangeTemplate).
-	upToDate := isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), p.CloudApiCompatible, rec) && !res.adopted
+	upToDate := isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), rec) && !res.adopted
 
 	return managed.ExternalObservation{
 		ResourceExists:          true,
@@ -229,7 +229,7 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.RangeT
 	}
 
 	p := cr.Spec.ForProvider
-	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, uid)
+	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), p.MsServer, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateRangeTemplate)
 	}
@@ -245,7 +245,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.RangeT
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, string(cr.GetUID()))
+	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, clusterOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, clusterMemberToCommon(p.Member), p.MsServer, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateRangeTemplate)
 	}

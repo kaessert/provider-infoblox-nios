@@ -225,7 +225,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
-	upToDate := isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, rec) && !res.adopted
+	upToDate := isUpToDate(p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), rec) && !res.adopted
 
 	return managed.ExternalObservation{
 		ResourceExists:          true,
@@ -247,7 +247,7 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	p := cr.Spec.ForProvider
-	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, uid)
+	rec, err := createRangeTemplate(e.objMgr, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.MsServer, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateRangeTemplate)
 	}
@@ -263,7 +263,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.CloudApiCompatible, p.MsServer, string(cr.GetUID()))
+	rec, err := updateRangeTemplate(e.objMgr, externalID, p.Name, p.NumberOfAddresses, p.Offset, p.Comment, p.ExtAttrs, namespacedOptionsToCommon(p.Options), p.UseOptions, p.ServerAssociationType, p.FailoverAssociation, namespacedMemberToCommon(p.Member), p.MsServer, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateRangeTemplate)
 	}

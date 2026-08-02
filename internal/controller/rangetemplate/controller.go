@@ -450,7 +450,14 @@ func isNotFound(err error) bool {
 // shaped ms_server.ipv4addr response field, so it is never echoed back
 // into AtProvider and cannot be verified for drift — see
 // RangeTemplateParameters.MsServer's doc comment.
-func isUpToDate(name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, rec *ibclient.Rangetemplate) bool {
+//
+// cloudApiCompatible is intentionally excluded from spec comparison — see
+// createRangeTemplate's doc comment for why the wire value is always
+// true regardless of what the caller supplied. The comparison target is
+// therefore the constant true, not the spec value, so a Grid object
+// toggled back to cloud-incompatible out-of-band (e.g. via Grid Manager)
+// is still detected as drift and self-heals through Update.
+func isUpToDate(name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, rec *ibclient.Rangetemplate) bool {
 	if strOrEmpty(name) != strOrEmpty(rec.Name) {
 		return false
 	}
@@ -489,7 +496,7 @@ func isUpToDate(name *string, numberOfAddresses, offset *uint32, comment *string
 	if !memberEqual(member, dhcpMemberToCommon(rec.Member)) {
 		return false
 	}
-	return boolOrFalse(cloudApiCompatible) == boolPtrOrFalse(rec.CloudApiCompatible)
+	return boolPtrOrFalse(rec.CloudApiCompatible)
 }
 
 // lateInitialize back-fills server-defaulted optional fields into spec so
@@ -668,12 +675,34 @@ func observeFromRangeTemplate(externalID string, rec *ibclient.Rangetemplate) ob
 
 // ── SDK call wrappers (shared by both scopes) ───────────────────────────
 
+// wapiCloudAPICompatible is the literal value this controller always
+// sends on the wire for a RangeTemplate's cloud_api_compatible field,
+// regardless of what the caller's spec supplied.
+//
+// The identity extensible attribute this controller stamps on every
+// Create and Update (identity.Stamp) is itself cloud-API-compatible —
+// its definition carries the "C" flag. A Grid enforces a matching
+// constraint on template-family objects: it refuses to attach a
+// cloud-compatible extensible attribute to a cloud-incompatible template
+// object ("Cloud-incompatible template object ... references extensible
+// attribute Crossplane Internal ID that is cloud-compatible"). Because
+// the identity stamp is unconditional — every RangeTemplate this
+// provider manages carries it — every RangeTemplate this provider
+// manages must therefore also be cloud-API-compatible. There is no way
+// to satisfy both "always stamp identity" and "respect an explicit
+// cloud_api_compatible=false" at once, so this field is effectively
+// provider-owned once a resource is under management: the wire value is
+// always true, and isUpToDate compares the Grid's observed value against
+// that same constant rather than against whatever the spec says.
+const wapiCloudAPICompatible = true
+
 // createRangeTemplate issues the WAPI create call, stamping the owning
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp) — there is no follow-up
 // call, so there is no window in which the object exists without its
-// identity stamp.
-func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
+// identity stamp. cloud_api_compatible is always sent as true — see
+// wapiCloudAPICompatible's doc comment for why.
+func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
 	if uid == "" {
 		return nil, errors.New(errEmptyUID)
 	}
@@ -689,7 +718,7 @@ func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOf
 		serverAssociationType,
 		strOrEmpty(failoverAssociation),
 		buildDhcpMember(member),
-		boolOrFalse(cloudApiCompatible),
+		wapiCloudAPICompatible,
 		strOrEmpty(msServer),
 	)
 }
@@ -702,8 +731,11 @@ func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOf
 // verification against a real NIOS Grid Manager confirmed that a PUT
 // carrying an extattrs object *replaces* the whole map — it is not a
 // per-key merge — so omitting the stamp here would wipe it off the
-// object on the very first field update after create.
-func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, cloudApiCompatible *bool, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
+// object on the very first field update after create. cloud_api_compatible
+// is always sent as true — see wapiCloudAPICompatible's doc comment for
+// why; this also self-heals an object adopted from before this provider
+// managed it, or one toggled cloud-incompatible out-of-band.
+func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
 	if uid == "" {
 		return nil, errors.New(errEmptyUID)
 	}
@@ -720,7 +752,7 @@ func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *stri
 		serverAssociationType,
 		strOrEmpty(failoverAssociation),
 		buildDhcpMember(member),
-		boolOrFalse(cloudApiCompatible),
+		wapiCloudAPICompatible,
 		strOrEmpty(msServer),
 	)
 }

@@ -37,7 +37,7 @@ func TestNamespacedObserveResolvedUpToDate(t *testing.T) {
 	defer srv.Close()
 	mc := newTestClient(t, srv)
 
-	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5)}
+	rec := &ibclient.Rangetemplate{Name: stringPtr("test-template"), NumberOfAddresses: uint32Ptr(10), Offset: uint32Ptr(5), CloudApiCompatible: boolPtr(true)}
 	rec.Ea = identity.Stamp(nil, testUIDNamespaced)
 	ref := m.seed(rec)
 
