@@ -122,6 +122,13 @@ UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-pre
 # "default" network view inline, so no NetworkView prerequisite manifest is
 # prepended here — same pattern as UPTEST_MANIFESTS_NETWORK above.
 UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml
+# IPv6 variant of NetworkContainer — WAPI resolves this to the
+# ipv6networkcontainer object type at runtime instead of networkcontainer.
+# Kept as a separate target (not folded into
+# UPTEST_MANIFESTS_NETWORK_CONTAINER/e2e.network-container) so a regression
+# on either address family fails independently. Core tier: needs only NIOS
+# Grid Manager API credentials, same as its IPv4 sibling.
+UPTEST_MANIFESTS_NETWORK_CONTAINER_V6 := examples/network-container/network-container-v6.yaml,examples/network-container/network-container-v6-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 # FixedAddress's AllocateIP call unconditionally requires an existing
 # parent Network object covering the address (unlike HostRecord, which
@@ -142,6 +149,14 @@ UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,exa
 # BEFORE its own range.yaml/range-namespaced.yaml, so uptest creates it
 # first (IN-ISO-IPAM-PREREQ fix; address plan: IN-ISO-IPAM-PLAN).
 UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml
+# IPv6 variant of FixedAddress — WAPI resolves this to the
+# ipv6fixedaddress object type at runtime instead of fixedaddress. Kept as
+# a separate target (not folded into UPTEST_MANIFESTS_FIXED_ADDRESS/
+# e2e.fixed-address) so a regression on either address family fails
+# independently. Requires a parent ipv6network covering
+# 2001:db8:e2e6:5::/64 to exist first (see fixed-address-v6.yaml's
+# prerequisite note).
+UPTEST_MANIFESTS_FIXED_ADDRESS_V6 := examples/fixed-address/fixed-address-v6.yaml,examples/fixed-address/fixed-address-v6-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
@@ -157,7 +172,7 @@ UPTEST_MANIFESTS_DTC_LBDN := examples/dtc-lbdn/dtc-lbdn.yaml,examples/dtc-lbdn/d
 # IPv4SharedNetwork, FixedAddress, Range, DTCServer, DTCPool, DTCLBDN,
 # NSRecord, and ExtensibleAttributeDef. DTCPool and DTCLBDN need no external
 # prerequisites — their `servers`/`pools`/`authZones` fields are optional.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_NETWORK_V6),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_NETWORK_V6),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_FIXED_ADDRESS_V6),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -291,11 +306,18 @@ e2e.ipv4-shared-network: e2e
 
 e2e.network-container: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER)
 e2e.network-container: e2e
+
+e2e.network-container-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6)
+e2e.network-container-v6: e2e
+
 e2e.zone-forward: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_FORWARD)
 e2e.zone-forward: e2e
 
 e2e.fixed-address: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS)
 e2e.fixed-address: e2e
+
+e2e.fixed-address-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS_V6)
+e2e.fixed-address-v6: e2e
 e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
 e2e.range: e2e
 e2e.dtc-server: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_SERVER)
@@ -320,7 +342,7 @@ e2e-full: e2e-preflight e2e
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
 local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.network-v6 e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.fixed-address e2e.zone-forward e2e.range e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
+.PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.network-v6 e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.network-container-v6 e2e.fixed-address e2e.fixed-address-v6 e2e.zone-forward e2e.range e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)

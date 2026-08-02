@@ -1,0 +1,126 @@
+# FixedAddress (IPv6 variant) is a cluster-scoped Infoblox NIOS DHCP fixed
+# address backed by ipv6addr (WAPI object type "ipv6fixedaddress"). See
+# fixed-address.yaml for the IPv4 variant and full field documentation, and
+# fixed-address-v6-namespaced.yaml for the namespace-scoped IPv6 variant —
+# this file only documents what differs.
+#
+# WAPI models IPv4 and IPv6 fixed addresses as distinct object types
+# ("fixedaddress" vs "ipv6fixedaddress"). The controller selects the object
+# type at runtime from whichever of ipv4addr/ipv6addr is set (see
+# newEmptyFixedAddress and fixedAddressFields.isIPv6 in the controller), so
+# this example is the standing gate that exercises the
+# "ipv6fixedaddress" code path — fixed-address.yaml alone never reaches it.
+# This mirrors the identity guard already proven for Network
+# (examples/network/network-v6.yaml) and NetworkContainer
+# (examples/network-container/network-container-v6.yaml).
+#
+# PREREQUISITE NOT CREATED BY THIS EXAMPLE: like the IPv4 sibling, WAPI's
+# AllocateIP call unconditionally requires a parent Network object covering
+# the address (see fixed-address.yaml's ipv4addr field doc) — for an IPv6
+# address this means a real "ipv6network" object covering
+# 2001:db8:e2e6:5::/64 must already exist on the Grid before this example's
+# Create can succeed. This example does NOT provision that network itself
+# (mirroring how fixed-address.yaml relies on test/setup.sh's prior
+# creation of 10.0.0.0/24 rather than inventing a Network resource inline).
+# The IPv6 equivalent has not been added to test/setup.sh by this ticket —
+# a live E2E run of this example requires that prerequisite to be bundled
+# in first (either into test/setup.sh or into this resource's e2e target).
+#
+# CIDR: uses the IPv6 documentation range reserved by RFC 3849
+# (2001:db8::/32), distinct from every other IPv6 example's sub-block
+# (network-v6: ::1/::2, network-container-v6: ::3, network-container-v6
+# namespaced: ::4) so it can be applied to the same Grid without colliding
+# on a pre-existing (network_view, network) identity.
+#
+# DUID / KNOWN CONTROLLER LIMITATION: for an IPv6 fixed address, WAPI's
+# AllocateIP call rejects an empty `mac` value — for this address family the
+# field carries the DHCP Unique Identifier (DUID), not a MAC address, and it
+# is REQUIRED. However, the fixed address search/read call the controller
+# issues for an ipv6fixedaddress object only ever requests the WAPI `duid`
+# field back, never `mac` — so the value this example sets in `mac` can
+# never be confirmed as matching by a subsequent read, and the reconciler's
+# up-to-date comparison (which reads back `mac`, not `duid`) never
+# converges. This is a real, code-verified controller gap independent of
+# this example (any IPv6 FixedAddress hits it, since the DUID is mandatory)
+# — it is being tracked and fixed separately, not addressed by this
+# manifest. Until that fix lands, a live run of this example is expected to
+# fail the post-Create convergence check with a perpetual Update loop; this
+# example still documents the intended shape so the gate is ready the
+# moment the underlying fix merges.
+#
+# The assertion that makes this example meaningful once the above is fixed:
+# the post-assert hook (crossplane.io/expect-external-name-prefix below)
+# checks that the resolved crossplane.io/external-name annotation is
+# prefixed "ipv6fixedaddress/", not merely that the resource reaches Ready.
+# A resource that was silently created against the wrong object type would
+# still reach Ready — only the external-name prefix reveals it.
+apiVersion: fixedaddress.infobloxnios.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-v6
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # fixed-address.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address-v6.sh
+    # The dual-object-type identity guard — see the file header. The
+    # generic post-assert hook (test/hooks/run-update-tester.sh) reads
+    # this annotation and, when present, runs
+    # `update-tester check-external-name-prefix` right after Create,
+    # before the per-field update tests below.
+    crossplane.io/expect-external-name-prefix: "ipv6fixedaddress/"
+    # comment and name are the only mutable scalars exercised here — a
+    # narrower set than fixed-address.yaml's IPv4 sibling. mac (the
+    # required DUID for IPv6) is skipped from value-testing because the
+    # controller's read path for ipv6fixedaddress never confirms it back
+    # (see the DUID / KNOWN CONTROLLER LIMITATION note in the file header);
+    # testing an update on a field that can never be observed as converged
+    # would only mask that gap rather than exercise it. matchClient,
+    # disable, useOptions, agentCircuitId, agentRemoteId,
+    # clientIdentifierPrependZero, dhcpClientIdentifier, and options are
+    # all skipped for the same reason one level further: the controller's
+    # search/read call for ipv6fixedaddress requests a narrower field set
+    # than for fixedaddress (mirrors the mac/duid gap) and never confirms
+    # these back either, so testing them here would also never converge.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6)"
+      - field: name
+        value: "updated-fixed-address-v6"
+      - field: mac
+        skip: "required DUID for IPv6, but the controller's ipv6fixedaddress read path never confirms this field back (see the file header) — value-testing it cannot converge until that is fixed"
+      - field: matchClient
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: disable
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: useOptions
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: ipv4addr
+        skip: "mutually exclusive with ipv6addr; this example uses ipv6addr"
+      - field: ipv6addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+      - field: networkView
+        skip: "only safely mutable prior to first apply per fixed-address.yaml's field documentation; not exercised post-create"
+      - field: network
+        skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv6addr"
+      - field: agentCircuitId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: agentRemoteId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: dhcpClientIdentifier
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: clientIdentifierPrependZero
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target; also subject to the same read-path gap as the other DHCP-relay fields"
+spec:
+  forProvider:
+    ipv6addr: 2001:db8:e2e6:5::50
+    mac: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:55"
+    networkView: default
+    comment: Managed by Crossplane (IPv6)
+  providerConfigRef:
+    name: default

@@ -1,0 +1,71 @@
+# FixedAddress (IPv6 variant) is the namespace-scoped variant of the
+# Infoblox NIOS DHCP fixed address. See fixed-address-v6.yaml for the
+# cluster-scoped variant, the dual-object-type rationale, and the DUID /
+# known controller limitation note — this file only documents what
+# differs.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+#
+# Distinct identity: the address below differs from fixed-address-v6.yaml's
+# so both examples can be applied to the same NIOS Grid Manager at once
+# without colliding on the same address. Both share the same parent
+# 2001:db8:e2e6:5::/64 network (see fixed-address-v6.yaml's prerequisite
+# note) — mirroring how fixed-address.yaml and fixed-address-namespaced.yaml
+# share the IPv4 prerequisite network 10.0.0.0/24.
+apiVersion: fixedaddress.infobloxnios.m.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-v6-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-fixed-address-v6-namespaced.sh
+    # See fixed-address-v6.yaml for the dual-object-type guard rationale.
+    crossplane.io/expect-external-name-prefix: "ipv6fixedaddress/"
+    # See fixed-address-v6.yaml for the field coverage rationale.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6, namespaced)"
+      - field: name
+        value: "updated-fixed-address-v6-ns"
+      - field: mac
+        skip: "required DUID for IPv6, but the controller's ipv6fixedaddress read path never confirms this field back (see fixed-address-v6.yaml's file header) — value-testing it cannot converge until that is fixed"
+      - field: matchClient
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: disable
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: useOptions
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: ipv4addr
+        skip: "mutually exclusive with ipv6addr; this example uses ipv6addr"
+      - field: ipv6addr
+        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+      - field: networkView
+        skip: "only safely mutable prior to first apply per fixed-address.yaml's field documentation; not exercised post-create"
+      - field: network
+        skip: "only meaningful for dynamic CIDR allocation; this example uses a literal ipv6addr"
+      - field: agentCircuitId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: agentRemoteId
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: dhcpClientIdentifier
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: clientIdentifierPrependZero
+        skip: "the controller's ipv6fixedaddress read path never confirms this field back (see the mac field's skip rationale above) — value-testing it cannot converge"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: options
+        skip: "list field of DHCP option structs, not a scalar update-test target; also subject to the same read-path gap as the other DHCP-relay fields"
+spec:
+  forProvider:
+    ipv6addr: 2001:db8:e2e6:5::51
+    mac: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:66"
+    networkView: default
+    comment: Managed by Crossplane (IPv6, namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
