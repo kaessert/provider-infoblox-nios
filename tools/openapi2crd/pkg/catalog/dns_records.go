@@ -1058,6 +1058,18 @@ func nsRecord() ResourceDescriptor {
 	}
 }
 
+// ptrRecord describes PTRRecord.
+//
+// `ptrdname` carries the standard three-field cross-resource reference
+// pattern (value + Ref + Selector) targeting ARecord: WAPI accepts any FQDN
+// value for the PTR target and does not verify that a matching ARecord
+// exists in NIOS, so the Ref/Selector fields are optional convenience —
+// users may still set `ptrdname` directly as a plain FQDN string without
+// ever populating PtrdnameRef/PtrdnameSelector. TargetScope is left empty
+// so the generator mirrors the PTRRecord variant's own scope (cluster
+// PTRRecord references cluster ARecord; namespaced PTRRecord references
+// namespaced ARecord) rather than pinning to a single scope, since ARecord
+// itself is dual-scope.
 func ptrRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "PTRRecord",
@@ -1074,9 +1086,8 @@ func ptrRecord() ResourceDescriptor {
 				Required:    true,
 				Description: "Domain name this PTR record points to, in FQDN format. Changing it updates the record's _ref (best-effort target — WAPI does not verify that the referenced A/AAAA record exists).",
 				Reference: &ReferenceDescriptor{
-					TargetKind:  "ARecord",
-					TargetSlug:  "recorda",
-					TargetScope: "namespaced",
+					TargetKind: "ARecord",
+					TargetSlug: "recorda",
 				},
 			},
 			{
