@@ -466,10 +466,16 @@ func optionsToNamespaced(opts []sharedNetworkDhcpOption) []*namespacedv1alpha1.I
 
 // ── networks (CIDR list) translation ────────────────────────────────────
 
-// networksFromSDK extracts the member-network CIDR/ref strings from the
-// SDK's []*ibclient.Ipv4Network response. SharedNetwork.UnmarshalJSON only
+// networksFromSDK extracts the member-network CIDRs from the SDK's
+// []*ibclient.Ipv4Network response. SharedNetwork.UnmarshalJSON only
 // populates each entry's Ref field from the wire "_ref" value — no other
-// Ipv4Network fields are ever present on a GET response.
+// Ipv4Network fields are ever present on a GET response — and on a real
+// Grid that Ref is a full WAPI object reference (e.g.
+// "network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default"),
+// not the plain CIDR spec.forProvider.networks holds. cidrFromNetworkRef
+// normalizes each entry back to a plain CIDR so the result is
+// like-for-like comparable (isUpToDate) and mirror-safe
+// (observeFromIPv4SharedNetwork/AtProvider) against the desired list.
 func networksFromSDK(networks []*ibclient.Ipv4Network) []string {
 	if len(networks) == 0 {
 		return nil
@@ -479,9 +485,30 @@ func networksFromSDK(networks []*ibclient.Ipv4Network) []string {
 		if n == nil {
 			continue
 		}
-		out = append(out, n.Ref)
+		out = append(out, cidrFromNetworkRef(n.Ref))
 	}
 	return out
+}
+
+// cidrFromNetworkRef extracts the plain CIDR embedded in a WAPI network
+// object's _ref string. A real Grid _ref for a network object has the
+// form "network/<opaque base64 identity>:<cidr>/<network view>" — the
+// CIDR is the first path segment of the human-readable portion after the
+// ':' delimiter, and the network view is the (possibly multi-segment)
+// remainder. If ref does not carry that delimiter — e.g. it is already a
+// plain CIDR, as set by the SDK's own Create/Update request wrapper
+// before a server response overwrites it — ref is returned unchanged
+// rather than mangled or dropped.
+func cidrFromNetworkRef(ref string) string {
+	idx := strings.Index(ref, ":")
+	if idx < 0 || idx == len(ref)-1 {
+		return ref
+	}
+	parts := strings.SplitN(ref[idx+1:], "/", 3)
+	if len(parts) < 2 {
+		return ref
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 // ── Field comparison / late-init ────────────────────────────────────────

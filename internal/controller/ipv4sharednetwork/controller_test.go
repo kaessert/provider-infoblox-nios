@@ -119,6 +119,13 @@ func newNamespacedSharedNetwork(ns, crName, externalName, pcKind string) *namesp
 // networks as bare strings itself (see wireSharedNetwork below) and never
 // invokes ibclient.SharedNetwork's (de)serialization for the "networks"
 // field.
+//
+// Networks holds plain CIDRs — what the client SDK actually sends on
+// Create/Update — but toWire renders each one as a realistic WAPI object
+// _ref ("network/<opaque id>:<cidr>/<view>") for GET responses, matching
+// what a real Grid returns. A mock that echoed the plain CIDR straight
+// back as the wire "_ref" would let the controller's CIDR-vs-ref
+// comparison bug pass unnoticed (see cidrFromNetworkRef).
 type storedSharedNetwork struct {
 	Ref         string
 	Name        *string
@@ -193,10 +200,23 @@ type wireSharedNetwork struct {
 	Options     []*ibclient.Dhcpoption `json:"options,omitempty"`
 }
 
+// networkMemberRef renders a plain CIDR as a realistic WAPI network
+// object _ref — "network/<opaque id>:<cidr>/<view>" — the shape a real
+// Grid GET response uses. idx only feeds the opaque id portion so
+// distinct member networks get distinct (fake) identities; it carries no
+// meaning beyond that.
+func networkMemberRef(cidr, networkView string, idx int) string {
+	view := networkView
+	if view == "" {
+		view = "default"
+	}
+	return "network/testnetref" + itoa(idx) + ":" + cidr + "/" + view
+}
+
 func toWire(sn *storedSharedNetwork) wireSharedNetwork {
 	nets := make([]wireNetworkRef, 0, len(sn.Networks))
-	for _, n := range sn.Networks {
-		nets = append(nets, wireNetworkRef{Ref: n})
+	for i, n := range sn.Networks {
+		nets = append(nets, wireNetworkRef{Ref: networkMemberRef(n, sn.NetworkView, i)})
 	}
 	return wireSharedNetwork{
 		Ref:         sn.Ref,
@@ -872,6 +892,108 @@ func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
 
 	if !isUpToDate(stringPtr("test-shared-network"), []string{"10.0.0.0/24"}, nil, nil, nil, nil, nil, sn) {
 		t.Fatal("expected isUpToDate to ignore the identity EA when spec.extAttrs is empty")
+	}
+}
+
+// ── networks CIDR-vs-ref comparison (reconciliation loop regression) ─────
+//
+// Live evidence: a WAPI GET response's networks[].Ref is a full object
+// reference, e.g.
+// "network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default",
+// never the plain CIDR spec.forProvider.networks holds
+// ("100.64.116.64/28"). Comparing them directly made isUpToDate return
+// false on every reconcile regardless of actual drift.
+
+func TestCidrFromNetworkRefParsesWapiRef(t *testing.T) {
+	cases := map[string]string{
+		"network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default":                  "100.64.116.64/28",
+		"network/ZG5zLm5ldHdvcmskMTkyLjE2OC4wLjAvMjQvbm9uZGVmYXVsdA:192.168.0.0/24/non-default-view": "192.168.0.0/24",
+		// Already a plain CIDR (e.g. the SDK's own request-wrapper value
+		// before a server response overwrites it) — returned unchanged.
+		"10.0.0.0/24": "10.0.0.0/24",
+		// Malformed/legacy shapes fall back to the raw value rather than
+		// silently collapsing to an empty string.
+		"network/onlyid": "network/onlyid",
+		"":               "",
+	}
+	for ref, want := range cases {
+		if got := cidrFromNetworkRef(ref); got != want {
+			t.Errorf("cidrFromNetworkRef(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+func TestIsUpToDateConvergesOnRefVsCidrMismatch(t *testing.T) {
+	sn := &ibclient.SharedNetwork{
+		Name: stringPtr("test-shared-network"),
+		Networks: []*ibclient.Ipv4Network{
+			{Ref: "network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default"},
+		},
+	}
+
+	if !isUpToDate(stringPtr("test-shared-network"), []string{"100.64.116.64/28"}, nil, nil, nil, nil, nil, sn) {
+		t.Fatal("expected isUpToDate to converge when the desired CIDR matches the ref-embedded CIDR")
+	}
+
+	// Regression coverage: repeated reconciles against the same
+	// unchanged observed state must stay stable (no flapping), proving
+	// there is no permanent reconciliation loop.
+	for i := 0; i < 3; i++ {
+		if !isUpToDate(stringPtr("test-shared-network"), []string{"100.64.116.64/28"}, nil, nil, nil, nil, nil, sn) {
+			t.Fatalf("isUpToDate flapped to false on repeated reconcile %d", i)
+		}
+	}
+}
+
+func TestIsUpToDateDetectsRealNetworksDrift(t *testing.T) {
+	sn := &ibclient.SharedNetwork{
+		Name: stringPtr("test-shared-network"),
+		Networks: []*ibclient.Ipv4Network{
+			{Ref: "network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default"},
+		},
+	}
+
+	if isUpToDate(stringPtr("test-shared-network"), []string{"10.0.0.0/24"}, nil, nil, nil, nil, nil, sn) {
+		t.Fatal("expected isUpToDate to detect a genuine networks mismatch, not just tolerate the ref format")
+	}
+}
+
+func TestNetworksFromSDKNormalizesRefsToCidrs(t *testing.T) {
+	got := networksFromSDK([]*ibclient.Ipv4Network{
+		{Ref: "network/ZG5zLm5ldHdvcmskMTAwLjY0LjExNi42NC8yOC8w:100.64.116.64/28/default"},
+		{Ref: "network/ZG5zLm5ldHdvcmskMTAuMC4wLjAvMjQvZGVmYXVsdA:10.0.0.0/24/default"},
+	})
+	want := []string{"100.64.116.64/28", "10.0.0.0/24"}
+	if !stringSliceEqualUnordered(got, want) {
+		t.Fatalf("networksFromSDK() = %v, want %v", got, want)
+	}
+}
+
+func TestClusterObserveConvergesRealWapiNetworkRefs(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	sn := &storedSharedNetwork{Name: stringPtr("test-shared-network"), Networks: []string{"100.64.116.64/28"}}
+	sn.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(sn)
+
+	cr := newClusterSharedNetwork("my-net", ref)
+	cr.Spec.ForProvider.Networks = []string{"100.64.116.64/28"}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	// Two consecutive reconciles against unchanged desired/observed state
+	// must both report up to date — proving there is no
+	// observe-forever-drifts reconciliation loop.
+	for i := 0; i < 2; i++ {
+		obs, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("reconcile %d: unexpected error: %v", i, err)
+		}
+		if !obs.ResourceExists || !obs.ResourceUpToDate {
+			t.Fatalf("reconcile %d: expected exists+up-to-date, got %+v", i, obs)
+		}
 	}
 }
 
