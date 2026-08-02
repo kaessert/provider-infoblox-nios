@@ -25,6 +25,12 @@ type Runner struct {
 	// Tests inject a fake here to simulate kubectl output without a live
 	// cluster; production code leaves it nil and exec() shells out for real.
 	execFunc func(args []string) (string, error)
+
+	// restartFunc, when set, overrides restartControllerDeployment as the
+	// mechanism resetEventBurst uses to earn back a fresh event-spam-filter
+	// burst (see eventBurstCeiling). Tests inject a fake here; production
+	// code leaves it nil and resetEventBurst shells out to kubectl for real.
+	restartFunc func() error
 }
 
 // NewRunner creates a Runner for the given manifest file.
@@ -392,6 +398,27 @@ type TestResult struct {
 // while still well under a full poll cycle.
 const slowObserveThreshold = 30 * time.Second
 
+// eventBurstCeiling caps the number of Update()-triggering field tests this
+// runner attempts against a single controller process before proactively
+// restarting it. client-go's EventBroadcaster spam filter allows a burst of
+// ~25 identical events per involved object before silently DROPPING further
+// ones — not folding them into an existing aggregated Event's .count — so a
+// resource with more mutable fields than that burst produces false
+// NOT-EVIDENCED results once the burst is spent, even though the
+// controller's Update() path ran correctly every time (see
+// applyEvidenceCheck and countUpdateEvents). Restarting the controller
+// discards that in-memory state — a brand new process starts with a fresh
+// burst and, because client-go's event-aggregation cache is also in-memory
+// and per-process, emits a brand NEW Event object afterward rather than
+// continuing to patch the throttled one. countUpdateEvents already sums
+// every matching Event object for the resource regardless of which one
+// carries the count, so no change to the counting logic itself is needed —
+// only to how often the controller gets a fresh burst. The margin below the
+// documented ~25-token ceiling leaves room for a stray incidental event
+// (e.g. a transient CannotUpdateExternalResource) without crossing the hard
+// limit before the proactive reset fires.
+const eventBurstCeiling = 20
+
 // RunTests executes all update tests from the manifest and returns results.
 func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 	if err := r.ResolveResource(m); err != nil {
@@ -404,6 +431,7 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 	}
 
 	var results []TestResult
+	var attemptsSinceReset int
 	for _, t := range m.Tests {
 		if t.Skip != "" {
 			results = append(results, TestResult{
@@ -414,12 +442,86 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 			continue
 		}
 
+		// Proactively earn back a fresh event-spam-filter burst BEFORE it
+		// would be exhausted, rather than reacting after the fact — once a
+		// burst is spent, the dropped events are gone for good (see
+		// eventBurstCeiling), so there is nothing to "catch up" on the next
+		// field. A failed reset does not abort the run: attemptsSinceReset
+		// still clears so the runner does not retry the restart before
+		// every remaining field, and later fields simply lose the
+		// burst-avoidance benefit rather than the whole run.
+		if attemptsSinceReset >= eventBurstCeiling {
+			if err := r.resetEventBurst(); err != nil {
+				fmt.Fprintf(os.Stderr, "    warning: resetting controller event burst: %v\n", err)
+			}
+			attemptsSinceReset = 0
+		}
+
 		var result TestResult
 		result, snapshot = r.runFieldTest(t, snapshot, m.Kind, m.Name)
 		results = append(results, result)
+		// Only a real (non-no-op) patch has a chance of consuming a burst
+		// token — a no-op test short-circuits before applyPatchAndReconcile
+		// ever runs, so it never emits an update event.
+		if !result.NoOp {
+			attemptsSinceReset++
+		}
 	}
 
 	return results, nil
+}
+
+// providerDeploymentNamespace is where the Crossplane package manager
+// deploys every provider's controller Deployment.
+const providerDeploymentNamespace = "crossplane-system"
+
+// providerDeploymentSelector matches the controller Deployment for the
+// currently installed provider package revision — the same label the
+// provider build/deploy flow already waits on before running any E2E test.
+const providerDeploymentSelector = "pkg.crossplane.io/revision"
+
+// controllerRestartTimeout bounds how long resetEventBurst waits for the
+// restarted controller Deployment to report a ready replica.
+const controllerRestartTimeout = 180 * time.Second
+
+// resetEventBurst restarts the provider's controller Deployment to discard
+// its in-process event-spam-filter and event-aggregation-cache state (see
+// eventBurstCeiling), then waits for a fresh replica to become ready.
+// Restarting mid-run is safe: crossplane-runtime's managed reconciler holds
+// no state that this tool depends on across restarts — every reconcile the
+// runner cares about is driven explicitly (ClearConditions + WaitReady, or
+// NudgeReconcile) rather than inferred from anything the previous process
+// remembered.
+func (r *Runner) resetEventBurst() error {
+	if r.restartFunc != nil {
+		return r.restartFunc()
+	}
+	return r.restartControllerDeployment()
+}
+
+// restartControllerDeployment resolves the running provider's controller
+// Deployment and issues a rolling restart, then blocks until the rollout
+// reports ready.
+func (r *Runner) restartControllerDeployment() error {
+	name, err := r.runRaw("get", "deploy", "-n", providerDeploymentNamespace,
+		"-l", providerDeploymentSelector, "-o", "jsonpath={.items[0].metadata.name}")
+	if err != nil {
+		return fmt.Errorf("resolving provider deployment: %w", err)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("no deployment found with label %s in namespace %s", providerDeploymentSelector, providerDeploymentNamespace)
+	}
+	target := "deploy/" + name
+
+	if _, err := r.runRaw("rollout", "restart", target, "-n", providerDeploymentNamespace); err != nil {
+		return fmt.Errorf("restarting %s: %w", target, err)
+	}
+	if _, err := r.runRaw("rollout", "status", target, "-n", providerDeploymentNamespace,
+		"--timeout="+controllerRestartTimeout.String()); err != nil {
+		return fmt.Errorf("waiting for %s rollout: %w", target, err)
+	}
+	return nil
 }
 
 // runFieldTest executes a single (non-skipped) update test: it patches the

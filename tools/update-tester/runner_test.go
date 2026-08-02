@@ -41,19 +41,37 @@ type fakeCluster struct {
 	name string
 
 	// recordUpdateEvent, when true, makes each real field patch (not the
-	// ClearConditions status patch) increment eventCount by one — simulating
-	// a controller whose Update() call emits an UpdatedExternalResource
-	// event. Left false, patches succeed and atProvider still converges, but
-	// no event is ever recorded — the "update not evidenced" scenario.
+	// ClearConditions status patch) increment the active generation's
+	// aggregated count by one — simulating a controller whose Update() call
+	// emits an UpdatedExternalResource event. Left false, patches succeed
+	// and atProvider still converges, but no event is ever recorded — the
+	// "update not evidenced" scenario.
 	recordUpdateEvent bool
-	eventCount        int32
-	// emitZeroCountEvent, when true, reports the aggregated event's .count
-	// field as 0 once eventCount reaches at least 1 — mirroring client-go's
-	// event recorder, which leaves .count unset (0) for an event's first,
-	// unaggregated occurrence. Exercises sumEventOccurrences's zero-guard
-	// (a 0 count is 1 occurrence, not 0) through the runFieldTest evidence
-	// check rather than only through the standalone sumEventOccurrences unit
-	// tests.
+	// eventBudget caps how many events a single controller "process" (the
+	// stretch between restart() calls) accumulates before further
+	// increments are silently dropped — simulating client-go's in-process
+	// event-spam-filter burst ceiling (see eventBurstCeiling in runner.go).
+	// 0 (the default) means unlimited, for tests that are not exercising
+	// the ceiling.
+	eventBudget int32
+	// generations holds one aggregated event count per controller
+	// "process": index 0 is the count since the fake was created, and
+	// restart() appends a new zeroed entry — mirroring how a real
+	// controller restart discards client-go's in-memory event-aggregation
+	// cache, so a post-restart event becomes a brand NEW Event object
+	// instead of bumping the old one's .count further.
+	generations []int32
+	// restartCalls counts how many times restart() (wired in as
+	// Runner.restartFunc) was invoked, so tests can assert the runner
+	// actually triggered a burst reset rather than merely tolerating one.
+	restartCalls int
+	// emitZeroCountEvent, when true, reports the LAST generation's
+	// aggregated .count field as 0 once it reaches at least 1 — mirroring
+	// client-go's event recorder, which leaves .count unset (0) for an
+	// event's first, unaggregated occurrence. Exercises sumEventOccurrences's
+	// zero-guard (a 0 count is 1 occurrence, not 0) through the
+	// runFieldTest evidence check rather than only through the standalone
+	// sumEventOccurrences unit tests.
 	emitZeroCountEvent bool
 
 	patchCalls int
@@ -116,27 +134,42 @@ func (f *fakeCluster) handleGet(args []string) (string, error) {
 }
 
 // handleGetEvents backs `kubectl get events --all-namespaces -o json`. It
-// reports zero items until a real field patch has incremented eventCount
-// (via recordUpdateEvent), then a single aggregated Item carrying the
-// current count — mirroring client-go's event-recorder aggregation that
-// countUpdateEvents/sumEventOccurrences must sum rather than count Items.
+// emits one aggregated Item per non-empty generation (see f.generations) —
+// mirroring how a real controller restart causes client-go to create a
+// brand NEW Event object rather than continuing to bump the throttled one —
+// so countUpdateEvents/sumEventOccurrences must sum across Items, not just
+// read the last one.
 func (f *fakeCluster) handleGetEvents() (string, error) {
 	list := eventList{}
-	if f.eventCount > 0 {
-		count := f.eventCount
-		if f.emitZeroCountEvent {
-			count = 0
+	for i, count := range f.generations {
+		if count <= 0 {
+			continue
 		}
-		item := eventItem{Reason: eventReasonUpdated, Count: count}
+		reported := count
+		if f.emitZeroCountEvent && i == len(f.generations)-1 {
+			reported = 0
+		}
+		item := eventItem{Reason: eventReasonUpdated, Count: reported}
 		item.InvolvedObject.Kind = f.kind
 		item.InvolvedObject.Name = f.name
-		list.Items = []eventItem{item}
+		list.Items = append(list.Items, item)
 	}
 	b, err := json.Marshal(list)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// restart simulates a controller pod restart: it appends a fresh generation
+// so subsequent recordUpdateEvent increments accumulate against a new,
+// unthrottled budget rather than the exhausted one. Wired in as
+// Runner.restartFunc so RunTests's proactive burst-reset (eventBurstCeiling)
+// can be exercised without a live cluster.
+func (f *fakeCluster) restart() error {
+	f.restartCalls++
+	f.generations = append(f.generations, 0)
+	return nil
 }
 
 func (f *fakeCluster) handlePatch(args []string) (string, error) {
@@ -183,7 +216,13 @@ func (f *fakeCluster) handlePatch(args []string) (string, error) {
 	f.generation++
 	f.patchCalls++
 	if f.recordUpdateEvent {
-		f.eventCount++
+		if len(f.generations) == 0 {
+			f.generations = append(f.generations, 0)
+		}
+		idx := len(f.generations) - 1
+		if f.eventBudget <= 0 || f.generations[idx] < f.eventBudget {
+			f.generations[idx]++
+		}
 	}
 	return "", nil
 }
@@ -212,6 +251,7 @@ func newFakeRunner(f *fakeCluster) *Runner {
 		resourceName: "arecord.record.infobloxnios.crossplane.io/example-arecord",
 		timeout:      "5s",
 		execFunc:     f.exec,
+		restartFunc:  f.restart,
 	}
 }
 
@@ -672,5 +712,163 @@ func TestStringifyFieldValue(t *testing.T) {
 				t.Errorf("%s: got %q, want %q", tc.reason, got, tc.want)
 			}
 		})
+	}
+}
+
+// manifestWithSequentialFieldTests builds a Manifest whose Tests set the
+// same field to n distinct, strictly-increasing values in turn. Reusing one
+// field (rather than n distinct fields) keeps the fixture small while still
+// guaranteeing every test is a genuine change relative to the one before it
+// (never a no-op), because runFieldTest's no-op check compares against
+// spec.forProvider, which handlePatch updates in place after every patch.
+func manifestWithSequentialFieldTests(n int) *Manifest {
+	m := &Manifest{Kind: testKindARecord, Name: testNameARecord}
+	for i := 1; i <= n; i++ {
+		m.Tests = append(m.Tests, UpdateTest{Field: testFieldNotifyDelay, Value: float64(i)})
+	}
+	return m
+}
+
+// TestRunTestsResetsEventBurstBeforeCeiling covers the false-NOT-EVIDENCED
+// regression this ticket exists to fix: a resource with more mutable fields
+// than the client-go event-spam-filter's ~25-event burst must still report
+// every genuinely-converged field as evidenced, because RunTests proactively
+// restarts the controller (earning back a fresh burst) before the ceiling is
+// reached rather than after events have already been silently dropped.
+func TestRunTestsResetsEventBurstBeforeCeiling(t *testing.T) {
+	const numFields = eventBurstCeiling + 5 // comfortably past one burst
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+		// eventBudget mirrors the real client-go burst ceiling: once a
+		// generation's aggregated count reaches it, further same-generation
+		// increments are silently dropped, exactly as production
+		// eventBurstCeiling is calibrated to stay under.
+		eventBudget: eventBurstCeiling,
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+	if len(results) != numFields {
+		t.Fatalf("got %d results, want %d", len(results), numFields)
+	}
+
+	for i, res := range results {
+		if res.NotEvidenced {
+			t.Errorf("field %d (%s): got NotEvidenced=true, want evidenced (err: %v)", i, res.Field, res.Error)
+		}
+		if !res.Passed {
+			t.Errorf("field %d (%s): got Passed=false, want true (err: %v)", i, res.Field, res.Error)
+		}
+	}
+
+	if f.restartCalls == 0 {
+		t.Error("expected at least one controller restart before the burst ceiling was reached")
+	}
+	// numFields exceeds one ceiling's worth of attempts, so at least one
+	// generation besides the first must have accumulated events — proof the
+	// reset actually happened before fields ran out of budget, not merely
+	// that restart() was called with no effect on the outcome.
+	if len(f.generations) < 2 {
+		t.Errorf("expected events to span at least 2 controller generations, got %d: %v", len(f.generations), f.generations)
+	}
+}
+
+// TestRunTestsWithoutRestartWiringStillDetectsGenuineNonEvidence is the
+// counterpart regression case demanded by the ticket: the burst-reset
+// machinery must never become vacuously permissive. A controller that truly
+// never emits update events (recordUpdateEvent left false, so no generation
+// ever accumulates anything for resetEventBurst to rescue) must still fail
+// with NotEvidenced, restart or no restart.
+func TestRunTestsWithoutRestartWiringStillDetectsGenuineNonEvidence(t *testing.T) {
+	const numFields = eventBurstCeiling + 3
+	f := &fakeCluster{
+		forProvider: map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:  map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:  1,
+		kind:        testKindARecord,
+		name:        testNameARecord,
+		// recordUpdateEvent left false: no field test's patch ever produces
+		// an update event, simulating a reconciler whose Update() path
+		// never runs at all.
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+
+	for i, res := range results {
+		if !res.NotEvidenced {
+			t.Errorf("field %d (%s): got NotEvidenced=false, want true (a controller with no Update() events must still fail)", i, res.Field)
+		}
+		if res.Passed {
+			t.Errorf("field %d (%s): got Passed=true, want false", i, res.Field)
+		}
+	}
+}
+
+// TestRunTestsBelowCeilingNeverRestarts confirms the proactive reset is
+// scoped to the burst ceiling: a run whose non-skipped, non-no-op field
+// count never reaches eventBurstCeiling must never pay the restart cost.
+func TestRunTestsBelowCeilingNeverRestarts(t *testing.T) {
+	const numFields = eventBurstCeiling - 1
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	if _, err := r.RunTests(m); err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+
+	if f.restartCalls != 0 {
+		t.Errorf("expected 0 restarts for a run below the burst ceiling, got %d", f.restartCalls)
+	}
+}
+
+// TestRunTestsRestartFailureDoesNotAbortRun confirms a failed burst reset
+// degrades gracefully: the run continues (later fields may lose evidence,
+// but the whole test suite must not abort) rather than the tool crashing or
+// silently swallowing the rest of the manifest.
+func TestRunTestsRestartFailureDoesNotAbortRun(t *testing.T) {
+	const numFields = eventBurstCeiling + 2
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+		eventBudget:       eventBurstCeiling,
+	}
+	r := newFakeRunner(f)
+	r.restartFunc = func() error {
+		return fmt.Errorf("simulated rollout failure")
+	}
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+	if len(results) != numFields {
+		t.Fatalf("got %d results, want %d — a failed restart must not abort the run", len(results), numFields)
 	}
 }
