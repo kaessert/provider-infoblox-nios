@@ -15,6 +15,18 @@
 # ("${data.runToken}") if no datasource is supplied, which is exactly the
 # pre-isolation behavior this guards against.
 #
+# patterns is ALSO tokenised below, even though a live-Grid check found
+# WAPI does not actually require it: two DTCLBDN objects were created
+# back to back with an identical patterns entry and both Creates
+# succeeded, persisting independently with the duplicate value intact
+# (no rejection, no observable interference at the Create/Update/Delete
+# layer these tests exercise) — scratch objects were deleted after the
+# check. Tokenising patterns anyway costs nothing here and is strictly
+# more defensive than relying on that finding indefinitely, so it stays
+# in place; recording the finding so a future reader does not assume
+# duplicate patterns are unsafe (or spend time re-verifying that they
+# are not) before touching this field again.
+#
 # Required fields:
 #   name: DTC LBDN display name (not DNS-related).
 #   lbMethod: load balancing method used to select a pool from those

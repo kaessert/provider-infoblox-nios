@@ -10,6 +10,12 @@
 # Distinct identity: the name below differs from range-template.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once without
 # colliding on the same range template name.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs never request the same
+# range template `name`. Left literal ("${data.runToken}") if no datasource
+# is supplied, which is exactly the pre-isolation behavior this guards
+# against.
 apiVersion: rangetemplate.infobloxnios.m.crossplane.io/v1alpha1
 kind: RangeTemplate
 metadata:
@@ -47,7 +53,7 @@ metadata:
         skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
-    name: example-range-template-ns
+    name: example-range-template-ns-${data.runToken}
     numberOfAddresses: 20
     offset: 50
     comment: Managed by Crossplane (namespaced)

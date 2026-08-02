@@ -15,6 +15,19 @@
 #
 # Optional mutable fields: comment, disable, autoCreateHostRecord,
 # sniHostname, useSniHostname, monitors, extAttrs.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same DTC Server display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
+#
+# host stays a literal TEST-NET-1 address (RFC 5737) even though it is
+# part of the controller's (name, host) natural key: the tokenised name
+# above already makes this object unique per run, and two runs owning
+# DTCServer objects that both point at 192.0.2.30 is legal — the field
+# only records where the backend server lives, it is not itself a WAPI
+# identity that Create can collide on.
 apiVersion: dtcserver.infobloxnios.crossplane.io/v1alpha1
 kind: DTCServer
 metadata:
@@ -66,7 +79,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: example-server.example.com
+    name: example-server-${data.runToken}.example.com
     host: 192.0.2.30
     comment: Managed by Crossplane
   providerConfigRef:
