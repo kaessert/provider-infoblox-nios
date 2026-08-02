@@ -17,6 +17,10 @@
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared SDK plumbing, field comparison, and late-init logic lives here.
+//
+// DTCServer is wired to the UID-in-EA object-identity ladder (see the
+// recorda/ARecord controller, the pilot resource, and the
+// internal/clients/identity package doc for the full rationale).
 package dtcserver
 
 import (
@@ -38,28 +42,36 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage        = "cannot track ProviderConfig usage"
-	errPersistExternalName = "cannot persist refreshed external name"
-	errGetPC               = "cannot get ProviderConfig"
-	errGetClusterPC        = "cannot get ClusterProviderConfig"
-	errUnsupportedKind     = "unsupported provider config kind"
-	errGetSecret           = "cannot get credentials secret"
-	errNoSecretRef         = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds    = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey      = "credentials secret is missing one of the required host/username/password keys"
-	errNewObjectManager    = "cannot create Infoblox NIOS WAPI object manager"
-	errObserveDTCServer    = "cannot observe DTCServer"
-	errCreateDTCServer     = "cannot create DTCServer"
-	errUpdateDTCServer     = "cannot update DTCServer"
-	errDeleteDTCServer     = "cannot delete DTCServer"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errPersistExternalName       = "cannot persist refreshed external name"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
+	errObserveDTCServer          = "cannot observe DTCServer"
+	errCreateDTCServer           = "cannot create DTCServer"
+	errUpdateDTCServer           = "cannot update DTCServer"
+	errDeleteDTCServer           = "cannot delete DTCServer"
+	errEmptyUID                  = "cannot stamp DTCServer identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -426,7 +438,7 @@ func isUpToDate(name, host, comment *string, disable, autoCreateHostRecord, useS
 	if !monitorsEqual(monitors, monitorPairsFromSDK(rec.Monitors)) {
 		return false
 	}
-	return extAttrsEqual(extAttrs, extAttrsFromEA(rec.Ea))
+	return extAttrsEqual(extAttrs, extAttrsFromEA(identity.Strip(rec.Ea)))
 }
 
 // lateInitialize back-fills server-defaulted optional fields (comment,
@@ -494,7 +506,7 @@ func lateInitExtAttrs(field *map[string]string, observed ibclient.EA) bool {
 	if len(*field) != 0 {
 		return false
 	}
-	fromRec := extAttrsFromEA(observed)
+	fromRec := extAttrsFromEA(identity.Strip(observed))
 	if len(fromRec) == 0 {
 		return false
 	}
@@ -567,15 +579,20 @@ func observeFromDtcServer(externalID string, rec *ibclient.DtcServer) observedDT
 // struct itself (via ibclient.NewDtcServer) and calls the low-level
 // IBConnector directly instead of ObjectManager.CreateDtcServer — see the
 // package doc comment for why the ObjectManager wrapper cannot be used
-// as-is for this resource's monitors field.
-func createDtcServer(conn ibclient.IBConnector, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string) (*ibclient.DtcServer, error) {
+// as-is for this resource's monitors field. Stamps the owning managed
+// resource's uid into the object's extensible attributes in the same
+// request that creates it (identity.Stamp).
+func createDtcServer(conn ibclient.IBConnector, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string, uid string) (*ibclient.DtcServer, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	dtcServer := ibclient.NewDtcServer(
 		strOrEmpty(comment),
 		strOrEmpty(name),
 		strOrEmpty(host),
 		boolOrFalse(autoCreateHostRecord),
 		boolOrFalse(disable),
-		buildEA(extAttrs),
+		identity.Stamp(buildEA(extAttrs), uid),
 		buildMonitors(monitors),
 		strOrEmpty(sniHostname),
 		boolOrFalse(useSniHostname),
@@ -590,15 +607,20 @@ func createDtcServer(conn ibclient.IBConnector, name, host, comment *string, aut
 
 // updateDtcServer issues the WAPI update call. All fields are mutable —
 // there are no known immutable fields for DTCServer — so every field is
-// echoed on every update.
-func updateDtcServer(conn ibclient.IBConnector, ref string, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string) (*ibclient.DtcServer, error) {
+// echoed on every update. Every call re-asserts the identity stamp since
+// a WAPI PUT carrying extattrs replaces the whole map rather than
+// merging it.
+func updateDtcServer(conn ibclient.IBConnector, ref string, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string, uid string) (*ibclient.DtcServer, error) {
+	if uid == "" {
+		return nil, errors.New(errEmptyUID)
+	}
 	dtcServer := ibclient.NewDtcServer(
 		strOrEmpty(comment),
 		strOrEmpty(name),
 		strOrEmpty(host),
 		boolOrFalse(autoCreateHostRecord),
 		boolOrFalse(disable),
-		buildEA(extAttrs),
+		identity.Stamp(buildEA(extAttrs), uid),
 		buildMonitors(monitors),
 		strOrEmpty(sniHostname),
 		boolOrFalse(useSniHostname),
@@ -618,55 +640,125 @@ func deleteDtcServer(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// dtcServerExistsByNaturalKey reports whether a live DTCServer still
-// exists under the CR's own (name, host) identity — the same tuple WAPI
-// uses to compute the _ref. Used by Delete() when the stored _ref 404s: a
-// hit here means the _ref is merely stale, not that the object is gone.
-// Unlike dtclbdn/dtcpool, this resource has no auto_consolidated_monitors
-// schema mismatch on this deployment (confirmed: Observe() calls
-// objMgr.GetDtcServerByRef directly), so this uses the ObjectManager's
-// plain GetDtcServer(name, host) convenience method rather than a
-// low-level IBConnector search. GetDtcServer requires both fields
-// non-empty; when either is missing there is no way to re-discover the
-// object, so the search is skipped (found=false) rather than treated as
-// an error.
-func dtcServerExistsByNaturalKey(objMgr ibclient.IBObjectManager, name, host *string) (bool, error) {
-	if strOrEmpty(name) == "" || strOrEmpty(host) == "" {
-		return false, nil
-	}
-	_, err := objMgr.GetDtcServer(strOrEmpty(name), strOrEmpty(host))
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteDtcServerResolving404 issues the WAPI delete and, on a 404
-// against the stored _ref, resolves the object's natural key before
-// concluding it is gone. A 404 on a derived handle is evidence the handle
-// rotated, not evidence the object was removed: if the natural-key search
-// still finds a live object, deleting is refused because ownership of
-// that object cannot be verified from the search alone (see the staleref
-// package doc for the full rationale).
-func deleteDtcServerResolving404(objMgr ibclient.IBObjectManager, ref string, name, host *string) error {
-	delErr := deleteDtcServer(objMgr, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. See recorda's ensureIdentityPrerequisite for the full
+// rationale.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteDTCServer)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := dtcServerExistsByNaturalKey(objMgr, name, host)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteDTCServer)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveDtcServerIdentity resolves the DTCServer identified by ref/uid
+// through the shared UID-in-EA ladder.
+func resolveDtcServerIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.DtcServer, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.DtcServer](ctx, conn, ibclient.NewEmptyDtcServer, ref, uid)
+}
+
+// observeResult bundles the shared parts of resolving and inspecting a
+// DTCServer through the identity ladder during Observe.
+type observeResult struct {
+	exists       bool
+	rec          *ibclient.DtcServer
+	obs          observedDTCServer
+	lateInit     bool
+	refreshedRef string
+	adopted      bool
+}
+
+// observeDtcServer runs the identity ladder for Observe and
+// late-initializes the given ForProvider field pointers from the
+// resolved object.
+func observeDtcServer(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, disable, autoCreateHostRecord, useSniHostname **bool, sniHostname **string, monitors *[]monitorPair, extAttrs *map[string]string) (observeResult, error) {
+	ref := observeRefFor(crName, externalName)
+
+	rec, outcome, err := resolveDtcServerIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return observeResult{}, prereqErr
+			}
+		}
+		return observeResult{}, err
+	}
+	if outcome == identity.OutcomeNotFound {
+		return observeResult{exists: false}, nil
+	}
+
+	res := observeResult{
+		exists:  true,
+		rec:     rec,
+		obs:     observeFromDtcServer(rec.Ref, rec),
+		adopted: outcome == identity.OutcomeAdopted,
+	}
+	res.lateInit = lateInitialize(comment, disable, autoCreateHostRecord, useSniHostname, sniHostname, monitors, extAttrs, rec)
+
+	if outcome == identity.OutcomeRotated || outcome == identity.OutcomeFoundByUID {
+		res.refreshedRef = rec.Ref
+		res.lateInit = true
+	}
+
+	return res, nil
+}
+
+// deleteDtcServerIdentity issues the WAPI delete for the DTCServer this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity doc for the full ownership-verification rules.
+func deleteDtcServerIdentity(ctx context.Context, conn ibclient.IBConnector, objMgr ibclient.IBObjectManager, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveDtcServerIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteDTCServer)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteDtcServer(objMgr, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteDTCServer)
+	default:
+		return errors.New("identity: unresolved DTCServer outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

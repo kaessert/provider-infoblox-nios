@@ -2,6 +2,7 @@ package dtcpool
 
 import (
 	"context"
+	"strings"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -19,8 +20,8 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcpool/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 const clusterControllerName = "cluster-dtcpool.infobloxnios.crossplane.io"
@@ -78,50 +79,43 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.DTCP
 		return nil, err
 	}
 
-	return &clusterExternal{kube: c.kube, clients: clients}, nil
+	return &clusterExternal{kube: c.kube, clients: clients, endpoint: creds.Host}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.DTCPool].
 type clusterExternal struct {
 	kube    k8sclient.Client
 	clients *dtcPoolClients
+	// prober checks the identity extensible-attribute-definition
+	// prerequisite before Create stamps identity onto a new object. nil
+	// defaults to identity.DefaultProber.
+	prober *identity.Prober
+	// endpoint is this client's identity-prerequisite-probe cache key.
+	endpoint string
 }
 
-// Observe fetches the DTCPool from the WAPI by its _ref external name
-// and compares it against the desired spec.
-func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+// Observe resolves the DTCPool through the shared UID-in-EA identity
+// ladder and compares the result against the desired spec.
+func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
+	lbdrp := dynRatioFromCluster(p.LBDynamicRatioPreferred)
+	lbdra := dynRatioFromCluster(p.LBDynamicRatioAlternate)
 
-	// Pre-create guard (server-assigned external-name strategy): the
-	// default NameAsExternalName initializer sets external-name =
-	// metadata.name before Create() has run. Calling getDtcPoolByRef
-	// with the CR's Kubernetes name (not a real WAPI _ref) would error
-	// against the API on every reconcile until Create() overwrites the
-	// annotation with the real _ref.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := getDtcPoolByRef(e.clients.conn, externalID)
+	res, err := observeDtcPool(ctx, e.clients.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+		&p.Comment, &p.Disable, &p.Availability, &p.Quorum, &p.TTL, &p.UseTTL, &p.ExtAttrs, &p.LBAlternateMethod, &p.LBPreferredTopology, &p.LBAlternateTopology, &lbdrp, &lbdra)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := dtcPoolExistsByNaturalKey(e.clients.conn, cr.Spec.ForProvider.Name)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveDTCPool)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return managed.ExternalObservation{}, err
 		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveDTCPool)
 	}
+	if !res.exists {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
 
-	o := observeFromDtcPool(externalID, rec)
+	rec := res.rec
+	o := res.obs
 	cr.Status.AtProvider = clusterv1alpha1.DTCPoolObservation{
 		Name:                o.Name,
 		LBPreferredMethod:   o.LBPreferredMethod,
@@ -149,33 +143,45 @@ func (e *clusterExternal) Observe(_ context.Context, cr *clusterv1alpha1.DTCPool
 	cr.Status.AtProvider.ConsolidatedMonitors = consolidatedMonitorsToCluster(o.ConsolidatedMonitors)
 	cr.Status.AtProvider.Health = healthToCluster(o.Health)
 
-	p := &cr.Spec.ForProvider
 	servers := serversFromCluster(p.Servers)
 	monitors := monitorsFromCluster(p.Monitors)
-	lbdrp := dynRatioFromCluster(p.LBDynamicRatioPreferred)
-	lbdra := dynRatioFromCluster(p.LBDynamicRatioAlternate)
-	lateInit := lateInitialize(&p.Comment, &p.Disable, &p.Availability, &p.Quorum, &p.TTL, &p.UseTTL, &p.ExtAttrs, &p.LBAlternateMethod, &p.LBPreferredTopology, &p.LBAlternateTopology, &lbdrp, &lbdra, rec)
-	if lateInit {
+	if res.lateInit {
 		p.LBDynamicRatioPreferred = dynRatioToCluster(lbdrp)
 		p.LBDynamicRatioAlternate = dynRatioToCluster(lbdra)
+	}
+
+	if res.refreshedRef != "" {
+		meta.SetExternalName(cr, res.refreshedRef)
 	}
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
 	cr.SetConditions(xpv1.Available())
 
+	upToDate := isUpToDate(p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, p.Availability, p.LBPreferredTopology, p.LBAlternateTopology, p.Quorum, p.TTL, p.Disable, p.UseTTL, servers, monitors, lbdrp, lbdra, p.ExtAttrs, rec) && !res.adopted
+
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        isUpToDate(p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, p.Availability, p.LBPreferredTopology, p.LBAlternateTopology, p.Quorum, p.TTL, p.Disable, p.UseTTL, servers, monitors, lbdrp, lbdra, p.ExtAttrs, rec),
-		ResourceLateInitialized: lateInit,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit,
 	}, nil
 }
 
-// Create provisions a new DTCPool and records the server-assigned _ref
-// as the external name.
-func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalCreation, error) {
+// Create provisions a new DTCPool, stamping the managed resource's own
+// uid into the object's identity extensible attribute in the same
+// request, and records the server-assigned _ref as the external name.
+func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
-	rec, err := createDtcPool(e.clients.conn, p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, serversFromCluster(p.Servers), p.Availability, p.Quorum, p.LBPreferredTopology, dynRatioFromCluster(p.LBDynamicRatioPreferred), p.LBAlternateTopology, dynRatioFromCluster(p.LBDynamicRatioAlternate), monitorsFromCluster(p.Monitors), p.Disable, p.TTL, p.UseTTL, p.ExtAttrs)
+	uid := string(cr.GetUID())
+
+	if strings.TrimSpace(uid) == "" {
+		return managed.ExternalCreation{}, errors.New(errEmptyUID)
+	}
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.clients.conn, e.endpoint); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	rec, err := createDtcPool(e.clients.conn, p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, serversFromCluster(p.Servers), p.Availability, p.Quorum, p.LBPreferredTopology, dynRatioFromCluster(p.LBDynamicRatioPreferred), p.LBAlternateTopology, dynRatioFromCluster(p.LBDynamicRatioAlternate), monitorsFromCluster(p.Monitors), p.Disable, p.TTL, p.UseTTL, p.ExtAttrs, uid)
 	if err != nil {
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateDTCPool)
 	}
@@ -186,12 +192,14 @@ func (e *clusterExternal) Create(_ context.Context, cr *clusterv1alpha1.DTCPool)
 
 // Update replaces the mutable DTCPool fields. There are no known
 // immutable fields for DTCPool, so every field is echoed (this API uses
-// PUT full-replace semantics).
+// PUT full-replace semantics). Every call re-asserts the identity stamp
+// since a WAPI PUT carrying extattrs replaces the whole map rather than
+// merging it.
 func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
-	rec, err := updateDtcPool(e.clients.conn, externalID, p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, serversFromCluster(p.Servers), p.Availability, p.Quorum, p.LBPreferredTopology, dynRatioFromCluster(p.LBDynamicRatioPreferred), p.LBAlternateTopology, dynRatioFromCluster(p.LBDynamicRatioAlternate), monitorsFromCluster(p.Monitors), p.Disable, p.TTL, p.UseTTL, p.ExtAttrs)
+	rec, err := updateDtcPool(e.clients.conn, externalID, p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, serversFromCluster(p.Servers), p.Availability, p.Quorum, p.LBPreferredTopology, dynRatioFromCluster(p.LBDynamicRatioPreferred), p.LBAlternateTopology, dynRatioFromCluster(p.LBDynamicRatioAlternate), monitorsFromCluster(p.Monitors), p.Disable, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateDTCPool)
 	}
@@ -207,15 +215,13 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCPoo
 	return managed.ExternalUpdate{}, nil
 }
 
-// Delete removes the DTCPool. A 404 on the stored _ref is not treated as
-// already-deleted by itself — see deleteDtcPoolResolving404 — because the
-// _ref is a derived handle that rotates whenever an identity field
-// changes, and a stale handle 404s exactly like a genuinely deleted
-// object.
-func (e *clusterExternal) Delete(_ context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalDelete, error) {
+// Delete removes the DTCPool, resolving through the shared identity
+// ladder first — see deleteDtcPoolIdentity for the full ownership-
+// verification rules a stale or rotated _ref must satisfy before a
+// delete is issued.
+func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.DTCPool) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
-	p := cr.Spec.ForProvider
-	if err := deleteDtcPoolResolving404(e.clients.objMgr, e.clients.conn, externalID, p.Name); err != nil {
+	if err := deleteDtcPoolIdentity(ctx, e.clients.conn, e.clients.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
 		return managed.ExternalDelete{}, err
 	}
 	return managed.ExternalDelete{}, nil

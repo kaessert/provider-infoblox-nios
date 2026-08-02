@@ -18,18 +18,21 @@ import (
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	cperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // ── generic helpers ─────────────────────────────────────────────────────────
@@ -130,10 +133,27 @@ type mockWapiServer struct {
 	// lastUpdateBody captures the raw JSON body of the most recent PUT
 	// request, for tests that assert immutable fields are omitted.
 	lastUpdateBody []byte
+
+	// eaDefExists controls the identity extensible-attribute-definition
+	// prerequisite endpoint. Defaults to true via newMockWapiServer.
+	eaDefExists bool
+	// eaDefCreatable controls whether a POST to create the missing
+	// definition succeeds, when eaDefExists is false.
+	eaDefCreatable bool
+	// searchCalls counts identity-EA search requests.
+	searchCalls int
+	// eaDefSearchCalls counts prerequisite-probe GET requests.
+	eaDefSearchCalls int
+	// createCalls counts POST (create) requests — tests assert this to
+	// prove a refusal or a validation failure issued zero mutating
+	// requests, not just that the in-memory record set looks unchanged.
+	createCalls int
+	// deleteCalls counts DELETE requests, for the same reason.
+	deleteCalls int
 }
 
 func newMockWapiServer() *mockWapiServer {
-	return &mockWapiServer{records: map[string]*ibclient.ZoneAuth{}}
+	return &mockWapiServer{records: map[string]*ibclient.ZoneAuth{}, eaDefExists: true}
 }
 
 func (m *mockWapiServer) seed(rec *ibclient.ZoneAuth) string {
@@ -195,23 +215,38 @@ func (m *mockWapiServer) handler() http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
 
-	// Search endpoint (zoneAuthExistsByNaturalKey): a GET with no _ref
-	// path segment, filtered by fqdn/view query params. Registered as
-	// an exact literal path so Go's ServeMux prefers it over the
-	// {ref...} wildcard below for requests to precisely "zone_auth"
-	// (real _refs always carry additional path segments).
+	// Search endpoint: a GET with no _ref path segment. The identity
+	// ladder (identity.Resolve's searchByUID) filters by the stamped
+	// "*Crossplane Internal ID" extensible attribute; legacy tests may
+	// still filter by fqdn/view query params. Registered as an exact
+	// literal path so Go's ServeMux prefers it over the {ref...}
+	// wildcard below for requests to precisely "zone_auth" (real _refs
+	// always carry additional path segments).
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/zone_auth", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		uid := q.Get("*" + identity.EAKey)
 		fqdn := q.Get("fqdn")
 		view := q.Get("view")
 
 		m.mu.Lock()
+		m.searchCalls++
 		var matches []ibclient.ZoneAuth
 		for _, rec := range m.records {
+			if uid != "" {
+				got, ok := rec.Ea[identity.EAKey]
+				if !ok || got != uid {
+					continue
+				}
+				matches = append(matches, *rec)
+				continue
+			}
 			if fqdn != "" && rec.Fqdn != fqdn {
 				continue
 			}
@@ -225,6 +260,34 @@ func (m *mockWapiServer) handler() http.Handler {
 		// Always respond 200 — WAPI search semantics report "not found"
 		// via an empty array, never an HTTP error status.
 		writeJSON(w, http.StatusOK, matches)
+	})
+
+	// Identity extensible-attribute-definition prerequisite endpoint
+	// (see internal/clients/identity's Prober).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefSearchCalls++
+		exists := m.eaDefExists
+		m.mu.Unlock()
+		if exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: stringPtr(identity.EAKey)}})
+			return
+		}
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+	})
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		creatable := m.eaDefCreatable
+		m.mu.Unlock()
+		if creatable {
+			m.mu.Lock()
+			m.eaDefExists = true
+			m.mu.Unlock()
+			writeJSON(w, http.StatusOK, "extensibleattributedef/identity-def:"+identity.EAKey)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"Error":"IBDataConflictError: Cannot create extensible attribute definition. Only superusers can manage extensible attribute definition"}`))
 	})
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +351,7 @@ func (m *mockWapiServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.deleteCalls++
 		_, ok := m.records[ref]
 		delete(m.records, ref)
 		m.mu.Unlock()
@@ -357,7 +421,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		View:    stringPtr("default"),
 		Comment: stringPtr("hello"),
 		Disable: boolPtr(false),
-		Ea:      ibclient.EA{"env": "prod"},
+		Ea:      ibclient.EA{"env": "prod", identity.EAKey: "test-uid-cluster"},
 	})
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
@@ -404,13 +468,52 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
-// TestObservePreCreateState verifies that Observe short-circuits (no HTTP
-// call) when the external-name still equals the CR's Kubernetes name — the
-// pre-create state for a server-assigned external-name strategy.
+// TestClusterObserveStripsIdentityEAFromExtAttrs proves the reserved
+// identity key never late-inits into spec.forProvider.extAttrs. The CRD
+// schema never includes it, and a CEL rule rejects a user-supplied value
+// — back-filling it here would produce a permanent validation failure on
+// the very next apply.
+func TestClusterObserveStripsIdentityEAFromExtAttrs(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn: "example.com",
+		View: stringPtr("default"),
+		Ea:   ibclient.EA{"env": "prod", identity.EAKey: "test-uid-cluster"},
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", ref)
+	cr.Spec.ForProvider.ExtAttrs = nil // force late-init from the observed EA
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+
+	if _, present := cr.Spec.ForProvider.ExtAttrs[identity.EAKey]; present {
+		t.Errorf("Observe: spec.forProvider.extAttrs contains the reserved identity key %q, want it stripped", identity.EAKey)
+	}
+	if !extAttrsEqual(cr.Spec.ForProvider.ExtAttrs, map[string]string{"env": "prod"}) {
+		t.Errorf("Observe: spec.forProvider.extAttrs = %v, want {env: prod} (identity key stripped)", cr.Spec.ForProvider.ExtAttrs)
+	}
+	// The full-mirror AtProvider copy, by contrast, keeps the unstripped
+	// map (convention 0032) — this is intentional, not a bug.
+	if _, present := cr.Status.AtProvider.ExtAttrs[identity.EAKey]; !present {
+		t.Error("Observe: status.atProvider.extAttrs must keep the identity key (full-mirror convention), but it was stripped")
+	}
+}
+
+// TestObservePreCreateState verifies that Observe runs one identity
+// search (not a hard-coded no-op) when the external-name still equals
+// the CR's Kubernetes name — the pre-create state for a server-assigned
+// external-name strategy. Per ADR-IN-0006 §3 the pre-create guard no
+// longer short-circuits: it maps the annotation to "" and lets the
+// identity ladder search by uid before concluding ResourceExists:false.
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
@@ -423,6 +526,13 @@ func TestObservePreCreateState(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
 	}
 }
 
@@ -561,6 +671,7 @@ func TestClusterIsUpToDateIgnoresImmutableField(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneAuth{
 		Fqdn: "example.com",
 		View: stringPtr("original-view"),
+		Ea:   ibclient.EA{identity.EAKey: "test-uid-cluster"},
 	})
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
@@ -849,7 +960,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"}})
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
@@ -898,42 +1009,100 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// core defect fix: a 404 against the stored _ref must not be treated as
-// "already deleted" when a natural-key search finds the same identity
-// still live under a different _ref. Deleting that record would be
-// unverifiable ownership, so Delete() must refuse and leave the record in
-// place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterDeleteRefusesOnForeignIdentity verifies the identity ladder's
+// handle-reuse refusal: the stored _ref still resolves, but its stamped
+// identity attribute belongs to a different managed resource. Deleting it
+// would destroy someone else's object, so Delete() must refuse and leave
+// the record in place.
+func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
-	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
+	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
 	}
 }
 
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
-func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// TestClusterDeleteRefusesOnUnstampedObject verifies the identity ladder's
+// adopt-vs-delete asymmetry: the stored _ref resolves but the object
+// carries no identity stamp at all. Observe() adopts and re-stamps such
+// objects leniently, but Delete() must refuse — destroying an object is
+// irreversible and ownership cannot be proven.
+func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", ref)
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the resolved object carries no identity stamp, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[ref]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteRecoversRotatedRefAndDeletes verifies rotation
+// recovery: the stored _ref 404s, but exactly one live object carries
+// this managed resource's identity stamp. Delete() must recover it via
+// the identity-EA search and delete the recovered object, not report a
+// false already-gone success.
+func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
+	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a rotated reference: %v", err)
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if stillExists {
+		t.Error("Delete: recovered record was not removed")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenTrulyAbsent is the companion happy path: a
+// 404 against the stored _ref, and an identity-EA search that finds
+// nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -942,38 +1111,36 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
 	}
 }
 
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRefusesOnForeignIdentity verifies the Observe()-side
+// half of handle-reuse refusal: crossplane-runtime's managed reconciler
+// calls Observe() before Delete() on the deletion path, and if Observe()
+// silently adopted a foreign object it would let the next Update/Delete
+// mutate or destroy someone else's record.
+func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &clusterExternal{conn: newTestConnector(t, srv)}
-	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
+	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Observe: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
@@ -1138,7 +1305,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"}})
 
 	e := &namespacedExternal{conn: newTestConnector(t, srv)}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
@@ -1187,68 +1354,67 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestNamespacedDeleteRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterDeleteRefusesOnForeignIdentity.
+func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &namespacedExternal{conn: newTestConnector(t, srv)}
-	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/stale-ref:example.com/default", "ProviderConfig")
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
 	}
 }
 
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestNamespacedObserveRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterObserveRefusesOnForeignIdentity.
+func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
+	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &namespacedExternal{conn: newTestConnector(t, srv)}
-	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/stale-ref:example.com/default", "ProviderConfig")
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Observe: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
 	}
 }
 
-// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
-func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// TestNamespacedDeleteSucceedsWhenTrulyAbsent is the namespaced-scope
+// counterpart of TestClusterDeleteSucceedsWhenTrulyAbsent.
+func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1257,7 +1423,7 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/stale-ref:example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
 	}
 }
 
@@ -1544,5 +1710,335 @@ func TestNewConnectorWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 				t.Fatal("newConnectorWithScheme: expected non-nil connector")
 			}
 		})
+	}
+}
+
+// ── identity ladder: Ambiguous match refusal ────────────────────────────
+//
+// AmbiguousMatchError is the second typed refusal the identity ladder can
+// return (alongside HandleReuseError) — when more than one Grid object
+// carries this managed resource's identity stamp, the ladder must refuse
+// rather than silently pick the first match. Per ADR-IN-0006, taking an
+// arbitrary match risks mutating or deleting an object this resource does
+// not actually own.
+
+func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-cluster"
+	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	meta.SetExternalName(cr, cr.GetName()) // simulate NameAsExternalName initializer — forces the UID-only search path
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-namespaced"
+	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+// ── identity ladder: Adopted never reports up to date ───────────────────
+//
+// OutcomeAdopted means the stored _ref resolved but the live object
+// carries no identity stamp at all — Observe() adopts it leniently (so
+// the very next reconcile can re-stamp it via Update), but it must never
+// report ResourceUpToDate:true in the same pass, even when every
+// user-facing field already matches the desired spec. Reporting up to
+// date here would mean the object never gets stamped, since Update() is
+// only invoked when ResourceUpToDate is false.
+
+func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn:    "example.com",
+		View:    stringPtr("default"),
+		Comment: stringPtr("hello"),
+		Disable: boolPtr(false),
+		// No identity.EAKey stamped — this object is unowned.
+	})
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("hello")
+	cr.Spec.ForProvider.Disable = boolPtr(false)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.ZoneAuth{
+		Fqdn:    "example.com",
+		View:    stringPtr("default"),
+		Comment: stringPtr("hello"),
+		Disable: boolPtr(false),
+	})
+
+	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("hello")
+	cr.Spec.ForProvider.Disable = boolPtr(false)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+// ── Create: identity stamp in the wire body, exactly once ───────────────
+
+// TestClusterCreateStampsIdentityEAExactlyOnce asserts the identity value
+// in the request the mock server actually decoded off the wire — not the
+// in-memory cr or the local zoneAuthFields struct — and that Create()
+// issued exactly one POST.
+func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec, ok := m.records[ref]
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	if !ok {
+		t.Fatalf("Create: no record captured for ref %q", ref)
+	}
+	if createCalls != 1 {
+		t.Errorf("Create: createCalls = %d, want exactly 1", createCalls)
+	}
+	if got, present := rec.Ea[identity.EAKey]; !present || got != string(cr.GetUID()) {
+		t.Errorf("Create: wire-captured Ea[%q] = %q (present=%v), want %q", identity.EAKey, got, present, cr.GetUID())
+	}
+}
+
+// TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests asserts that a
+// managed resource with a blank uid (should never happen in a real
+// cluster — the API server always assigns a well-formed UUID — but
+// crossplane-runtime's type system does not guarantee it) fails hard
+// before issuing any WAPI call. Stamping an empty identity value would
+// make every future ambiguity search match every unstamped object.
+//
+// A whitespace-only uid is rejected the same way — createZoneAuth's
+// guard trims before the emptiness check, matching identity.Resolve's
+// ladder (see TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests).
+func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.UID = types.UID("")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a blank uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests proves a
+// whitespace-only uid is rejected the same way a blank one is —
+// createZoneAuth's guard trims before comparing, matching
+// identity.Resolve's ladder (see internal/clients/identity). Without the
+// trim, a whitespace-only uid would pass Create's guard and get stamped
+// verbatim into the object's extensible attributes, while Observe/Delete
+// (which route through identity.Resolve) would treat that same object as
+// unowned.
+func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	cr := newClusterZoneAuth("my-zoneauth", "")
+	cr.UID = types.UID("   ")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a whitespace-only uid", createCalls, recordCount)
+	}
+}
+
+// ── rotation: persistence round-trips through a client ──────────────────
+//
+// Convention: a test asserting meta.GetExternalName(cr) on the very same
+// in-memory object Observe() just mutated would pass even if the
+// annotation mutation never actually reaches the object crossplane-
+// runtime persists — for example if a future refactor read from a stale
+// copy. This test performs the same write+re-GET-on-a-distinct-instance
+// round trip the real managed reconciler performs after
+// ResourceLateInitialized:true.
+func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
+	newRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
+	e := &clusterExternal{conn: newTestConnector(t, srv)}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: want ResourceLateInitialized=true so the recovered reference is persisted, got false")
+	}
+	if meta.GetExternalName(cr) != newRef {
+		t.Fatalf("Observe: in-memory external-name = %q, want %q", meta.GetExternalName(cr), newRef)
+	}
+
+	// Simulate the managed reconciler's post-Observe persistence.
+	if err := kube.Update(context.Background(), cr); err != nil {
+		t.Fatalf("kube.Update: unexpected error: %v", err)
+	}
+
+	fetched := &clusterv1alpha1.ZoneAuth{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: cr.GetName()}, fetched); err != nil {
+		t.Fatalf("kube.Get: unexpected error: %v", err)
+	}
+	if got := meta.GetExternalName(fetched); got != newRef {
+		t.Errorf("Observe: persisted external-name (re-GET into a distinct object) = %q, want %q", got, newRef)
+	}
+}
+
+// ── newZoneAuthForGet: the constructor actually passed to Resolve ───────
+//
+// internal/clients/identity's own TestNewEmptyCorrectness exercises
+// ibclient.NewZoneAuth(ibclient.ZoneAuth{}) directly, documenting the SDK
+// baseline — but resolveZoneAuthIdentity passes this package's own
+// newZoneAuthForGet, not that raw constructor, to identity.Resolve. This
+// test closes that gap: it must fail if newZoneAuthForGet is ever
+// rewritten to build a bare &ibclient.ZoneAuth{} (losing every field the
+// append-based construction currently adds on top of the SDK default,
+// though extattrs would still survive since it is one of the SDK's own
+// baseline return fields — the real risk this guards against is a
+// rewrite that constructs the return-fields list from scratch instead of
+// appending to the SDK default).
+func TestNewZoneAuthForGetObjectTypeAndReturnFields(t *testing.T) {
+	z := newZoneAuthForGet()
+	if got := z.ObjectType(); got != "zone_auth" {
+		t.Errorf("newZoneAuthForGet().ObjectType() = %q, want %q", got, "zone_auth")
+	}
+	fields := z.ReturnFields()
+	found := false
+	for _, f := range fields {
+		if f == "extattrs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("newZoneAuthForGet().ReturnFields() = %v, want it to contain %q — identity.Resolve reads the identity stamp from the Ea field, which this field populates on GET", fields, "extattrs")
 	}
 }

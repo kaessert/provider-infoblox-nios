@@ -9,6 +9,12 @@
 # populates it. Create is synchronous — WAPI's POST returns the `_ref`
 # immediately (200/201), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same LBDN display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
+#
 # Required fields:
 #   name: DTC LBDN display name (not DNS-related).
 #   lbMethod: load balancing method used to select a pool from those
@@ -37,16 +43,24 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-lbdn.sh
-    # comment, lbMethod, priority, persistence, disable, useTtl, and ttl
-    # are the mutable scalars exercised here. lbMethod moves to RATIO,
-    # which needs no companion topology ruleset or monitor configuration
-    # (unlike TOPOLOGY or GLOBAL_AVAILABILITY) and works with the empty
-    # `pools` list this minimal example uses. useTtl is tested before ttl
-    # (same use-flag-then-value ordering as the DNS record TTL fields —
-    # see record-cname.yaml). name is also mutable, but changes the WAPI
-    # `_ref` per the field documentation; that rotation is already
-    # exercised by controller unit tests, so it is skipped here. patterns
-    # and types are list fields, not scalar update-test targets.
+    # comment, lbMethod, priority, persistence, and disable are the mutable
+    # scalars exercised here. lbMethod moves to RATIO, which needs no
+    # companion topology ruleset or monitor configuration (unlike TOPOLOGY
+    # or GLOBAL_AVAILABILITY) and works with the empty `pools` list this
+    # minimal example uses. ttl and useTtl are both skipped — unlike CNAME
+    # (record-cname.yaml), where useTtl flips safely alone, live E2E found
+    # dtc:lbdn requires the two fields in the SAME request in both
+    # directions: submitting useTtl=true without ttl is rejected outright
+    # (AdmConDataError: "Enter a ttl value", permanent ReconcileError,
+    # confirmed across 4 retries); submitting ttl alone while useTtl stays
+    # false is accepted but silently not persisted (status.atProvider.ttl
+    # never leaves "", confirmed by a 121s poll timeout). The per-field
+    # update-test harness patches one field at a time and cannot submit
+    # both atomically, so neither ordering converges — see the skip
+    # entries below. name is also mutable, but changes the WAPI `_ref`
+    # per the field documentation; that rotation is already exercised by
+    # controller unit tests, so it is skipped here. patterns and types
+    # are list fields, not scalar update-test targets.
     # pools/authZones/authZonesRefs reference other managed resources and
     # are intentionally omitted from this standalone example (see the
     # field doc above). topology is only meaningful when lbMethod=TOPOLOGY,
@@ -58,15 +72,15 @@ metadata:
       - field: lbMethod
         value: "RATIO"
       - field: priority
-        value: 5
+        value: 2
       - field: persistence
         value: 300
       - field: disable
         value: true
-      - field: useTtl
-        value: true
       - field: ttl
-        value: 3600
+        skip: "companion field of useTtl — live E2E confirmed neither field converges when patched alone (see the field-doc comment above); the per-field harness cannot submit both in one request"
+      - field: useTtl
+        skip: "companion field of ttl — see the ttl skip reason and the field-doc comment above"
       - field: name
         skip: "mutable but changes the WAPI _ref per the field documentation; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: patterns
@@ -85,10 +99,10 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-lbdn
+    name: test-dtc-lbdn-${data.runToken}
     lbMethod: ROUND_ROBIN
     patterns:
-      - "*.example.com"
+      - "*.${data.runToken}.example.com"
     comment: Managed by Crossplane
   providerConfigRef:
     name: default

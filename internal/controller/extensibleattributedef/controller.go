@@ -15,6 +15,33 @@
 // authentication, session handling, and WAPI error classification
 // uniform across all four operations.
 //
+// UID-in-EA identity ladder exception: unlike every other resource in
+// this provider, ExtensibleAttributeDef is NOT wired to the identity
+// ladder (see the recorda/ARecord controller and the
+// internal/clients/identity package doc for how every other resource
+// uses it). An extensible attribute definition cannot carry its own
+// identity extensible attribute — it IS the definition that makes such
+// attributes possible; stamping one onto itself is not a coherent
+// operation. Its name is unique Grid-wide by WAPI's own constraint, so
+// natural-key lookup (name) is already unambiguous without a UID
+// disambiguator — the identity ladder would add no correctness benefit
+// here. This controller keeps its pre-existing natural-key staleref
+// fallback (see deleteEADefinitionResolving404 and
+// eaDefinitionExistsByNaturalKey below) instead.
+//
+// Self-reference guard: the identity ladder's own prerequisite — the
+// "Crossplane Internal ID" extensible attribute definition every other
+// resource's Prober auto-provisions on first use (see
+// internal/clients/identity) — is itself an ExtensibleAttributeDef
+// object, reachable through this same controller. A managed resource
+// that happened to name itself "Crossplane Internal ID" would let a user
+// (accidentally or otherwise) rename, retype, or delete the very
+// definition every other resource in this provider depends on for
+// ownership verification, silently breaking identity resolution
+// Grid-wide. Create/Update/Delete all refuse to touch that reserved name
+// — see isReservedIdentityDefinitionName and its use in
+// cluster.go/namespaced.go.
+//
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared connector plumbing, field comparison, and late-init logic lives
 // here.
@@ -37,6 +64,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/extensibleattributedef/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/extensibleattributedef/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
@@ -58,7 +86,18 @@ const (
 	errCreateEADefinition  = "cannot create ExtensibleAttributeDef"
 	errUpdateEADefinition  = "cannot update ExtensibleAttributeDef"
 	errDeleteEADefinition  = "cannot delete ExtensibleAttributeDef"
+	errReservedName        = "refusing to manage the reserved identity extensible attribute definition (\"" + identity.EAKey + "\"): " +
+		"every other resource in this provider depends on it for ownership verification, and this controller has no way to tell a " +
+		"legitimate administrative change from one that would silently break identity resolution Grid-wide. Choose a different name."
 )
+
+// isReservedIdentityDefinitionName reports whether name is the identity
+// ladder's own EA-definition prerequisite name. Create/Update/Delete
+// refuse to touch it — see the package doc comment for the full
+// rationale.
+func isReservedIdentityDefinitionName(name string) bool {
+	return name == identity.EAKey
+}
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).

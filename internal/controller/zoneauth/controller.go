@@ -14,6 +14,13 @@
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
 // Shared WAPI plumbing, field comparison, and late-init logic lives here.
+//
+// ZoneAuth is wired to the UID-in-EA object-identity ladder (see the
+// recorda/ARecord controller, the pilot resource, and the
+// internal/clients/identity package doc for the full rationale). There
+// is no ibclient.NewEmptyZoneAuth in the SDK, so this package's own
+// newZoneAuthForGet (already used for the direct-GET path) doubles as
+// the newEmpty constructor identity.Resolve needs.
 package zoneauth
 
 import (
@@ -35,28 +42,35 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
 // package (never fmt.Errorf or the standard library error-construction
 // package).
 const (
-	errTrackPCUsage     = "cannot track ProviderConfig usage"
-	errGetPC            = "cannot get ProviderConfig"
-	errGetClusterPC     = "cannot get ClusterProviderConfig"
-	errUnsupportedKind  = "unsupported provider config kind"
-	errGetSecret        = "cannot get credentials secret"
-	errNoSecretRef      = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey   = "credentials secret is missing one of the required host/username/password keys"
-	errNewConnector     = "cannot create Infoblox NIOS WAPI connector"
-	errObserveZoneAuth  = "cannot observe ZoneAuth"
-	errCreateZoneAuth   = "cannot create ZoneAuth"
-	errUpdateZoneAuth   = "cannot update ZoneAuth"
-	errDeleteZoneAuth   = "cannot delete ZoneAuth"
-	errEmptyRef         = "empty reference to an object is not allowed"
+	errTrackPCUsage              = "cannot track ProviderConfig usage"
+	errGetPC                     = "cannot get ProviderConfig"
+	errGetClusterPC              = "cannot get ClusterProviderConfig"
+	errUnsupportedKind           = "unsupported provider config kind"
+	errGetSecret                 = "cannot get credentials secret"
+	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
+	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
+	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errNewConnector              = "cannot create Infoblox NIOS WAPI connector"
+	errObserveZoneAuth           = "cannot observe ZoneAuth"
+	errCreateZoneAuth            = "cannot create ZoneAuth"
+	errUpdateZoneAuth            = "cannot update ZoneAuth"
+	errDeleteZoneAuth            = "cannot delete ZoneAuth"
+	errEmptyUID                  = "cannot stamp ZoneAuth identity: managed resource's metadata.uid is empty"
+	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
+		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
+
+// unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
+// used when an ExternalClient is built without a resolved Grid endpoint.
+const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
@@ -883,33 +897,34 @@ func buildZoneAuthForUpdate(f zoneAuthFields) *ibclient.ZoneAuth {
 
 // ── WAPI call wrappers (shared by both scopes) ──────────────────────────
 
-// getZoneAuthByRef issues a direct WAPI GET for the zone_auth object
-// identified by ref, requesting every field mirrored by
-// ZoneAuthObservation.
-func getZoneAuthByRef(conn ibclient.IBConnector, ref string) (*ibclient.ZoneAuth, error) {
-	if ref == "" {
-		return nil, errors.New(errEmptyRef)
-	}
-	z := newZoneAuthForGet()
-	if err := conn.GetObject(z, ref, ibclient.NewQueryParams(false, nil), z); err != nil {
-		return nil, err
-	}
-	return z, nil
-}
-
 // createZoneAuth issues a direct WAPI POST for a new zone_auth object and
-// returns the server-assigned _ref.
-func createZoneAuth(conn ibclient.IBConnector, f zoneAuthFields) (string, error) {
-	return conn.CreateObject(buildZoneAuthForCreate(f))
+// returns the server-assigned _ref. Stamps the owning managed resource's
+// uid into the object's extensible attributes in the same request that
+// creates it (identity.Stamp).
+func createZoneAuth(conn ibclient.IBConnector, f zoneAuthFields, uid string) (string, error) {
+	if strings.TrimSpace(uid) == "" {
+		return "", errors.New(errEmptyUID)
+	}
+	z := buildZoneAuthForCreate(f)
+	z.Ea = identity.Stamp(z.Ea, uid)
+	return conn.CreateObject(z)
 }
 
 // updateZoneAuth issues a direct WAPI PUT against ref with only the
 // mutable zone_auth fields (see buildZoneAuthForUpdate). Returns the
 // object's current _ref — per the blueprint's _ref-stability note, this
 // always equals ref, since every field the _ref is derived from
-// (fqdn/view/zone_format) is immutable.
-func updateZoneAuth(conn ibclient.IBConnector, ref string, f zoneAuthFields) (string, error) {
-	return conn.UpdateObject(buildZoneAuthForUpdate(f), ref)
+// (fqdn/view/zone_format) is immutable. Every call re-asserts the
+// identity stamp since a WAPI PUT carrying extattrs replaces the whole
+// map rather than merging it.
+func updateZoneAuth(conn ibclient.IBConnector, ref string, f zoneAuthFields, uid string) error {
+	if uid == "" {
+		return errors.New(errEmptyUID)
+	}
+	z := buildZoneAuthForUpdate(f)
+	z.Ea = identity.Stamp(z.Ea, uid)
+	_, err := conn.UpdateObject(z, ref)
+	return err
 }
 
 // deleteZoneAuth issues a direct WAPI DELETE for the zone_auth object
@@ -919,59 +934,81 @@ func deleteZoneAuth(conn ibclient.IBConnector, ref string) error {
 	return err
 }
 
-// zoneAuthExistsByNaturalKey reports whether a live ZoneAuth still exists
-// under the CR's own (fqdn, view) identity — the same fields WAPI uses to
-// compute the _ref (together with zone_format, all three of which are
-// immutable). Used by Delete() when the stored _ref 404s: a hit here
-// means the _ref is merely stale, not that the object is gone. This
-// cannot use the ObjectManager's GetZoneAuth (if available), which
-// returns every zone with no server-side filter — this issues its own
-// filtered search through the low-level IBConnector instead, mirroring
-// getZoneAuthByRef's use of newZoneAuthForGet. When fqdn is empty there
-// is no way to re-discover the object, so the search is skipped
-// (found=false) rather than treated as an error.
-func zoneAuthExistsByNaturalKey(conn ibclient.IBConnector, fqdn, view *string) (bool, error) {
-	if strOrEmpty(fqdn) == "" {
-		return false, nil
-	}
-	sf := map[string]string{"fqdn": strOrEmpty(fqdn)}
-	if strOrEmpty(view) != "" {
-		sf["view"] = strOrEmpty(view)
-	}
-	var res []ibclient.ZoneAuth
-	err := conn.GetObject(newZoneAuthForGet(), "", ibclient.NewQueryParams(false, sf), &res)
-	if err != nil {
-		if isNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return len(res) > 0, nil
-}
+// ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 
-// deleteZoneAuthResolving404 issues the WAPI delete and, on a 404 against
-// the stored _ref, resolves the object's natural key before concluding it
-// is gone. A 404 on a derived handle is evidence the handle rotated, not
-// evidence the object was removed: if the natural-key search still finds
-// a live zone, deleting is refused because ownership of that zone cannot
-// be verified from the search alone (see the staleref package doc for the
-// full rationale).
-func deleteZoneAuthResolving404(conn ibclient.IBConnector, ref string, fqdn, view *string) error {
-	delErr := deleteZoneAuth(conn, ref)
-	if delErr == nil {
-		return nil
+// ensureIdentityPrerequisite probes the Grid for the identity extensible
+// attribute definition before any call that stamps identity onto a new
+// object. See recorda's ensureIdentityPrerequisite for the full
+// rationale.
+func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, conn ibclient.IBConnector, endpoint string) error {
+	if prober == nil {
+		prober = identity.DefaultProber
 	}
-	if !isNotFound(delErr) {
-		return errors.Wrap(delErr, errDeleteZoneAuth)
+	if endpoint == "" {
+		endpoint = unresolvedProbeEndpoint
 	}
-	found, searchErr := zoneAuthExistsByNaturalKey(conn, fqdn, view)
-	if searchErr != nil {
-		return errors.Wrap(searchErr, errDeleteZoneAuth)
-	}
-	if found {
-		return staleref.RefusalError()
+
+	if err := prober.Ensure(ctx, conn, endpoint); err != nil {
+		var prereq *identity.PrerequisiteError
+		if errors.As(err, &prereq) {
+			return err
+		}
+		return errors.Wrap(err, errPrerequisiteCheck)
 	}
 	return nil
+}
+
+// ── Identity resolution (shared by both scopes) ─────────────────────────
+
+// observeRefFor derives the reference the identity ladder should attempt
+// first for a managed resource's stored external-name.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// resolveZoneAuthIdentity resolves the ZoneAuth identified by ref/uid
+// through the shared UID-in-EA ladder. There is no
+// ibclient.NewEmptyZoneAuth in the SDK, so newZoneAuthForGet (already
+// used by the direct-GET path) doubles as the newEmpty constructor.
+func resolveZoneAuthIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.ZoneAuth, identity.Outcome, error) {
+	return identity.Resolve[*ibclient.ZoneAuth](ctx, conn, newZoneAuthForGet, ref, uid)
+}
+
+// deleteZoneAuthIdentity issues the WAPI delete for the ZoneAuth this
+// managed resource owns, resolving through the identity ladder first so
+// a stale _ref is never mistaken for a deleted object. See recorda's
+// deleteARecordIdentity doc for the full ownership-verification rules.
+func deleteZoneAuthIdentity(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, ref, uid string) error {
+	obj, outcome, err := resolveZoneAuthIdentity(ctx, conn, ref, uid)
+	if err != nil {
+		if identity.IsSearchFailure(err) {
+			if prereqErr := ensureIdentityPrerequisite(ctx, prober, conn, endpoint); prereqErr != nil {
+				return prereqErr
+			}
+		}
+		return errors.Wrap(err, errDeleteZoneAuth)
+	}
+
+	switch outcome {
+	case identity.OutcomeNotFound:
+		return nil
+	case identity.OutcomeAdopted:
+		return errors.New(errDeleteUnverifiedOwnership)
+	case identity.OutcomeResolved, identity.OutcomeRotated, identity.OutcomeFoundByUID:
+		delErr := deleteZoneAuth(conn, obj.Ref)
+		if delErr == nil {
+			return nil
+		}
+		if isNotFound(delErr) {
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteZoneAuth)
+	default:
+		return errors.New("identity: unresolved ZoneAuth outcome")
+	}
 }
 
 // ── SafeStart gate registration ─────────────────────────────────────────

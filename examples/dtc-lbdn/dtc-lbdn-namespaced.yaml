@@ -11,6 +11,12 @@
 # Distinct identity: the name below differs from dtc-lbdn.yaml's so both
 # examples can be applied to the same NIOS Grid Manager at once without
 # colliding on the same DTC LBDN display name.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same LBDN display name. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against.
 apiVersion: dtclbdn.infobloxnios.m.crossplane.io/v1alpha1
 kind: DTCLBDN
 metadata:
@@ -29,15 +35,15 @@ metadata:
       - field: lbMethod
         value: "RATIO"
       - field: priority
-        value: 5
+        value: 2
       - field: persistence
         value: 300
       - field: disable
         value: true
-      - field: useTtl
-        value: true
       - field: ttl
-        value: 3600
+        skip: "companion field of useTtl — live E2E confirmed neither field converges when patched alone (see dtc-lbdn.yaml's field-doc comment); the per-field harness cannot submit both in one request"
+      - field: useTtl
+        skip: "companion field of ttl — see the ttl skip reason and dtc-lbdn.yaml's field-doc comment"
       - field: name
         skip: "mutable but changes the WAPI _ref per the field documentation; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: patterns
@@ -56,10 +62,10 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    name: test-dtc-lbdn-ns
+    name: test-dtc-lbdn-ns-${data.runToken}
     lbMethod: ROUND_ROBIN
     patterns:
-      - "*.namespaced.example.com"
+      - "*.namespaced.${data.runToken}.example.com"
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
     kind: ClusterProviderConfig

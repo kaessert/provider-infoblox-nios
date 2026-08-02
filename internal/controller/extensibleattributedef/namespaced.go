@@ -210,6 +210,10 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.E
 // server-assigned _ref as the external name.
 func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalCreation, error) {
 	p := cr.Spec.ForProvider
+	if isReservedIdentityDefinitionName(p.Name) {
+		return managed.ExternalCreation{}, errors.New(errReservedName)
+	}
+
 	def, err := createEADefinition(e.conn, p.Name, p.Type, p.Comment, p.DefaultValue, p.Min, p.Max, p.Flags,
 		toSDKListValues(namespacedListValuesToStrings(p.ListValues)), p.AllowedObjectTypes, descendantsActionToSDK(p.DescendantsAction))
 	if err != nil {
@@ -224,6 +228,10 @@ func (e *namespacedExternal) Create(_ context.Context, cr *namespacedv1alpha1.Ex
 // (immutable) are never sent — see updateEADefinition.
 func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalUpdate, error) {
 	p := cr.Spec.ForProvider
+	if isReservedIdentityDefinitionName(p.Name) {
+		return managed.ExternalUpdate{}, errors.New(errReservedName)
+	}
+
 	externalID := meta.GetExternalName(cr)
 
 	newRef, err := updateEADefinition(e.conn, externalID, p.Name, p.Comment, p.DefaultValue, p.Flags,
@@ -247,6 +255,10 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 // deleteEADefinitionResolving404 — because the _ref is a derived handle
 // (name-based) that rotates when name changes.
 func (e *namespacedExternal) Delete(_ context.Context, cr *namespacedv1alpha1.ExtensibleAttributeDef) (managed.ExternalDelete, error) {
+	if isReservedIdentityDefinitionName(cr.Spec.ForProvider.Name) {
+		return managed.ExternalDelete{}, errors.New(errReservedName)
+	}
+
 	externalID := meta.GetExternalName(cr)
 	if err := deleteEADefinitionResolving404(e.conn, externalID, cr.Spec.ForProvider.Name); err != nil {
 		return managed.ExternalDelete{}, err

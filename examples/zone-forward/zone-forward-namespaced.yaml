@@ -10,6 +10,12 @@
 # Distinct identity: the fqdn below differs from zone-forward.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, fqdn) WAPI identity.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same (view, fqdn) WAPI identity. Left
+# literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
 apiVersion: zoneforward.infobloxnios.m.crossplane.io/v1alpha1
 kind: ZoneForward
 metadata:
@@ -41,7 +47,7 @@ metadata:
         skip: "optional map field, low update-test value"
 spec:
   forProvider:
-    fqdn: forward-ns.example.com
+    fqdn: forward-ns-${data.runToken}.example.com
     forwardTo:
       - name: ns1.forwarder.com
         address: 10.0.1.1

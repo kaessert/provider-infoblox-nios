@@ -31,6 +31,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/extensibleattributedef/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -1698,4 +1699,103 @@ func TestNewConnectorWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ── Self-reference guard ─────────────────────────────────────────────────
+//
+// The identity ladder's own EA-definition prerequisite (see
+// internal/clients/identity's Prober) is itself an ExtensibleAttributeDef
+// named "Crossplane Internal ID". Create/Update/Delete must refuse to
+// touch that reserved name — see isReservedIdentityDefinitionName in
+// controller.go — and must do so before issuing any WAPI call at all.
+// Each test below uses a server that fails the test on any HTTP request,
+// proving the refusal short-circuits before the network.
+
+func failOnAnyRequest(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected HTTP call: %s %s", r.Method, r.URL.Path)
+	}))
+}
+
+func assertReservedNameRefusal(t *testing.T, err error, op string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: expected refusal error for the reserved identity definition name, got nil", op)
+	}
+	if !strings.Contains(err.Error(), "refusing to manage the reserved identity extensible attribute definition") {
+		t.Errorf("%s: error = %q, want it to explain the refusal", op, err.Error())
+	}
+}
+
+func TestClusterCreateRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", "")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Create(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Create")
+}
+
+func TestClusterUpdateRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", "extensibleattributedef/test1:MyAttribute")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Update(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Update")
+}
+
+func TestClusterDeleteRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newClusterEADef("my-eadef", "extensibleattributedef/test1:MyAttribute")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Delete(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Delete")
+}
+
+func TestNamespacedCreateRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", "", "ProviderConfig")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Create(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Create")
+}
+
+func TestNamespacedUpdateRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", "extensibleattributedef/test1:MyAttribute", "ProviderConfig")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Update(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Update")
+}
+
+func TestNamespacedDeleteRefusesReservedName(t *testing.T) {
+	srv := failOnAnyRequest(t)
+	defer srv.Close()
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, conn: newTestConnector(t, srv)}
+	cr := newNamespacedEADef("default", "my-eadef", "extensibleattributedef/test1:MyAttribute", "ProviderConfig")
+	cr.Spec.ForProvider.Name = identity.EAKey
+
+	_, err := e.Delete(context.Background(), cr)
+	assertReservedNameRefusal(t, err, "Delete")
 }

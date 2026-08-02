@@ -18,12 +18,14 @@ import (
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	cperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -31,6 +33,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcpool/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -180,10 +183,27 @@ type mockDtcPoolServer struct {
 	// lastGetQuery captures the raw query string of the most recent GET
 	// request, for tests that assert which _return_fields were requested.
 	lastGetQuery string
+
+	// eaDefExists controls the identity extensible-attribute-definition
+	// prerequisite endpoint. Defaults to true via newMockDtcPoolServer.
+	eaDefExists bool
+	// eaDefCreatable controls whether a POST to create the missing
+	// definition succeeds, when eaDefExists is false.
+	eaDefCreatable bool
+	// searchCalls counts identity-EA search requests.
+	searchCalls int
+	// eaDefSearchCalls counts prerequisite-probe GET requests.
+	eaDefSearchCalls int
+	// createCalls counts POST (create) requests — tests assert this to
+	// prove a refusal or a validation failure issued zero mutating
+	// requests, not just that the in-memory record set looks unchanged.
+	createCalls int
+	// deleteCalls counts DELETE requests, for the same reason.
+	deleteCalls int
 }
 
 func newMockDtcPoolServer() *mockDtcPoolServer {
-	return &mockDtcPoolServer{records: map[string]*ibclient.DtcPool{}}
+	return &mockDtcPoolServer{records: map[string]*ibclient.DtcPool{}, eaDefExists: true}
 }
 
 func (m *mockDtcPoolServer) seed(rec *ibclient.DtcPool) string {
@@ -311,21 +331,36 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 		if rec.LbAlternateMethod == "" {
 			rec.LbAlternateMethod = lbAlternateMethodUnset
 		}
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		ref := m.seed(&rec)
 		writeJSON(w, http.StatusOK, ref)
 	})
 
-	// Search endpoint (dtcPoolExistsByNaturalKey): a GET with no _ref
-	// path segment, filtered by the `name` query param. Registered as
-	// an exact literal path so Go's ServeMux prefers it over the
-	// {ref...} wildcard below for requests to precisely "dtc:pool"
-	// (real _refs always carry additional path segments).
+	// Search endpoint: a GET with no _ref path segment. The identity
+	// ladder (identity.Resolve's searchByUID) filters by the stamped
+	// "*Crossplane Internal ID" extensible attribute; legacy tests may
+	// still filter by the `name` query param. Registered as an exact
+	// literal path so Go's ServeMux prefers it over the {ref...}
+	// wildcard below for requests to precisely "dtc:pool" (real _refs
+	// always carry additional path segments).
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/dtc:pool", func(w http.ResponseWriter, r *http.Request) {
+		uid := r.URL.Query().Get("*" + identity.EAKey)
 		name := r.URL.Query().Get("name")
 
 		m.mu.Lock()
+		m.searchCalls++
 		var matches []*wireDtcPool
 		for _, rec := range m.records {
+			if uid != "" {
+				got, ok := rec.Ea[identity.EAKey]
+				if !ok || got != uid {
+					continue
+				}
+				matches = append(matches, toWire(rec))
+				continue
+			}
 			if name != "" && (rec.Name == nil || *rec.Name != name) {
 				continue
 			}
@@ -336,6 +371,34 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 		// Always respond 200 — WAPI search semantics report "not found"
 		// via an empty array, never an HTTP error status.
 		writeJSON(w, http.StatusOK, matches)
+	})
+
+	// Identity extensible-attribute-definition prerequisite endpoint
+	// (see internal/clients/identity's Prober).
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.eaDefSearchCalls++
+		exists := m.eaDefExists
+		m.mu.Unlock()
+		if exists {
+			writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: stringPtr(identity.EAKey)}})
+			return
+		}
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{})
+	})
+	mux.HandleFunc("POST /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		creatable := m.eaDefCreatable
+		m.mu.Unlock()
+		if creatable {
+			m.mu.Lock()
+			m.eaDefExists = true
+			m.mu.Unlock()
+			writeJSON(w, http.StatusOK, "extensibleattributedef/identity-def:"+identity.EAKey)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"Error":"IBDataConflictError: Cannot create extensible attribute definition. Only superusers can manage extensible attribute definition"}`))
 	})
 
 	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +471,7 @@ func (m *mockDtcPoolServer) handler() http.Handler {
 	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		ref := r.PathValue("ref")
 		m.mu.Lock()
+		m.deleteCalls++
 		_, ok := m.records[ref]
 		delete(m.records, ref)
 		m.mu.Unlock()
@@ -477,7 +541,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		LbPreferredMethod: lbRoundRobin,
 		Comment:           stringPtr("hello"),
 		Disable:           boolPtr(false),
-		Ea:                ibclient.EA{eaKeyEnv: eaValProd},
+		Ea:                ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "test-uid-cluster"},
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -558,13 +622,15 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
-// TestObservePreCreateState verifies that Observe short-circuits (no HTTP
-// call) when the external-name still equals the CR's Kubernetes name — the
-// pre-create state for a server-assigned external-name strategy.
+// TestObservePreCreateState verifies that Observe runs one identity
+// search (not a hard-coded no-op) when the external-name still equals
+// the CR's Kubernetes name — the pre-create state for a server-assigned
+// external-name strategy. Per ADR-IN-0006 §3 the pre-create guard no
+// longer short-circuits: it maps the annotation to "" and lets the
+// identity ladder search by uid before concluding ResourceExists:false.
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -577,6 +643,13 @@ func TestObservePreCreateState(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
 	}
 }
 
@@ -682,6 +755,7 @@ func TestClusterObserveConsolidatedMonitorsAndHealth(t *testing.T) {
 			Description:  "healthy",
 			EnabledState: "ENABLED",
 		},
+		Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"},
 	})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -952,7 +1026,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"}})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newClusterDTCPool("my-dtcpool", ref)
@@ -1001,42 +1075,100 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// core defect fix: a 404 against the stored _ref must not be treated as
-// "already deleted" when a natural-key search finds the same identity
-// still live under a different _ref. Deleting that record would be
-// unverifiable ownership, so Delete() must refuse and leave the record in
-// place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterDeleteRefusesOnForeignIdentity verifies the identity ladder's
+// handle-reuse refusal: the stored _ref still resolves, but its stamped
+// identity attribute belongs to a different managed resource. Deleting it
+// would destroy someone else's object, so Delete() must refuse and leave
+// the record in place.
+func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
-	cr := newClusterDTCPool("my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool")
+	cr := newClusterDTCPool("my-dtcpool", ref)
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
 	}
 }
 
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// companion happy path: a 404 against the stored _ref, and a natural-key
-// search that finds nothing, means the object really is gone.
-func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// TestClusterDeleteRefusesOnUnstampedObject verifies the identity ladder's
+// adopt-vs-delete asymmetry: the stored _ref resolves but the object
+// carries no identity stamp at all. Observe() adopts and re-stamps such
+// objects leniently, but Delete() must refuse — destroying an object is
+// irreversible and ownership cannot be proven.
+func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", ref)
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected refusal error when the resolved object carries no identity stamp, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete") {
+		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[ref]
+	m.mu.Unlock()
+	if !stillExists {
+		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	}
+}
+
+// TestClusterDeleteRecoversRotatedRefAndDeletes verifies rotation
+// recovery: the stored _ref 404s, but exactly one live object carries
+// this managed resource's identity stamp. Delete() must recover it via
+// the identity-EA search and delete the recovered object, not report a
+// false already-gone success.
+func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterDTCPool("my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool")
+	liveRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a rotated reference: %v", err)
+	}
+
+	m.mu.Lock()
+	_, stillExists := m.records[liveRef]
+	m.mu.Unlock()
+	if stillExists {
+		t.Error("Delete: recovered record was not removed")
+	}
+}
+
+// TestClusterDeleteSucceedsWhenTrulyAbsent is the companion happy path: a
+// 404 against the stored _ref, and an identity-EA search that finds
+// nothing, means the object really is gone.
+func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1045,38 +1177,36 @@ func TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
 	cr := newClusterDTCPool("my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
 	}
 }
 
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRefusesOnForeignIdentity verifies the Observe()-side
+// half of handle-reuse refusal: crossplane-runtime's managed reconciler
+// calls Observe() before Delete() on the deletion path, and if Observe()
+// silently adopted a foreign object it would let the next Update/Delete
+// mutate or destroy someone else's record.
+func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
-	cr := newClusterDTCPool("my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool")
+	cr := newClusterDTCPool("my-dtcpool", ref)
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Observe: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
@@ -1161,6 +1291,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.DtcPool{
 		Name:              stringPtr("my-dtc-pool"),
 		LbPreferredMethod: lbRoundRobin,
+		Ea:                ibclient.EA{identity.EAKey: "test-uid-namespaced"},
 	})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -1194,6 +1325,7 @@ func TestNamespacedObserveConsolidatedMonitorsAndHealth(t *testing.T) {
 			Description:  "healthy",
 			EnabledState: "ENABLED",
 		},
+		Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"},
 	})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -1237,7 +1369,8 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 }
 
 func TestNamespacedObservePreCreateState(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
@@ -1250,6 +1383,13 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	}
 	if got.ResourceExists {
 		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+	}
+
+	m.mu.Lock()
+	searchCalls := m.searchCalls
+	m.mu.Unlock()
+	if searchCalls == 0 {
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -1355,7 +1495,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"}})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
 	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", ref, "ProviderConfig")
@@ -1390,68 +1530,67 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestNamespacedDeleteRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterDeleteRefusesOnForeignIdentity.
+func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool", "ProviderConfig")
+	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Delete: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Delete: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
 	}
 }
 
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
-// namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestNamespacedObserveRefusesOnForeignIdentity is the namespaced-scope
+// counterpart of TestClusterObserveRefusesOnForeignIdentity.
+func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	liveRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool")})
+	ref := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
-	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool", "ProviderConfig")
+	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", ref, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+		t.Fatal("Observe: expected refusal error when the resolved object's identity attribute belongs to a different owner, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var reuse *identity.HandleReuseError
+	if !cperrors.As(err, &reuse) {
+		t.Errorf("Observe: error = %v, want a *identity.HandleReuseError", err)
 	}
 
 	m.mu.Lock()
-	_, stillExists := m.records[liveRef]
+	_, stillExists := m.records[ref]
 	m.mu.Unlock()
 	if !stillExists {
 		t.Error("Observe: live record was removed — Observe() must never mutate the backend")
 	}
 }
 
-// TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch is the
-// namespaced-scope counterpart of
-// TestClusterDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch.
-func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) {
+// TestNamespacedDeleteSucceedsWhenTrulyAbsent is the namespaced-scope
+// counterpart of TestClusterDeleteSucceedsWhenTrulyAbsent.
+func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	m := newMockDtcPoolServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1460,7 +1599,7 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 	cr := newNamespacedDTCPool(nsDefault, "my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
-		t.Fatalf("Delete: want nil error when the natural-key search also finds nothing, got: %v", err)
+		t.Fatalf("Delete: want nil error when the identity search also finds nothing, got: %v", err)
 	}
 }
 
@@ -1751,6 +1890,29 @@ func TestLateInitializeBackfillsOptionalFields(t *testing.T) {
 	}
 }
 
+// TestLateInitializeStripsIdentityEAFromExtAttrs proves the reserved
+// identity key never late-inits into spec.forProvider.extAttrs.
+func TestLateInitializeStripsIdentityEAFromExtAttrs(t *testing.T) {
+	var comment, availability, lbAlternateMethod, lbPreferredTopology, lbAlternateTopology *string
+	var disable, useTTL *bool
+	var quorum, ttl *uint32
+	var extAttrs map[string]string
+	var lbdrp, lbdra *dynRatio
+
+	rec := &ibclient.DtcPool{
+		Ea: ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "some-uid"},
+	}
+
+	lateInitialize(&comment, &disable, &availability, &quorum, &ttl, &useTTL, &extAttrs, &lbAlternateMethod, &lbPreferredTopology, &lbAlternateTopology, &lbdrp, &lbdra, rec)
+
+	if _, present := extAttrs[identity.EAKey]; present {
+		t.Errorf("lateInitialize: extAttrs contains the reserved identity key %q, want it stripped", identity.EAKey)
+	}
+	if !extAttrsEqual(extAttrs, map[string]string{eaKeyEnv: eaValProd}) {
+		t.Errorf("lateInitialize: extAttrs = %v, want {env: prod} (identity key stripped)", extAttrs)
+	}
+}
+
 func TestLateInitializeDoesNotOverwriteSetFields(t *testing.T) {
 	comment := stringPtr("user comment")
 	disable := boolPtr(false)
@@ -2032,3 +2194,325 @@ func errorsNewf(msg string) error {
 type testError struct{ msg string }
 
 func (e *testError) Error() string { return e.msg }
+
+// ── identity ladder: Ambiguous match refusal ────────────────────────────
+
+func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-cluster"
+	ref1 := m.seed(&ibclient.DtcPool{Name: stringPtr("pool-one"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.DtcPool{Name: stringPtr("pool-two"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	uid := "test-uid-namespaced"
+	ref1 := m.seed(&ibclient.DtcPool{Name: stringPtr("pool-one"), Ea: ibclient.EA{identity.EAKey: uid}})
+	ref2 := m.seed(&ibclient.DtcPool{Name: stringPtr("pool-two"), Ea: ibclient.EA{identity.EAKey: uid}})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCPool("default", "my-dtcpool", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected refusal error when the identity search matches more than one Grid object, got nil")
+	}
+	var ambiguous *identity.AmbiguousMatchError
+	if !cperrors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want a *identity.AmbiguousMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, ref1Exists := m.records[ref1]
+	_, ref2Exists := m.records[ref2]
+	deleteCalls := m.deleteCalls
+	createCalls := m.createCalls
+	eaDefSearchCalls := m.eaDefSearchCalls
+	m.mu.Unlock()
+	if !ref1Exists || !ref2Exists {
+		t.Error("Observe: a live record was removed — Observe() must never mutate the backend, ambiguous or not")
+	}
+	if deleteCalls != 0 || createCalls != 0 {
+		t.Errorf("Observe: deleteCalls=%d createCalls=%d, want 0/0 — an ambiguous match must never trigger a mutating request", deleteCalls, createCalls)
+	}
+	if eaDefSearchCalls != 0 {
+		t.Errorf("Observe: eaDefSearchCalls = %d, want 0 — an AmbiguousMatchError is unrelated to whether the search itself failed and must not probe", eaDefSearchCalls)
+	}
+}
+
+// ── identity ladder: Adopted never reports up to date ───────────────────
+
+func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+		// No identity.EAKey stamped — this object is unowned.
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newNamespacedDTCPool("default", "my-dtcpool", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for an adoptable object, got false")
+	}
+	if got.ResourceUpToDate {
+		t.Error("Observe: want ResourceUpToDate=false for an adopted (unstamped) object even though every user-facing field matches — otherwise it is never re-stamped")
+	}
+}
+
+// ── Create: identity stamp in the wire body, exactly once ───────────────
+
+func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ref := meta.GetExternalName(cr)
+	m.mu.Lock()
+	rec, ok := m.records[ref]
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	if !ok {
+		t.Fatalf("Create: no record captured for ref %q", ref)
+	}
+	if createCalls != 1 {
+		t.Errorf("Create: createCalls = %d, want exactly 1", createCalls)
+	}
+	if got, present := rec.Ea[identity.EAKey]; !present || got != string(cr.GetUID()) {
+		t.Errorf("Create: wire-captured Ea[%q] = %q (present=%v), want %q", identity.EAKey, got, present, cr.GetUID())
+	}
+}
+
+// TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests: see zoneauth's
+// identically-named test. A whitespace-only uid is rejected the same
+// way — see TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests.
+func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "")
+	cr.UID = types.UID("")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a blank uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a blank uid", createCalls, recordCount)
+	}
+}
+
+// TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests: see
+// zoneauth's identically-named test for the rationale.
+func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", "")
+	cr.UID = types.UID("   ")
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	createCalls := m.createCalls
+	recordCount := len(m.records)
+	m.mu.Unlock()
+	if createCalls != 0 || recordCount != 0 {
+		t.Errorf("Create: createCalls=%d recordCount=%d, want 0/0 for a whitespace-only uid", createCalls, recordCount)
+	}
+}
+
+// ── rotation: persistence round-trips through a client ──────────────────
+
+func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	cr := newClusterDTCPool("my-dtcpool", "dtc:pool/stale-ref:my-dtc-pool")
+	newRef := m.seed(&ibclient.DtcPool{Name: stringPtr("my-dtc-pool"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
+
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: want ResourceLateInitialized=true so the recovered reference is persisted, got false")
+	}
+	if meta.GetExternalName(cr) != newRef {
+		t.Fatalf("Observe: in-memory external-name = %q, want %q", meta.GetExternalName(cr), newRef)
+	}
+
+	// Simulate the managed reconciler's post-Observe persistence.
+	if err := kube.Update(context.Background(), cr); err != nil {
+		t.Fatalf("kube.Update: unexpected error: %v", err)
+	}
+
+	fetched := &clusterv1alpha1.DTCPool{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: cr.GetName()}, fetched); err != nil {
+		t.Fatalf("kube.Get: unexpected error: %v", err)
+	}
+	if got := meta.GetExternalName(fetched); got != newRef {
+		t.Errorf("Observe: persisted external-name (re-GET into a distinct object) = %q, want %q", got, newRef)
+	}
+}
+
+// ── isUpToDate: identity EA never produces a phantom diff ───────────────
+//
+// isUpToDate/collectionFieldsUpToDate has its own identity.Strip call
+// site, separate from lateInitializeExtAttrs's. This test targets it
+// directly: a spec.extAttrs that already matches the user-facing keys
+// must still compare up to date against a live record whose Ea
+// additionally carries the reserved identity stamp.
+func TestIsUpToDateIgnoresIdentityEA(t *testing.T) {
+	rec := &ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+		Ea:                ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "some-uid"},
+	}
+	name := stringPtr("my-dtc-pool")
+	lbPreferredMethod := stringPtr(lbRoundRobin)
+
+	if !isUpToDate(name, lbPreferredMethod, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, map[string]string{eaKeyEnv: eaValProd}, rec) {
+		t.Error("isUpToDate: want true when spec.extAttrs already matches the user-facing keys and the live object's Ea only additionally carries the reserved identity stamp")
+	}
+}
+
+// ── newEmptyDtcPool: the constructor actually passed to Resolve ─────────
+//
+// internal/clients/identity's own TestNewEmptyCorrectness documents this
+// as one of the two packages (alongside dtclbdn) whose local newEmpty
+// wrapper it does NOT exercise directly. This test closes that gap.
+func TestNewEmptyDtcPoolObjectTypeAndReturnFields(t *testing.T) {
+	p := newEmptyDtcPool()
+	if got := p.ObjectType(); got != "dtc:pool" {
+		t.Errorf("newEmptyDtcPool().ObjectType() = %q, want %q", got, "dtc:pool")
+	}
+	fields := p.ReturnFields()
+	found := false
+	for _, f := range fields {
+		if f == "extattrs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("newEmptyDtcPool().ReturnFields() = %v, want it to contain %q — identity.Resolve reads the identity stamp from the Ea field, which this field populates on GET", fields, "extattrs")
+	}
+}
+
+// ── status.atProvider mirror retains the identity key (convention 0032) ─
+
+func TestClusterObserveAtProviderExtAttrsRetainsIdentityKey(t *testing.T) {
+	m := newMockDtcPoolServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcPool{
+		Name:              stringPtr("my-dtc-pool"),
+		LbPreferredMethod: lbRoundRobin,
+		Ea:                ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "test-uid-cluster"},
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	cr := newClusterDTCPool("my-dtcpool", ref)
+	cr.Spec.ForProvider.ExtAttrs = map[string]string{eaKeyEnv: eaValProd}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if got, present := cr.Status.AtProvider.ExtAttrs[identity.EAKey]; !present || got != "test-uid-cluster" {
+		t.Errorf("Observe: status.atProvider.extAttrs[%q] = %q (present=%v), want the full-mirror copy to retain the identity stamp", identity.EAKey, got, present)
+	}
+}
