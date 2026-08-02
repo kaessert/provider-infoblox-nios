@@ -25,6 +25,12 @@ type Runner struct {
 	// Tests inject a fake here to simulate kubectl output without a live
 	// cluster; production code leaves it nil and exec() shells out for real.
 	execFunc func(args []string) (string, error)
+
+	// restartFunc, when set, overrides restartControllerDeployment as the
+	// mechanism resetEventBurst uses to earn back a fresh event-spam-filter
+	// burst (see eventBurstCeiling). Tests inject a fake here; production
+	// code leaves it nil and resetEventBurst shells out to kubectl for real.
+	restartFunc func() error
 }
 
 // NewRunner creates a Runner for the given manifest file.
@@ -383,6 +389,19 @@ type TestResult struct {
 	// UpdateEvidenced is already true, so the slow duration is reported as
 	// a labelled variant of PASS, not a reason to doubt the verdict.
 	SlowObserve bool
+	// EvidenceUntrusted marks a field test whose evidence check ran after a
+	// resetEventBurst attempt failed earlier in this run. A failed reset
+	// leaves the controller's in-process event-spam-filter burst
+	// (eventBurstCeiling) unrefreshed, so the aggregated event count this
+	// field's evidence check relies on can no longer be trusted to prove
+	// OR disprove that Update() ran: a PASS could be masking silently
+	// dropped events, and a NOT-EVIDENCED could be a false failure caused
+	// by the same drop. RunTests sets this on every non-skipped, non-no-op
+	// result from the point of the first reset failure onward, and the
+	// summary treats any run containing one as failed — "0 not-evidenced"
+	// must never print as a clean PASS when the evidence behind it is
+	// unreliable.
+	EvidenceUntrusted bool
 }
 
 // slowObserveThreshold is the duration above which a passing, evidenced
@@ -391,6 +410,27 @@ type TestResult struct {
 // comfortably above the couple of seconds a forced reconcile normally takes,
 // while still well under a full poll cycle.
 const slowObserveThreshold = 30 * time.Second
+
+// eventBurstCeiling caps the number of Update()-triggering field tests this
+// runner attempts against a single controller process before proactively
+// restarting it. client-go's EventBroadcaster spam filter allows a burst of
+// ~25 identical events per involved object before silently DROPPING further
+// ones — not folding them into an existing aggregated Event's .count — so a
+// resource with more mutable fields than that burst produces false
+// NOT-EVIDENCED results once the burst is spent, even though the
+// controller's Update() path ran correctly every time (see
+// applyEvidenceCheck and countUpdateEvents). Restarting the controller
+// discards that in-memory state — a brand new process starts with a fresh
+// burst and, because client-go's event-aggregation cache is also in-memory
+// and per-process, emits a brand NEW Event object afterward rather than
+// continuing to patch the throttled one. countUpdateEvents already sums
+// every matching Event object for the resource regardless of which one
+// carries the count, so no change to the counting logic itself is needed —
+// only to how often the controller gets a fresh burst. The margin below the
+// documented ~25-token ceiling leaves room for a stray incidental event
+// (e.g. a transient CannotUpdateExternalResource) without crossing the hard
+// limit before the proactive reset fires.
+const eventBurstCeiling = 20
 
 // RunTests executes all update tests from the manifest and returns results.
 func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
@@ -404,6 +444,20 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 	}
 
 	var results []TestResult
+	var attemptsSinceReset int
+	// resetFailed goes true the first time resetEventBurst fails and stays
+	// true for the rest of the run. A failed reset leaves the controller's
+	// in-process event-spam-filter burst unrefreshed, so every evidence
+	// check from that point on is running against a burst of unknown
+	// remaining capacity — it may still have headroom (evidence stays
+	// trustworthy) or may already be silently dropping events (a PASS
+	// could be masking a real Update() failure, or a NOT-EVIDENCED could be
+	// a false failure). There is no live signal that tells the runner which
+	// case it is in, so once trust is lost it is not re-earned by treating
+	// a later reset attempt as sufficient on its own — the run-level
+	// verdict must reflect that some portion of the evidence is unreliable
+	// rather than silently reporting a clean pass.
+	var resetFailed bool
 	for _, t := range m.Tests {
 		if t.Skip != "" {
 			results = append(results, TestResult{
@@ -414,12 +468,119 @@ func (r *Runner) RunTests(m *Manifest) ([]TestResult, error) {
 			continue
 		}
 
+		// Proactively earn back a fresh event-spam-filter burst BEFORE it
+		// would be exhausted, rather than reacting after the fact — once a
+		// burst is spent, the dropped events are gone for good (see
+		// eventBurstCeiling), so there is nothing to "catch up" on the next
+		// field. A failed reset does not abort the run: attemptsSinceReset
+		// still clears so the runner does not retry the restart before
+		// every remaining field, and later fields simply lose the
+		// burst-avoidance benefit rather than the whole run. The run's
+		// reported verdict is degraded instead — see resetFailed and
+		// EvidenceUntrusted.
+		if attemptsSinceReset >= eventBurstCeiling {
+			if err := r.resetEventBurst(); err != nil {
+				fmt.Fprintf(os.Stderr, "    warning: resetting controller event burst: %v\n", err)
+				resetFailed = true
+			}
+			attemptsSinceReset = 0
+		}
+
 		var result TestResult
 		result, snapshot = r.runFieldTest(t, snapshot, m.Kind, m.Name)
+		// A no-op test never reaches applyPatchAndReconcile, so it never
+		// consults the event-evidence check — the burst reset's success or
+		// failure is irrelevant to it.
+		if resetFailed && !result.NoOp {
+			result.EvidenceUntrusted = true
+		}
 		results = append(results, result)
+		// Only a real (non-no-op) patch has a chance of consuming a burst
+		// token — a no-op test short-circuits before applyPatchAndReconcile
+		// ever runs, so it never emits an update event.
+		if !result.NoOp {
+			attemptsSinceReset++
+		}
 	}
 
 	return results, nil
+}
+
+// providerDeploymentNamespace is where the Crossplane package manager
+// deploys every provider's controller Deployment.
+const providerDeploymentNamespace = "crossplane-system"
+
+// providerDeploymentSelector matches the controller Pod for the currently
+// installed provider package revision — the same label the provider
+// build/deploy flow already waits on before running any E2E test. It does
+// NOT match the Deployment object itself: Crossplane's package manager
+// places this label on the Deployment's spec.selector.matchLabels and
+// spec.template.metadata.labels, never on the Deployment's own
+// metadata.labels, so `kubectl get deploy -l pkg.crossplane.io/revision`
+// always returns zero results (verified live against a Crossplane v2.2.1
+// cluster). The label IS present on the Pod's metadata.labels, which is
+// what restartControllerDeployment selects against.
+const providerDeploymentSelector = "pkg.crossplane.io/revision"
+
+// controllerRestartTimeout bounds how long resetEventBurst waits for the
+// restarted controller Deployment to report a ready replica.
+const controllerRestartTimeout = 180 * time.Second
+
+// resetEventBurst restarts the provider's controller Deployment to discard
+// its in-process event-spam-filter and event-aggregation-cache state (see
+// eventBurstCeiling), then waits for a fresh replica to become ready.
+// Restarting mid-run is safe: crossplane-runtime's managed reconciler holds
+// no state that this tool depends on across restarts — every reconcile the
+// runner cares about is driven explicitly (ClearConditions + WaitReady, or
+// NudgeReconcile) rather than inferred from anything the previous process
+// remembered.
+func (r *Runner) resetEventBurst() error {
+	if r.restartFunc != nil {
+		return r.restartFunc()
+	}
+	return r.restartControllerDeployment()
+}
+
+// restartControllerDeployment resolves the running provider's controller
+// Deployment and issues a rolling restart, then blocks until the rollout
+// reports ready.
+func (r *Runner) restartControllerDeployment() error {
+	name, err := r.resolveControllerDeploymentName()
+	if err != nil {
+		return fmt.Errorf("resolving provider deployment: %w", err)
+	}
+	target := "deploy/" + name
+
+	if _, err := r.runRaw("rollout", "restart", target, "-n", providerDeploymentNamespace); err != nil {
+		return fmt.Errorf("restarting %s: %w", target, err)
+	}
+	if _, err := r.runRaw("rollout", "status", target, "-n", providerDeploymentNamespace,
+		"--timeout="+controllerRestartTimeout.String()); err != nil {
+		return fmt.Errorf("waiting for %s rollout: %w", target, err)
+	}
+	return nil
+}
+
+// resolveControllerDeploymentName finds the provider controller Deployment's
+// name by reading it off its Pod rather than the Deployment object itself
+// (see providerDeploymentSelector for why the Deployment can't be selected
+// directly). Crossplane names the Deployment after the installed package
+// revision, and stamps that exact name onto the Pod's
+// pkg.crossplane.io/revision label — so reading the label's value off the
+// (correctly selectable) Pod recovers the Deployment name without walking
+// ownerReferences through a ReplicaSet.
+func (r *Runner) resolveControllerDeploymentName() (string, error) {
+	out, err := r.runRaw("get", "pods", "-n", providerDeploymentNamespace,
+		"-l", providerDeploymentSelector,
+		"-o", `jsonpath={.items[0].metadata.labels.pkg\.crossplane\.io/revision}`)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(out)
+	if name == "" {
+		return "", fmt.Errorf("no pod found with label %s in namespace %s", providerDeploymentSelector, providerDeploymentNamespace)
+	}
+	return name, nil
 }
 
 // runFieldTest executes a single (non-skipped) update test: it patches the

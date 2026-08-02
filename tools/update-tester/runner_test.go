@@ -18,6 +18,11 @@ const testFieldNotifyDelay = "notifyDelay"
 // and in config_test.go.
 const testIPv6NetworkPrefix = "ipv6network/"
 
+// kubectlGetSubcommand is the kubectl "get" subcommand name, shared across
+// this file's fakeCluster dispatcher and the restartControllerDeployment
+// argv assertions so the literal isn't repeated enough to trip goconst.
+const kubectlGetSubcommand = "get"
+
 // fakeCluster is an in-memory stand-in for a live cluster's view of a single
 // managed resource. It implements the subset of kubectl behaviour Runner
 // depends on (get -o json, get -o jsonpath=..., get events, patch, wait) so
@@ -41,19 +46,37 @@ type fakeCluster struct {
 	name string
 
 	// recordUpdateEvent, when true, makes each real field patch (not the
-	// ClearConditions status patch) increment eventCount by one — simulating
-	// a controller whose Update() call emits an UpdatedExternalResource
-	// event. Left false, patches succeed and atProvider still converges, but
-	// no event is ever recorded — the "update not evidenced" scenario.
+	// ClearConditions status patch) increment the active generation's
+	// aggregated count by one — simulating a controller whose Update() call
+	// emits an UpdatedExternalResource event. Left false, patches succeed
+	// and atProvider still converges, but no event is ever recorded — the
+	// "update not evidenced" scenario.
 	recordUpdateEvent bool
-	eventCount        int32
-	// emitZeroCountEvent, when true, reports the aggregated event's .count
-	// field as 0 once eventCount reaches at least 1 — mirroring client-go's
-	// event recorder, which leaves .count unset (0) for an event's first,
-	// unaggregated occurrence. Exercises sumEventOccurrences's zero-guard
-	// (a 0 count is 1 occurrence, not 0) through the runFieldTest evidence
-	// check rather than only through the standalone sumEventOccurrences unit
-	// tests.
+	// eventBudget caps how many events a single controller "process" (the
+	// stretch between restart() calls) accumulates before further
+	// increments are silently dropped — simulating client-go's in-process
+	// event-spam-filter burst ceiling (see eventBurstCeiling in runner.go).
+	// 0 (the default) means unlimited, for tests that are not exercising
+	// the ceiling.
+	eventBudget int32
+	// generations holds one aggregated event count per controller
+	// "process": index 0 is the count since the fake was created, and
+	// restart() appends a new zeroed entry — mirroring how a real
+	// controller restart discards client-go's in-memory event-aggregation
+	// cache, so a post-restart event becomes a brand NEW Event object
+	// instead of bumping the old one's .count further.
+	generations []int32
+	// restartCalls counts how many times restart() (wired in as
+	// Runner.restartFunc) was invoked, so tests can assert the runner
+	// actually triggered a burst reset rather than merely tolerating one.
+	restartCalls int
+	// emitZeroCountEvent, when true, reports the LAST generation's
+	// aggregated .count field as 0 once it reaches at least 1 — mirroring
+	// client-go's event recorder, which leaves .count unset (0) for an
+	// event's first, unaggregated occurrence. Exercises sumEventOccurrences's
+	// zero-guard (a 0 count is 1 occurrence, not 0) through the
+	// runFieldTest evidence check rather than only through the standalone
+	// sumEventOccurrences unit tests.
 	emitZeroCountEvent bool
 
 	patchCalls int
@@ -72,7 +95,7 @@ func (f *fakeCluster) exec(args []string) (string, error) {
 		return "", fmt.Errorf("fakeCluster: no args")
 	}
 	switch args[0] {
-	case "get":
+	case kubectlGetSubcommand:
 		return f.handleGet(args)
 	case "patch":
 		return f.handlePatch(args)
@@ -116,27 +139,42 @@ func (f *fakeCluster) handleGet(args []string) (string, error) {
 }
 
 // handleGetEvents backs `kubectl get events --all-namespaces -o json`. It
-// reports zero items until a real field patch has incremented eventCount
-// (via recordUpdateEvent), then a single aggregated Item carrying the
-// current count — mirroring client-go's event-recorder aggregation that
-// countUpdateEvents/sumEventOccurrences must sum rather than count Items.
+// emits one aggregated Item per non-empty generation (see f.generations) —
+// mirroring how a real controller restart causes client-go to create a
+// brand NEW Event object rather than continuing to bump the throttled one —
+// so countUpdateEvents/sumEventOccurrences must sum across Items, not just
+// read the last one.
 func (f *fakeCluster) handleGetEvents() (string, error) {
 	list := eventList{}
-	if f.eventCount > 0 {
-		count := f.eventCount
-		if f.emitZeroCountEvent {
-			count = 0
+	for i, count := range f.generations {
+		if count <= 0 {
+			continue
 		}
-		item := eventItem{Reason: eventReasonUpdated, Count: count}
+		reported := count
+		if f.emitZeroCountEvent && i == len(f.generations)-1 {
+			reported = 0
+		}
+		item := eventItem{Reason: eventReasonUpdated, Count: reported}
 		item.InvolvedObject.Kind = f.kind
 		item.InvolvedObject.Name = f.name
-		list.Items = []eventItem{item}
+		list.Items = append(list.Items, item)
 	}
 	b, err := json.Marshal(list)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// restart simulates a controller pod restart: it appends a fresh generation
+// so subsequent recordUpdateEvent increments accumulate against a new,
+// unthrottled budget rather than the exhausted one. Wired in as
+// Runner.restartFunc so RunTests's proactive burst-reset (eventBurstCeiling)
+// can be exercised without a live cluster.
+func (f *fakeCluster) restart() error {
+	f.restartCalls++
+	f.generations = append(f.generations, 0)
+	return nil
 }
 
 func (f *fakeCluster) handlePatch(args []string) (string, error) {
@@ -183,7 +221,13 @@ func (f *fakeCluster) handlePatch(args []string) (string, error) {
 	f.generation++
 	f.patchCalls++
 	if f.recordUpdateEvent {
-		f.eventCount++
+		if len(f.generations) == 0 {
+			f.generations = append(f.generations, 0)
+		}
+		idx := len(f.generations) - 1
+		if f.eventBudget <= 0 || f.generations[idx] < f.eventBudget {
+			f.generations[idx]++
+		}
 	}
 	return "", nil
 }
@@ -212,6 +256,7 @@ func newFakeRunner(f *fakeCluster) *Runner {
 		resourceName: "arecord.record.infobloxnios.crossplane.io/example-arecord",
 		timeout:      "5s",
 		execFunc:     f.exec,
+		restartFunc:  f.restart,
 	}
 }
 
@@ -673,4 +718,314 @@ func TestStringifyFieldValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+// manifestWithSequentialFieldTests builds a Manifest whose Tests set the
+// same field to n distinct, strictly-increasing values in turn. Reusing one
+// field (rather than n distinct fields) keeps the fixture small while still
+// guaranteeing every test is a genuine change relative to the one before it
+// (never a no-op), because runFieldTest's no-op check compares against
+// spec.forProvider, which handlePatch updates in place after every patch.
+func manifestWithSequentialFieldTests(n int) *Manifest {
+	m := &Manifest{Kind: testKindARecord, Name: testNameARecord}
+	for i := 1; i <= n; i++ {
+		m.Tests = append(m.Tests, UpdateTest{Field: testFieldNotifyDelay, Value: float64(i)})
+	}
+	return m
+}
+
+// TestRunTestsResetsEventBurstBeforeCeiling covers the false-NOT-EVIDENCED
+// regression this ticket exists to fix: a resource with more mutable fields
+// than the client-go event-spam-filter's ~25-event burst must still report
+// every genuinely-converged field as evidenced, because RunTests proactively
+// restarts the controller (earning back a fresh burst) before the ceiling is
+// reached rather than after events have already been silently dropped.
+func TestRunTestsResetsEventBurstBeforeCeiling(t *testing.T) {
+	const numFields = eventBurstCeiling + 5 // comfortably past one burst
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+		// eventBudget mirrors the real client-go burst ceiling: once a
+		// generation's aggregated count reaches it, further same-generation
+		// increments are silently dropped, exactly as production
+		// eventBurstCeiling is calibrated to stay under.
+		eventBudget: eventBurstCeiling,
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+	if len(results) != numFields {
+		t.Fatalf("got %d results, want %d", len(results), numFields)
+	}
+
+	for i, res := range results {
+		if res.NotEvidenced {
+			t.Errorf("field %d (%s): got NotEvidenced=true, want evidenced (err: %v)", i, res.Field, res.Error)
+		}
+		if !res.Passed {
+			t.Errorf("field %d (%s): got Passed=false, want true (err: %v)", i, res.Field, res.Error)
+		}
+	}
+
+	if f.restartCalls == 0 {
+		t.Error("expected at least one controller restart before the burst ceiling was reached")
+	}
+	// numFields exceeds one ceiling's worth of attempts, so at least one
+	// generation besides the first must have accumulated events — proof the
+	// reset actually happened before fields ran out of budget, not merely
+	// that restart() was called with no effect on the outcome.
+	if len(f.generations) < 2 {
+		t.Errorf("expected events to span at least 2 controller generations, got %d: %v", len(f.generations), f.generations)
+	}
+}
+
+// TestRunTestsWithoutRestartWiringStillDetectsGenuineNonEvidence is the
+// counterpart regression case demanded by the ticket: the burst-reset
+// machinery must never become vacuously permissive. A controller that truly
+// never emits update events (recordUpdateEvent left false, so no generation
+// ever accumulates anything for resetEventBurst to rescue) must still fail
+// with NotEvidenced, restart or no restart.
+func TestRunTestsWithoutRestartWiringStillDetectsGenuineNonEvidence(t *testing.T) {
+	const numFields = eventBurstCeiling + 3
+	f := &fakeCluster{
+		forProvider: map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:  map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:  1,
+		kind:        testKindARecord,
+		name:        testNameARecord,
+		// recordUpdateEvent left false: no field test's patch ever produces
+		// an update event, simulating a reconciler whose Update() path
+		// never runs at all.
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+
+	for i, res := range results {
+		if !res.NotEvidenced {
+			t.Errorf("field %d (%s): got NotEvidenced=false, want true (a controller with no Update() events must still fail)", i, res.Field)
+		}
+		if res.Passed {
+			t.Errorf("field %d (%s): got Passed=true, want false", i, res.Field)
+		}
+	}
+}
+
+// TestRunTestsBelowCeilingNeverRestarts confirms the proactive reset is
+// scoped to the burst ceiling: a run whose non-skipped, non-no-op field
+// count never reaches eventBurstCeiling must never pay the restart cost.
+func TestRunTestsBelowCeilingNeverRestarts(t *testing.T) {
+	const numFields = eventBurstCeiling - 1
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+	}
+	r := newFakeRunner(f)
+
+	m := manifestWithSequentialFieldTests(numFields)
+	if _, err := r.RunTests(m); err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+
+	if f.restartCalls != 0 {
+		t.Errorf("expected 0 restarts for a run below the burst ceiling, got %d", f.restartCalls)
+	}
+}
+
+// TestRunTestsRestartFailureDoesNotAbortRun confirms a failed burst reset
+// degrades gracefully: the run continues (later fields may lose evidence,
+// but the whole test suite must not abort) rather than the tool crashing or
+// silently swallowing the rest of the manifest. It also asserts the
+// degraded-state signal a reviewer depends on: every field tested from the
+// point of the failed reset onward must come back EvidenceUntrusted (not a
+// clean, silently-trusted PASS or NotEvidenced), while fields tested before
+// the failure are unaffected. This is what stops "0 not-evidenced" from
+// ever printing as a clean verdict once a reset has failed mid-run.
+func TestRunTestsRestartFailureDoesNotAbortRun(t *testing.T) {
+	const numFields = eventBurstCeiling + 2
+	f := &fakeCluster{
+		forProvider:       map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		atProvider:        map[string]interface{}{testFieldNotifyDelay: float64(0)},
+		generation:        1,
+		kind:              testKindARecord,
+		name:              testNameARecord,
+		recordUpdateEvent: true,
+		eventBudget:       eventBurstCeiling,
+	}
+	r := newFakeRunner(f)
+	r.restartFunc = func() error {
+		return fmt.Errorf("simulated rollout failure")
+	}
+
+	m := manifestWithSequentialFieldTests(numFields)
+	results, err := r.RunTests(m)
+	if err != nil {
+		t.Fatalf("RunTests: unexpected error: %v", err)
+	}
+	if len(results) != numFields {
+		t.Fatalf("got %d results, want %d — a failed restart must not abort the run", len(results), numFields)
+	}
+
+	// The proactive reset attempt fires immediately before the field at
+	// index eventBurstCeiling (the (eventBurstCeiling+1)th field). Every
+	// field before that index ran while the burst was still trusted; every
+	// field from that index onward ran after the failed reset.
+	for i, res := range results {
+		wantUntrusted := i >= eventBurstCeiling
+		if res.EvidenceUntrusted != wantUntrusted {
+			t.Errorf("field %d (%s): got EvidenceUntrusted=%v, want %v", i, res.Field, res.EvidenceUntrusted, wantUntrusted)
+		}
+	}
+
+	untrusted := 0
+	for _, res := range results {
+		if res.EvidenceUntrusted {
+			untrusted++
+		}
+	}
+	wantUntrustedCount := numFields - eventBurstCeiling
+	if untrusted != wantUntrustedCount {
+		t.Errorf("got %d EvidenceUntrusted results, want %d", untrusted, wantUntrustedCount)
+	}
+
+	// printResults must fail the run outright when any result is
+	// EvidenceUntrusted, regardless of what each field's own Passed/
+	// NotEvidenced value happened to be — a reset failure must not be
+	// something a lucky run can print a clean PASS through.
+	_, failed, _, _, gotUntrustedCount := printResults(results)
+	if failed == 0 {
+		t.Error("printResults: got failed=0, want failed>0 — a run containing an untrusted result must never report a clean pass")
+	}
+	if gotUntrustedCount != wantUntrustedCount {
+		t.Errorf("printResults: got untrusted=%d, want %d", gotUntrustedCount, wantUntrustedCount)
+	}
+}
+
+// TestRestartControllerDeploymentResolvesViaPodLabel exercises
+// restartControllerDeployment's actual kubectl argv through execFunc,
+// simulating a fake kubectl that mirrors a live Crossplane v2.2.1 cluster:
+// `kubectl get deploy -l pkg.crossplane.io/revision` never matches anything
+// (the label is absent from the Deployment's own metadata.labels), while
+// `kubectl get pods -l pkg.crossplane.io/revision` resolves the controller
+// Pod and its pkg.crossplane.io/revision label carries the exact Deployment
+// name. This is the regression test for the bug the rest of this file's
+// restartFunc-injected tests could never catch, because they bypass
+// restartControllerDeployment entirely.
+func TestRestartControllerDeploymentResolvesViaPodLabel(t *testing.T) {
+	const deploymentName = "provider-infobloxnios-000000000000"
+	var gotArgs [][]string
+	r := &Runner{
+		execFunc: func(args []string) (string, error) {
+			gotArgs = append(gotArgs, append([]string(nil), args...))
+			switch {
+			case len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "deploy":
+				// A selector against the Deployment's own metadata.labels
+				// never matches on a live cluster — mirror kubectl's
+				// real "index out of bounds" failure for an empty list
+				// rather than returning an empty string, so a caller that
+				// mistakenly still queries "get deploy -l ..." is caught
+				// by an error, not a silently-empty name.
+				return "", fmt.Errorf("array index out of bounds: index 0, length 0")
+			case len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "pods":
+				return deploymentName + "\n", nil
+			case args[0] == "rollout" && args[1] == "restart":
+				return "", nil
+			case args[0] == "rollout" && args[1] == "status":
+				return "", nil
+			default:
+				return "", fmt.Errorf("unexpected kubectl invocation: %v", args)
+			}
+		},
+	}
+
+	if err := r.restartControllerDeployment(); err != nil {
+		t.Fatalf("restartControllerDeployment: unexpected error: %v", err)
+	}
+
+	var sawPodSelector, sawDeploymentLabelSelector, sawRolloutRestart, sawRolloutStatus bool
+	for _, args := range gotArgs {
+		if len(args) < 2 {
+			continue
+		}
+		switch {
+		case args[0] == kubectlGetSubcommand && args[1] == "pods":
+			sawPodSelector = true
+			if !containsArg(args, providerDeploymentSelector) {
+				t.Errorf("get pods argv missing selector %q: %v", providerDeploymentSelector, args)
+			}
+		case args[0] == kubectlGetSubcommand && args[1] == "deploy":
+			sawDeploymentLabelSelector = true
+		case args[0] == "rollout" && args[1] == "restart":
+			sawRolloutRestart = true
+			if !containsArg(args, "deploy/"+deploymentName) {
+				t.Errorf("rollout restart argv missing target %q: %v", "deploy/"+deploymentName, args)
+			}
+		case args[0] == "rollout" && args[1] == "status":
+			sawRolloutStatus = true
+			if !containsArg(args, "deploy/"+deploymentName) {
+				t.Errorf("rollout status argv missing target %q: %v", "deploy/"+deploymentName, args)
+			}
+		}
+	}
+	if !sawPodSelector {
+		t.Error("expected restartControllerDeployment to resolve the Deployment name via `kubectl get pods -l ...`")
+	}
+	if sawDeploymentLabelSelector {
+		t.Error("restartControllerDeployment must not query `kubectl get deploy -l ...` — that selector never matches on a live cluster (see providerDeploymentSelector)")
+	}
+	if !sawRolloutRestart {
+		t.Error("expected a `kubectl rollout restart deploy/<name>` call")
+	}
+	if !sawRolloutStatus {
+		t.Error("expected a `kubectl rollout status deploy/<name>` call")
+	}
+}
+
+// TestRestartControllerDeploymentPodResolutionFailure asserts that a
+// resolution failure (no matching Pod — the exact live symptom the
+// underlying bug produced) is surfaced as an error rather than silently
+// treated as a no-op restart.
+func TestRestartControllerDeploymentPodResolutionFailure(t *testing.T) {
+	r := &Runner{
+		execFunc: func(args []string) (string, error) {
+			if len(args) >= 2 && args[0] == kubectlGetSubcommand && args[1] == "pods" {
+				return "", fmt.Errorf("array index out of bounds: index 0, length 0")
+			}
+			return "", fmt.Errorf("unexpected kubectl invocation: %v", args)
+		},
+	}
+
+	err := r.restartControllerDeployment()
+	if err == nil {
+		t.Fatal("expected an error when no controller Pod can be resolved, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolving provider deployment") {
+		t.Errorf("error %q does not indicate deployment resolution failed", err.Error())
+	}
+}
+
+// containsArg reports whether want appears anywhere in args.
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
