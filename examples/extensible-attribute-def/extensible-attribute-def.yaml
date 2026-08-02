@@ -11,6 +11,21 @@
 # Create behavior: sync — the WAPI POST returns the new object's `_ref`
 # immediately (HTTP 200), so the default uptest timeout is sufficient.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same extensible attribute definition `name`.
+# Left literal ("${data.runToken}") if no datasource is supplied, which is
+# exactly the pre-isolation behavior this guards against.
+#
+# Scope of this tokenisation: it applies ONLY to the EA definition THIS
+# example creates. It does NOT touch, and must never be confused with, the
+# reserved EA definition named "Crossplane Internal ID" that the identity
+# ladder stamps onto every managed object across the whole provider (the
+# UID-in-EA mechanism). That definition is shared, provider-wide
+# infrastructure created once and reused by every reconcile of every
+# resource — it is not created or owned by this example, must never be
+# tokenised, and must never be deleted by this example's cleanup.
+#
 # Required fields:
 #   name: unique name of the Extensible Attribute Definition. Mutable —
 #         renaming changes the record's _ref.
@@ -58,7 +73,7 @@ metadata:
         skip: "write-only field, never mirrored into the observed state; not comparable for a convergence check"
 spec:
   forProvider:
-    name: example-ea-def
+    name: example-ea-def-${data.runToken}
     type: STRING
     comment: Managed by Crossplane
   providerConfigRef:

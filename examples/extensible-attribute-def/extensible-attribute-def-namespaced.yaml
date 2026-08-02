@@ -11,6 +11,17 @@
 # Distinct identity: the name below differs from extensible-attribute-def.yaml's
 # so both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same name.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs never request the same
+# extensible attribute definition `name`. Left literal ("${data.runToken}")
+# if no datasource is supplied, which is exactly the pre-isolation behavior
+# this guards against.
+#
+# Scope of this tokenisation: see extensible-attribute-def.yaml — it applies
+# only to the EA definition THIS example creates, never to the reserved
+# "Crossplane Internal ID" EA definition used by the provider-wide identity
+# ladder.
 apiVersion: extensibleattributedef.infobloxnios.m.crossplane.io/v1alpha1
 kind: ExtensibleAttributeDef
 metadata:
@@ -40,7 +51,7 @@ metadata:
         skip: "write-only field, never mirrored into the observed state; not comparable for a convergence check"
 spec:
   forProvider:
-    name: example-ea-def-ns
+    name: example-ea-def-ns-${data.runToken}
     type: STRING
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:

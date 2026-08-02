@@ -7,6 +7,15 @@
 # stores it in the crossplane.io/external-name annotation. Do not set that
 # annotation manually — the controller populates it.
 #
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same range template `name`. Left literal
+# ("${data.runToken}") if no datasource is supplied, which is exactly the
+# pre-isolation behavior this guards against. RangeTemplate carries no
+# addresses of its own — numberOfAddresses and offset are relative sizing
+# inputs for Ranges instantiated from this template, not identity — so
+# `name` is the only field that needs tokenising here.
+#
 # Required fields:
 #   name:              name of the range template object. Mutable (unlike
 #                       server-assigned resources whose identity fields are
@@ -77,7 +86,7 @@ metadata:
         skip: "list field of DHCP option structs, not a scalar update-test target"
 spec:
   forProvider:
-    name: example-range-template
+    name: example-range-template-${data.runToken}
     numberOfAddresses: 10
     offset: 10
     comment: Managed by Crossplane
