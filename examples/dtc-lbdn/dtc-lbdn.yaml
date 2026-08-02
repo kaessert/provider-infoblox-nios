@@ -43,22 +43,24 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
     # the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-dtc-lbdn.sh
-    # comment, lbMethod, priority, persistence, disable, useTtl, and ttl
-    # are the mutable scalars exercised here. lbMethod moves to RATIO,
-    # which needs no companion topology ruleset or monitor configuration
-    # (unlike TOPOLOGY or GLOBAL_AVAILABILITY) and works with the empty
-    # `pools` list this minimal example uses. ttl is tested before useTtl
-    # here — the reverse of the DNS record TTL ordering in record-cname.yaml.
-    # Live E2E found WAPI's dtc:lbdn object type rejects a useTtl=true
-    # update submitted on its own (AdmConDataError: "Enter a ttl value",
-    # permanent ReconcileError, confirmed on every retry) — unlike CNAME
-    # records, dtc:lbdn requires ttl and useTtl to travel together in the
-    # same request. Setting ttl first means it is already present in
-    # spec.forProvider by the time useTtl flips true, so that update
-    # carries both fields. name is also mutable, but changes the WAPI
-    # `_ref` per the field documentation; that rotation is already
-    # exercised by controller unit tests, so it is skipped here. patterns
-    # and types are list fields, not scalar update-test targets.
+    # comment, lbMethod, priority, persistence, and disable are the mutable
+    # scalars exercised here. lbMethod moves to RATIO, which needs no
+    # companion topology ruleset or monitor configuration (unlike TOPOLOGY
+    # or GLOBAL_AVAILABILITY) and works with the empty `pools` list this
+    # minimal example uses. ttl and useTtl are both skipped — unlike CNAME
+    # (record-cname.yaml), where useTtl flips safely alone, live E2E found
+    # dtc:lbdn requires the two fields in the SAME request in both
+    # directions: submitting useTtl=true without ttl is rejected outright
+    # (AdmConDataError: "Enter a ttl value", permanent ReconcileError,
+    # confirmed across 4 retries); submitting ttl alone while useTtl stays
+    # false is accepted but silently not persisted (status.atProvider.ttl
+    # never leaves "", confirmed by a 121s poll timeout). The per-field
+    # update-test harness patches one field at a time and cannot submit
+    # both atomically, so neither ordering converges — see the skip
+    # entries below. name is also mutable, but changes the WAPI `_ref`
+    # per the field documentation; that rotation is already exercised by
+    # controller unit tests, so it is skipped here. patterns and types
+    # are list fields, not scalar update-test targets.
     # pools/authZones/authZonesRefs reference other managed resources and
     # are intentionally omitted from this standalone example (see the
     # field doc above). topology is only meaningful when lbMethod=TOPOLOGY,
@@ -76,9 +78,9 @@ metadata:
       - field: disable
         value: true
       - field: ttl
-        value: 3600
+        skip: "companion field of useTtl — live E2E confirmed neither field converges when patched alone (see the field-doc comment above); the per-field harness cannot submit both in one request"
       - field: useTtl
-        value: true
+        skip: "companion field of ttl — see the ttl skip reason and the field-doc comment above"
       - field: name
         skip: "mutable but changes the WAPI _ref per the field documentation; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: patterns

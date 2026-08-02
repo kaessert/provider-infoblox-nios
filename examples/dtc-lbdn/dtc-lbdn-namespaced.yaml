@@ -41,9 +41,9 @@ metadata:
       - field: disable
         value: true
       - field: ttl
-        value: 3600
+        skip: "companion field of useTtl — live E2E confirmed neither field converges when patched alone (see dtc-lbdn.yaml's field-doc comment); the per-field harness cannot submit both in one request"
       - field: useTtl
-        value: true
+        skip: "companion field of ttl — see the ttl skip reason and dtc-lbdn.yaml's field-doc comment"
       - field: name
         skip: "mutable but changes the WAPI _ref per the field documentation; not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
       - field: patterns
