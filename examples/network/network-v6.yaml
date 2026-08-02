@@ -1,0 +1,49 @@
+# Network (IPv6 variant) is a cluster-scoped Infoblox NIOS network backed by
+# an IPv6 CIDR. See network.yaml for the IPv4 variant and full field
+# documentation, and network-v6-namespaced.yaml for the namespace-scoped
+# IPv6 variant — this file only documents what differs.
+#
+# WAPI models IPv4 and IPv6 networks as distinct object types (`network` vs
+# `ipv6network`). The controller selects the object type at runtime from
+# this `network` field's format, so this example is the standing gate that
+# exercises the `ipv6network` code path — network.yaml alone never reaches
+# it. See network.yaml for the shared field documentation (networkView,
+# comment, external-name behavior).
+#
+# CIDR: uses the IPv6 documentation range reserved by RFC 3849
+# (2001:db8::/32), never expected to appear in a real NIOS Grid config. The
+# sub-block below is distinct from network-v6-namespaced.yaml's so both
+# examples can be applied to the same Grid at once without colliding on the
+# same (network_view, network) WAPI identity.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-v6
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # network.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-v6.sh
+    # See network.yaml for the field coverage rationale — identical here,
+    # the only difference is the CIDR family.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (IPv6)"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: allocatePrefixLen
+        skip: "only required when parentCidr or filterParams is set; not used by this example's static CIDR"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input, mutually exclusive with the static network CIDR this example uses"
+      - field: object
+        skip: "only valid when filterParams is set; not used by this example's static CIDR"
+spec:
+  forProvider:
+    networkView: default
+    network: 2001:db8:e2e6:1::/64
+    comment: Managed by Crossplane (IPv6)
+  providerConfigRef:
+    name: default
