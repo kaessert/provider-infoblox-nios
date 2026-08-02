@@ -10,6 +10,10 @@
 # Distinct identity: the owner name below differs from record-a.yaml's so
 # both examples can be applied to the same NIOS Grid Manager at once
 # without colliding on the same (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-a.yaml — same per-run isolation token,
+# applied here too so this scope's identity ALSO differs across
+# concurrent E2E runs, not just from its cluster-scoped sibling.
 apiVersion: recorda.infobloxnios.m.crossplane.io/v1alpha1
 kind: ARecord
 metadata:
@@ -46,7 +50,7 @@ metadata:
         skip: "write-only delete-time option; never present in the observed state to exercise via update"
 spec:
   forProvider:
-    name: www-ns.example.com
+    name: www-ns-${data.runToken}.example.com
     ipv4Addr: 192.0.2.20
     view: default
     comment: Managed by Crossplane (namespaced)

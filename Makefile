@@ -151,6 +151,40 @@ endif
 
 -include build/makelib/uptest.mk
 
+# Per-run uptest datasource (ADR-IN-0007): generates the name/address
+# isolation values that let concurrent E2E runs share the NIOS Grid Manager
+# without colliding, and points UPTEST_DATASOURCE_PATH at the result so
+# uptest.mk's UPTEST_COMMAND picks it up as --data-source=<path>.
+#
+# This is hooked as a prerequisite of the `uptest` target itself, not `e2e`.
+# `e2e`'s own prerequisite list is assembled from two separate rules (this
+# Makefile's and uptest.mk's) and Make only guarantees that ALL of a
+# target's prerequisites finish before that target's OWN recipe runs — it
+# does NOT guarantee siblings run in declaration order across merged rules
+# (e2e-preflight below is proof: it is declared after uptest.mk's `e2e`
+# rule and so runs after the `uptest` recipe, not before it). Attaching
+# generation to `uptest` instead guarantees it always completes before
+# uptest's recipe constructs and runs the `uptest e2e ...` command line,
+# regardless of where `e2e`'s prerequisite list puts it.
+#
+# The `?=` default lets a caller explicitly disable the mechanism for the
+# mutation check with `make e2e.<resource> UPTEST_DATASOURCE_PATH=` (empty
+# command-line override) — Make gives command-line assignments priority
+# over `?=`, so the override sticks, generation is skipped, and
+# `--data-source=""` reaches uptest, reproducing the pre-isolation
+# collision behavior on purpose.
+UPTEST_DATASOURCE_PATH ?= $(CACHE_DIR)/e2e-datasource-$(if $(KIND_CLUSTER_NAME),$(KIND_CLUSTER_NAME),local-dev).yaml
+
+.PHONY: e2e-datasource
+e2e-datasource:
+	@if [ -n "$(UPTEST_DATASOURCE_PATH)" ]; then \
+		test/e2e/gen-datasource.sh "$(if $(KIND_CLUSTER_NAME),$(KIND_CLUSTER_NAME),local-dev)" "$(UPTEST_DATASOURCE_PATH)"; \
+	else \
+		echo "e2e-datasource: UPTEST_DATASOURCE_PATH explicitly empty — skipping generation (mutation-check / opt-out path)"; \
+	fi
+
+uptest: e2e-datasource
+
 # E2E preflight: validate NIOS Grid Manager credentials before running the
 # (expensive) uptest pipeline.
 e2e-preflight: ## Validate credentials before E2E
