@@ -153,10 +153,14 @@ UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/netw
 # ipv6fixedaddress object type at runtime instead of fixedaddress. Kept as
 # a separate target (not folded into UPTEST_MANIFESTS_FIXED_ADDRESS/
 # e2e.fixed-address) so a regression on either address family fails
-# independently. Requires a parent ipv6network covering
-# 2001:db8:e2e6:5::/64 to exist first (see fixed-address-v6.yaml's
-# prerequisite note).
-UPTEST_MANIFESTS_FIXED_ADDRESS_V6 := examples/fixed-address/fixed-address-v6.yaml,examples/fixed-address/fixed-address-v6-namespaced.yaml
+# independently. AllocateIP's parent-network requirement is scoped to
+# (network_view, network), not to a Kubernetes API scope, so — unlike
+# IPv4 FixedAddress's two per-scope prereqs — a SINGLE shared
+# network-prereq-v6.yaml (a per-run /64) covers both
+# fixed-address-v6.yaml and fixed-address-v6-namespaced.yaml. Listed
+# first so uptest creates the parent ipv6network before either resource
+# manifest (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_FIXED_ADDRESS_V6 := examples/fixed-address/network-prereq-v6.yaml,examples/fixed-address/fixed-address-v6.yaml,examples/fixed-address/fixed-address-v6-namespaced.yaml
 UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
 UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
