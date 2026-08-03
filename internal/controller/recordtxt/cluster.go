@@ -13,7 +13,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,6 +22,7 @@ import (
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 )
 
 const clusterControllerName = "cluster-recordtxt.infobloxnios.crossplane.io"
@@ -216,7 +216,7 @@ func setupClusterTXTRecord(mgr ctrl.Manager, o controller.Options) error {
 	name := clusterControllerName
 
 	if o.MetricOptions != nil {
-		if err := mgr.Add(statemetrics.NewMRStateRecorder(
+		if err := mgr.Add(statemetrics.NewResilientRecorder(
 			mgr.GetClient(),
 			o.Logger,
 			o.MetricOptions.MRStateMetrics,
