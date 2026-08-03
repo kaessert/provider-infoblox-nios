@@ -117,7 +117,7 @@ func TestFindResourceDTCPool(t *testing.T) {
 // TestDTCPoolFieldCounts pins the request/response/both field counts for
 // the DTCPool catalog entry — request=0, response=3 (ref, consolidatedMonitors,
 // health), both=16 (17 SDK "both" fields per inventory.md minus the excluded
-// auto_consolidated_monitors, per ADR-IN-0004's live-verification finding
+// auto_consolidated_monitors, per a live-verification finding
 // that the field does not exist in WAPI).
 func TestDTCPoolFieldCounts(t *testing.T) {
 	rd, ok := FindResource("dtcpool")
@@ -150,7 +150,7 @@ func TestDTCPoolFieldCounts(t *testing.T) {
 
 // TestDTCPoolNoAutoConsolidatedMonitors verifies the SDK-only
 // auto_consolidated_monitors field (no corresponding WAPI _schema entry,
-// per ADR-IN-0004) is never cataloged for DTCPool.
+// per live verification) is never cataloged for DTCPool.
 func TestDTCPoolNoAutoConsolidatedMonitors(t *testing.T) {
 	rd, ok := FindResource("dtcpool")
 	if !ok {
@@ -313,7 +313,7 @@ func TestDTCLBDNFieldCounts(t *testing.T) {
 
 // TestDTCLBDNNoAutoConsolidatedMonitors verifies the SDK-only
 // auto_consolidated_monitors field (no corresponding WAPI _schema entry,
-// per ADR-IN-0004) is never cataloged for DTCLBDN.
+// per live verification) is never cataloged for DTCLBDN.
 func TestDTCLBDNNoAutoConsolidatedMonitors(t *testing.T) {
 	rd, ok := FindResource("dtclbdn")
 	if !ok {
@@ -357,7 +357,7 @@ func TestDTCLBDNRequiredFields(t *testing.T) {
 }
 
 // TestDTCLBDNAuthZonesIsStringSlice verifies authZones is typed as
-// []string (bare _ref strings), NOT []object, per ADR-IN-0004's live
+// []string (bare _ref strings), NOT []object, per live
 // verification that WAPI rejects `[{"_ref": "..."}]` for this field.
 func TestDTCLBDNAuthZonesIsStringSlice(t *testing.T) {
 	rd, ok := FindResource("dtclbdn")

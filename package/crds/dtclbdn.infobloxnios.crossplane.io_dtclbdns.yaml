@@ -77,9 +77,9 @@ spec:
                 properties:
                   authZones:
                     description: 'Authoritative zones the LBDN''s patterns are matched
-                      against, identified by each ZoneAuth''s WAPI `_ref`. Live-verified
-                      (ADR-IN-0004): WAPI requires bare _ref strings, not objects.
-                      Linked zones must have a Grid primary configured.'
+                      against, identified by each ZoneAuth''s WAPI `_ref`. Live-verified:
+                      WAPI requires bare _ref strings, not objects. Linked zones must
+                      have a Grid primary configured.'
                     items:
                       type: string
                     type: array
@@ -428,9 +428,9 @@ spec:
                 properties:
                   authZones:
                     description: 'Authoritative zones the LBDN''s patterns are matched
-                      against, identified by each ZoneAuth''s WAPI `_ref`. Live-verified
-                      (ADR-IN-0004): WAPI requires bare _ref strings, not objects.
-                      Linked zones must have a Grid primary configured.'
+                      against, identified by each ZoneAuth''s WAPI `_ref`. Live-verified:
+                      WAPI requires bare _ref strings, not objects. Linked zones must
+                      have a Grid primary configured.'
                     items:
                       type: string
                     type: array

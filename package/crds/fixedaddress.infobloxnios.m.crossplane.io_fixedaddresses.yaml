@@ -102,7 +102,7 @@ spec:
                       with ipv6addr — exactly one of the two must be set. May be set
                       statically or allocated dynamically from a CIDR (network) at
                       create time. Changing this value changes the record's _ref (UNSTABLE
-                      external name, ADR-IN-0004).
+                      external name, live-verified).
                     type: string
                   ipv6addr:
                     description: IPv6 address of the fixed address. Mutually exclusive
@@ -394,7 +394,7 @@ spec:
                     description: DHCP unique identifier. IPv6 only — this field exists
                       on the shared Go SDK struct but is only ever populated by WAPI
                       for the ipv6fixedaddress object type, not the IPv4 fixedaddress
-                      object type (ADR-IN-0004, live-verified).
+                      object type (live-verified).
                     type: string
                   extAttrs:
                     additionalProperties:
@@ -416,7 +416,7 @@ spec:
                       with ipv6addr — exactly one of the two must be set. May be set
                       statically or allocated dynamically from a CIDR (network) at
                       create time. Changing this value changes the record's _ref (UNSTABLE
-                      external name, ADR-IN-0004).
+                      external name, live-verified).
                     type: string
                   ipv6addr:
                     description: IPv6 address of the fixed address. Mutually exclusive
@@ -478,7 +478,7 @@ spec:
                     description: Server-assigned opaque object reference (WAPI `_ref`).
                       Mirrors the crossplane.io/external-name annotation for observability
                       and uptest import verification. UNSTABLE — changes when ipv4addr
-                      changes (ADR-IN-0004).
+                      changes (live-verified).
                     type: string
                   useOptions:
                     description: Use flag for options.

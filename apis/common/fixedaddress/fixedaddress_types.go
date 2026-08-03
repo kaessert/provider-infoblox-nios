@@ -59,7 +59,7 @@ type FixedAddressCloudInfoDelegatedMember struct {
 // FixedAddressParameters are the configurable fields of a FixedAddress.
 // +kubebuilder:validation:XValidation:rule="(has(self.ipv4addr) && !has(self.ipv6addr)) || (!has(self.ipv4addr) && has(self.ipv6addr))",message="exactly one of ipv4addr or ipv6addr must be set (mutually exclusive address families)"
 type FixedAddressParameters struct {
-	// IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, ADR-IN-0004).
+	// IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, live-verified).
 	IPv4Addr *string `json:"ipv4addr,omitempty"`
 	// IPv6 address of the fixed address. Mutually exclusive with ipv4addr — exactly one of the two must be set. Selects the ipv6fixedaddress WAPI object type.
 	IPv6Addr *string `json:"ipv6addr,omitempty"`
@@ -113,7 +113,7 @@ type FixedAddressObservation struct {
 	// the controller re-discovers the resource after a restart.
 	// +optional
 	ID string `json:"id,omitempty"` // atProvider
-	// IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, ADR-IN-0004).
+	// IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, live-verified).
 	IPv4Addr *string `json:"ipv4addr,omitempty"` // atProvider
 	// IPv6 address of the fixed address. Mutually exclusive with ipv4addr — exactly one of the two must be set. Selects the ipv6fixedaddress WAPI object type.
 	IPv6Addr *string `json:"ipv6addr,omitempty"` // atProvider
@@ -147,9 +147,9 @@ type FixedAddressObservation struct {
 	Options []*FixedAddressDhcpOption `json:"options"` // atProvider
 	// Use flag for options.
 	UseOptions *bool `json:"useOptions,omitempty"` // atProvider
-	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification. UNSTABLE — changes when ipv4addr changes (ADR-IN-0004).
+	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification. UNSTABLE — changes when ipv4addr changes (live-verified).
 	Ref *string `json:"ref,omitempty"` // atProvider
-	// DHCP unique identifier. IPv6 only — this field exists on the shared Go SDK struct but is only ever populated by WAPI for the ipv6fixedaddress object type, not the IPv4 fixedaddress object type (ADR-IN-0004, live-verified).
+	// DHCP unique identifier. IPv6 only — this field exists on the shared Go SDK struct but is only ever populated by WAPI for the ipv6fixedaddress object type, not the IPv4 fixedaddress object type (live-verified).
 	DUID *string `json:"duid,omitempty"` // atProvider
 	// Cloud API related information for this object (cloud-managed fixed addresses only).
 	CloudInfo *FixedAddressCloudInfo `json:"cloudInfo,omitempty"` // atProvider

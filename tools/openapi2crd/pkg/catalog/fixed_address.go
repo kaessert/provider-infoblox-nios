@@ -3,10 +3,11 @@ package catalog
 // fixedAddress returns the FixedAddress resource descriptor.
 //
 // Source: tools/openapi/inventory.md, "### FixedAddress" section (fields
-// request=0, response=3, both=16) and manifests blueprint decision
-// ADR-IN-0004 (Phase 6 live API verification), both derived from the
-// pinned infoblox-go-client/v2 SDK (tools/openapi/specs/infobloxopen/,
-// object_manager_fixed_address.go / objects.go's FixedAddress struct).
+// request=0, response=3, both=16) and corrections found by live CRUD
+// verification against a NIOS Grid Manager appliance (WAPI v2.9.7),
+// both derived from the pinned infoblox-go-client/v2 SDK
+// (tools/openapi/specs/infobloxopen/, object_manager_fixed_address.go /
+// objects.go's FixedAddress struct).
 //
 // WAPI object type: runtime-selected — "fixedaddress" for IPv4,
 // "ipv6fixedaddress" for IPv6 (NewEmptyFixedAddress(isIPv6 bool)). The Go
@@ -17,7 +18,8 @@ package catalog
 // a CreateFixedAddress-named method (see object_manager_fixed_address.go).
 //
 // External-name strategy: server-assigned (the WAPI `_ref` returned by
-// AllocateIP). UNSTABLE — changes when `ipv4addr` changes (ADR-IN-0004).
+// AllocateIP). UNSTABLE — the `_ref` embeds `ipv4addr`, so changing that
+// field rotates the reference (live-verified).
 //
 // Immutable fields: none known. The IPv4/IPv6 address family is fixed at
 // creation (an object cannot switch families — WAPI would need a delete +
@@ -45,8 +47,8 @@ package catalog
 // `duid`: exists on the Go SDK struct (shared by both fixedaddress and
 // ipv6fixedaddress object types) but is only ever populated by the WAPI for
 // ipv6fixedaddress — it does not exist on the plain fixedaddress (IPv4)
-// object per ADR-IN-0004's live verification. Response-only (AtProvider),
-// documented accordingly.
+// object, confirmed by live verification against a Grid Manager appliance.
+// Response-only (AtProvider), documented accordingly.
 //
 // Cross-resource reference: `networkView` identifies a NetworkView by name
 // (the target's Name field is stable, unlike its `_ref` which changes on
@@ -67,7 +69,7 @@ func fixedAddress() ResourceDescriptor {
 				JSONName:    "ipv4addr",
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
-				Description: "IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, ADR-IN-0004).",
+				Description: "IPv4 address of the fixed address. Mutually exclusive with ipv6addr — exactly one of the two must be set. May be set statically or allocated dynamically from a CIDR (network) at create time. Changing this value changes the record's _ref (UNSTABLE external name, live-verified).",
 			},
 			{
 				Name:        "IPv6Addr",
@@ -187,14 +189,14 @@ func fixedAddress() ResourceDescriptor {
 				JSONName:    "ref",
 				GoType:      goTypeString,
 				Scope:       FieldScopeResponse,
-				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification. UNSTABLE — changes when ipv4addr changes (ADR-IN-0004).",
+				Description: "Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification. UNSTABLE — changes when ipv4addr changes (live-verified).",
 			},
 			{
 				Name:        "DUID",
 				JSONName:    "duid",
 				GoType:      goTypeString,
 				Scope:       FieldScopeResponse,
-				Description: "DHCP unique identifier. IPv6 only — this field exists on the shared Go SDK struct but is only ever populated by WAPI for the ipv6fixedaddress object type, not the IPv4 fixedaddress object type (ADR-IN-0004, live-verified).",
+				Description: "DHCP unique identifier. IPv6 only — this field exists on the shared Go SDK struct but is only ever populated by WAPI for the ipv6fixedaddress object type, not the IPv4 fixedaddress object type (live-verified).",
 			},
 			{
 				Name:        "CloudInfo",

@@ -50,7 +50,7 @@ type DTCLBDNParameters struct {
 	// Pools associated with this LBDN, each with a per-pool match priority ratio.
 	// +optional
 	Pools []DTCLBDNPoolLink `json:"pools"`
-	// Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified (ADR-IN-0004): WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.
+	// Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified: WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.
 	// +optional
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1.ZoneAuth
 	AuthZones []string `json:"authZones"`
@@ -105,7 +105,7 @@ type DTCLBDNObservation struct {
 	// Pools associated with this LBDN, each with a per-pool match priority ratio.
 	// +optional
 	Pools []DTCLBDNPoolLink `json:"pools"` // atProvider
-	// Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified (ADR-IN-0004): WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.
+	// Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified: WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.
 	// +optional
 	AuthZones []string `json:"authZones"` // atProvider
 	// Resource record types the LBDN answers with.
