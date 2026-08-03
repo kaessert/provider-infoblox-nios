@@ -2,7 +2,7 @@
 # test/e2e/reap.sh — Token/prefix-scoped orphan reaper for the shared NIOS
 # Grid Manager.
 #
-# ADR-IN-0007 gives every E2E run its own backend identities: a runToken
+# Every E2E run gets its own backend identities: a runToken
 # spliced into NAMED objects (DNS records, zones, DTC objects, templates, EA
 # definitions) and a netPrefix /24 spliced into ADDRESSED objects (Network,
 # NetworkContainer, Range, FixedAddress). Before that mechanism, an object
@@ -38,7 +38,8 @@
 # THE DENY-LIST
 # ============================================================================
 # test/setup.sh provisions prerequisites that are shared CONTEXT, not any
-# run's identity (ADR-IN-0007's central distinction), and must survive every
+# run's identity (the distinction that separates read-mostly, idempotent
+# fixtures from per-run tokenised objects), and must survive every
 # sweep this script performs, in every mode:
 #   - zone_auth  fqdn=example.com        view=default
 #   - network    network=10.0.0.0/24     network_view=default

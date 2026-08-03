@@ -225,7 +225,7 @@ endif
 
 -include build/makelib/uptest.mk
 
-# Per-run uptest datasource (ADR-IN-0007): generates the name/address
+# Per-run uptest datasource: generates the name/address
 # isolation values that let concurrent E2E runs share the NIOS Grid Manager
 # without colliding, and points UPTEST_DATASOURCE_PATH at the result so
 # uptest.mk's UPTEST_COMMAND picks it up as --data-source=<path>.

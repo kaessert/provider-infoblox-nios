@@ -117,7 +117,7 @@ metadata:
       - field: ipv4addr
         skip: "mutually exclusive with ipv6addr; this example uses ipv6addr"
       - field: ipv6addr
-        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+        skip: "changing it changes the record's _ref, which NIOS derives from the field values themselves, so the object identity moves; mutually exclusive with ipv4addr"
       - field: networkView
         skip: "only safely mutable prior to first apply per fixed-address.yaml's field documentation; not exercised post-create"
       - field: network

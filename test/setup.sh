@@ -80,7 +80,8 @@
 #   Makefile prerequisite-bundled ahead of fixed-address-v6.yaml and
 #   fixed-address-v6-namespaced.yaml in UPTEST_MANIFESTS_FIXED_ADDRESS_V6)
 #   so concurrent E2E runs no longer contend for the same shared
-#   ipv6network object — see ADR-IN-0007 and test/e2e/gen-datasource.sh's
+#   ipv6network object — each run draws its own per-run parent network
+#   instead of sharing a static one; see test/e2e/gen-datasource.sh's
 #   netV6FixedAddrParent derivation.
 #
 # Usage: test/setup.sh

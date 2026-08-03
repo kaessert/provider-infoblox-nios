@@ -801,7 +801,7 @@ func TestGenDatasourceMainProviderFileParses(t *testing.T) {
 
 // TestGenDatasourceBlockIndexRange asserts BLOCK_INDEX (netPrefix's third
 // octet) is always a valid byte value — guards the ceiling arithmetic
-// documented in gen-datasource.sh and ADR-IN-0007 (256 possible blocks).
+// documented in gen-datasource.sh (256 possible blocks).
 func TestGenDatasourceBlockIndexRange(t *testing.T) {
 	for _, seed := range []string{"a", "b", "c", "some-longer-seed-value", "e2e-abc123"} {
 		values := runGenDatasource(t, seed)
