@@ -11,10 +11,17 @@
 # comment, external-name behavior).
 #
 # CIDR: uses the IPv6 documentation range reserved by RFC 3849
-# (2001:db8::/32), never expected to appear in a real NIOS Grid config. The
-# sub-block below is distinct from network-v6-namespaced.yaml's so both
-# examples can be applied to the same Grid at once without colliding on the
-# same (network_view, network) WAPI identity.
+# (2001:db8::/32), never expected to appear in a real NIOS Grid config.
+#
+# ${data.netV6NetworkCluster}: injected by uptest from the --data-source
+# file (see test/e2e/gen-datasource.sh) so concurrent E2E runs against the
+# shared NIOS Grid never request the same (networkView, cidr) WAPI
+# identity — Network has no name field at all, its identity IS the CIDR.
+# Left literal ("${data.netV6NetworkCluster}") if no datasource is
+# supplied, which is exactly the pre-isolation behavior this guards
+# against. The generated block is distinct from
+# network-v6-namespaced.yaml's within the same run, so both examples can be
+# applied to the same Grid at once without colliding.
 #
 # The assertion that makes this example meaningful: the post-assert hook
 # (crossplane.io/expect-external-name-prefix below) checks that the
@@ -56,7 +63,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 2001:db8:e2e6:1::/64
+    network: ${data.netV6NetworkCluster}
     comment: Managed by Crossplane (IPv6)
   providerConfigRef:
     name: default
