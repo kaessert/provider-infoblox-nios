@@ -922,7 +922,7 @@ func matchClientForUpdate(desired, observed *string, isIPv6 bool) string {
 // per-key merge — so omitting the stamp here would wipe it off the
 // object on the very first field update after create.
 func updateFixedAddress(objMgr ibclient.IBObjectManager, ref string, f fixedAddressFields, observedMatchClient *string, uid string) (*ibclient.FixedAddress, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	isIPv6 := f.isIPv6()

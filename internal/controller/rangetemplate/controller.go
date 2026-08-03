@@ -736,7 +736,7 @@ func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOf
 // why; this also self-heals an object adopted from before this provider
 // managed it, or one toggled cloud-incompatible out-of-band.
 func updateRangeTemplate(objMgr ibclient.IBObjectManager, ref string, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

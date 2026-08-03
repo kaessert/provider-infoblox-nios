@@ -752,7 +752,7 @@ func createDtcLbdn(conn ibclient.IBConnector, name, lbMethod *string, patterns [
 // Every call re-asserts the identity stamp since a WAPI PUT carrying
 // extattrs replaces the whole map rather than merging it.
 func updateDtcLbdn(conn ibclient.IBConnector, ref string, name, lbMethod *string, patterns []string, pools []poolLink, authZones []string, types []string, priority, persistence *uint32, topology *string, ttl *uint32, useTTL *bool, comment *string, disable *bool, extAttrs map[string]string, uid string) (*ibclient.DtcLbdn, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	lbdn := buildDtcLbdn(name, lbMethod, patterns, pools, authZones, types, priority, persistence, topology, ttl, useTTL, comment, disable, extAttrs)

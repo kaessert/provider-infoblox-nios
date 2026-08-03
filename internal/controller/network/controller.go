@@ -547,7 +547,7 @@ func createOrAllocateNetwork(objMgr ibclient.IBObjectManager, networkView, netwo
 // differ from the ref this call was issued with — there is nothing for a
 // caller to inspect.
 func updateNetwork(objMgr ibclient.IBObjectManager, ref string, comment *string, extAttrs map[string]string, uid string) error {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

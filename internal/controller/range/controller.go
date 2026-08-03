@@ -456,7 +456,7 @@ func createRange(objMgr ibclient.IBObjectManager, startAddr, endAddr, networkVie
 // stamp here would wipe it off the object on the very first field update
 // after create.
 func updateRange(objMgr ibclient.IBObjectManager, ref string, startAddr, endAddr, networkView, network, comment *string, extAttrs map[string]string, uid string) (*ibclient.Range, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

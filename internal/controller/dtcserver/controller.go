@@ -611,7 +611,7 @@ func createDtcServer(conn ibclient.IBConnector, name, host, comment *string, aut
 // a WAPI PUT carrying extattrs replaces the whole map rather than
 // merging it.
 func updateDtcServer(conn ibclient.IBConnector, ref string, name, host, comment *string, autoCreateHostRecord, disable *bool, monitors []monitorPair, sniHostname *string, useSniHostname *bool, extAttrs map[string]string, uid string) (*ibclient.DtcServer, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	dtcServer := ibclient.NewDtcServer(

@@ -599,7 +599,7 @@ func createZoneForward(objMgr ibclient.IBObjectManager, fqdn, view, zoneFormat, 
 // omitting the stamp here would wipe it off the object on the first
 // field update after create.
 func updateZoneForward(objMgr ibclient.IBObjectManager, ref string, comment, nsGroup, externalNsGroup *string, disable, forwardersOnly *bool, forwardTo []ibclient.NameServer, forwardingServers []*ibclient.Forwardingmemberserver, extAttrs map[string]string, uid string) (*ibclient.ZoneForward, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)
