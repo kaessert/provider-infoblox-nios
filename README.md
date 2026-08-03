@@ -959,6 +959,50 @@ spec:
     priority: 10
     weight: 20
     port: 5060
+    view: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`recordsrv.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
+kind: SRVRecord
+metadata:
+  name: example-srvrecord-ns
+  namespace: default
+spec:
+  forProvider:
+    name: _sip._tcp.ns.example.com
+    target: sipserver-ns.example.com
+    priority: 10
+    weight: 20
+    port: 5060
+    view: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default`). Crossplane
+stores this in the `crossplane.io/external-name` annotation — do not set it
+manually.
+
+The `view` field is immutable after creation: WAPI ties an SRV record's
+`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
+`view` parameter.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-srv/record-srv.yaml
+kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+```
+
 ### ZoneForward
 
 Manage Infoblox NIOS forward DNS zones (WAPI object type `zone_forward`). A
@@ -986,23 +1030,6 @@ spec:
     name: default
 ```
 
-**Namespace-scoped** (`recordsrv.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: recordsrv.infobloxnios.m.crossplane.io/v1alpha1
-kind: SRVRecord
-metadata:
-  name: example-srvrecord-ns
-  namespace: default
-spec:
-  forProvider:
-    name: _sip._tcp.ns.example.com
-    target: sipserver-ns.example.com
-    priority: 10
-    weight: 20
-    port: 5060
-    view: default
-    comment: Managed by Crossplane (namespaced)
 **Namespace-scoped** (`zoneforward.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -1026,19 +1053,20 @@ spec:
 ```
 
 External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `record:srv/ZG5zLmJpbmRfc3J2:_sip._tcp.example.com/default`). Crossplane
+(e.g. `zone_forward/ZG5zLnpvbmUk...:forward.example.com/default`). Crossplane
 stores this in the `crossplane.io/external-name` annotation — do not set it
 manually.
 
-The `view` field is immutable after creation: WAPI ties an SRV record's
-`_ref` to `(view, zone, name)`, and the underlying SDK's update call has no
-`view` parameter.
+The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
+underlying SDK's update call has no parameters for them, and WAPI
+additionally rejects moving an existing zone between views at the data
+level.
 
 Apply the full set of example manifests:
 
 ```bash
-kubectl apply -f examples/record-srv/record-srv.yaml
-kubectl apply -f examples/record-srv/record-srv-namespaced.yaml
+kubectl apply -f examples/zone-forward/zone-forward.yaml
+kubectl apply -f examples/zone-forward/zone-forward-namespaced.yaml
 ```
 
 ### RangeTemplate
@@ -1234,14 +1262,6 @@ the allocated CIDR once creation succeeds. A `parentCidr` field is also
 available for allocating from a fixed parent CIDR instead of an
 extensible-attribute search; `network`, `parentCidr`, and `filterParams`
 are mutually exclusive — exactly one must be set.
-(e.g. `zone_forward/ZG5zLnpvbmUk...:forward.example.com/default`).
-Crossplane stores this in the `crossplane.io/external-name` annotation — do
-not set it manually.
-
-The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
-underlying SDK's update call has no parameters for them, and WAPI
-additionally rejects moving an existing zone between views at the data
-level.
 
 Apply the full set of example manifests:
 
