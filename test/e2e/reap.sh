@@ -95,10 +95,10 @@
 #   range-template               rangetemplate             name  (token)
 #   extensible-attribute-def       extensibleattributedef    name  (token)
 #   ipv4-shared-network           sharednetwork             name  (token) — see EXCEPTIONS
-#   network                    network                   network (prefix)
-#   network-container             networkcontainer          network (prefix)
+#   network                    network / ipv6network     network (prefix / v6 prefix)
+#   network-container             networkcontainer / ipv6networkcontainer  network (prefix / v6 prefix)
 #   range                      range                     start_addr (prefix)
-#   fixed-address                fixedaddress              ipv4addr (prefix)
+#   fixed-address                fixedaddress / ipv6fixedaddress  ipv4addr / ipv6addr (prefix / v6 prefix)
 #
 # ============================================================================
 # EXCEPTIONS — resources whose objects cannot be cleanly token-scoped
@@ -126,6 +126,32 @@
 #   field and an address. Reaped by the union of a token match (if the name
 #   half is ever tokenised) and a prefix match on the address half, so it
 #   works whichever half of the mechanism a given resource ends up using.
+#
+# network / IPv6: gen-datasource.sh gives Network's, NetworkContainer's, and
+#   FixedAddress's IPv6 (ipv6network / ipv6networkcontainer / ipv6fixedaddress)
+#   variants per-run identities inside the RFC 3849 documentation range
+#   (2001:db8::/32) — see its netV6 section. The third hextet is the SAME
+#   BLOCK_INDEX byte --net-prefix's IPv4 /24 already draws (no second hash
+#   draw, no new flag), so this script derives an IPv6 prefix regex from
+#   --net-prefix itself: given --net-prefix=100.64.<N>.0/24, it matches
+#   2001:db8:<hex(N)>:*, where hex(N) is the UNPADDED lowercase hex spelling
+#   of N with an optional leading zero (e.g. N=14 matches both "e" and "0e").
+#   The Grid canonicalizes the stored address per RFC 5952, which strips a
+#   lone hextet's leading zero, so for BLOCK_INDEX 0-15 the padded two-digit
+#   spelling gen-datasource.sh submits (e.g. "0e") is never what comes back
+#   from a query — only the unpadded form ("e") is. BLOCK_INDEX 16-255
+#   already render as two non-zero-leading hex digits, where padded and
+#   canonical agree. The optional leading zero in the regex matches the
+#   canonical stored form across all 256 possible BLOCK_INDEX values without
+#   needing to know in advance whether a given index falls in the padded or
+#   unpadded case. Routine mode therefore reaps ipv6network /
+#   ipv6networkcontainer (network field) and ipv6fixedaddress (ipv6addr
+#   field) whenever --net-prefix is supplied, alongside their IPv4
+#   counterparts — see routine_reap()'s IPV6_ADDRESSED_TYPES table. No other
+#   family has an IPv6 variant in examples/ today (record-aaaa is a NAMED
+#   AAAA record, already covered by its own token match, not an ADDRESSED
+#   object needing prefix scoping); if one is added, extend
+#   IPV6_ADDRESSED_TYPES rather than introducing a second mechanism.
 #
 # ============================================================================
 # THE ONE-SHOT PRE-TOKENISATION SWEEP
@@ -191,6 +217,14 @@
 # target and record-ptr's live `ptrdname` target — neither is record-a's
 # own identity). A whole-tree grep would treat those as false positives and
 # refuse to ever reap record-a's pre-tokenisation orphans.
+#
+# The grep is further scoped to each file's spec.forProvider block, not the
+# whole file, because a WAPI identity can only ever live there. Two families
+# (range-template, extensible-attribute-def) happen to reuse the
+# pre-tokenisation literal as their Crossplane CR's metadata.name — a
+# Kubernetes object name with no relationship to the Grid identity. Without
+# this restriction that coincidence reads as "still live" forever and those
+# families' genuine pre-rollout orphans could never be reaped by this sweep.
 #
 # ============================================================================
 # USAGE
@@ -304,6 +338,7 @@ if [ -n "${TOKEN}" ] && ! [[ "${TOKEN}" =~ ^[0-9a-f]{10}$ ]]; then
 fi
 
 PREFIX_REGEX=""
+PREFIX_V6_REGEX=""
 if [ -n "${NET_PREFIX}" ]; then
   if ! [[ "${NET_PREFIX}" =~ ^100\.64\.([0-9]{1,3})\.0/24$ ]]; then
     echo "ERROR: --net-prefix '${NET_PREFIX}' is not a /24 inside 100.64.0.0/16 (the block gen-datasource.sh draws from). Refusing — a prefix outside that block could match a literal CIDR a live example depends on." >&2
@@ -316,6 +351,27 @@ if [ -n "${NET_PREFIX}" ]; then
   fi
   # Escape dots for use inside a WAPI regex (`~=`) match.
   PREFIX_REGEX="^100\\.64\\.${BLOCK_INDEX}\\."
+  # IPv6 counterpart — gen-datasource.sh's netV6 sub-block reuses this SAME
+  # BLOCK_INDEX byte spliced into the third hextet of the RFC 3849
+  # documentation prefix. No second hash draw, no new flag: --net-prefix
+  # alone determines both the IPv4 and IPv6 scope for this run. Colons need
+  # no escaping in a POSIX ERE.
+  #
+  # gen-datasource.sh writes that hextet zero-padded to two hex digits
+  # (e.g. BLOCK_INDEX=14 -> "0e") into the CR spec it submits, but the Grid
+  # canonicalizes the stored address per RFC 5952 before returning it: a
+  # single hextet that isn't part of the longest run of all-zero groups
+  # keeps its value but drops any leading zero, so "0e" is stored and
+  # returned as "e" for every BLOCK_INDEX 0-15. WAPI's `~=` regex operator
+  # matches against that canonicalized stored form and does not canonicalize
+  # the pattern itself, so a pattern built from the padded, zero-prefixed
+  # hex string can never match. BLOCK_INDEX 16-255 render as two hex digits
+  # with no leading zero either way (e.g. "1a", "ff"), so padded and
+  # canonical already agree there. Matching the unpadded hex string with an
+  # optional leading zero covers the stored form for every BLOCK_INDEX in
+  # 0-255, whether or not a caller ever submits the padded spelling.
+  NET_V6_HEX="$(printf '%x' "${BLOCK_INDEX}")"
+  PREFIX_V6_REGEX="^2001:db8:0?${NET_V6_HEX}:"
 fi
 
 WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
@@ -475,6 +531,18 @@ range||start_addr|
 fixedaddress||ipv4addr|
 "
 
+# IPv6 counterparts of the ADDRESSED rows above. Kept in a separate table
+# (rather than folded into NAMED_AND_ADDRESSED_TYPES) because they are
+# matched against PREFIX_V6_REGEX, not PREFIX_REGEX — the two are different
+# derived values, both sourced from the single --net-prefix flag (see its
+# validation block above; no separate --net-prefix-v6 flag exists or is
+# needed). Each line: object-type|addr-field|addr-return-field.
+IPV6_ADDRESSED_TYPES="
+ipv6network|network|
+ipv6networkcontainer|network|
+ipv6fixedaddress|ipv6addr|
+"
+
 routine_reap() {
   local otype token_field addr_field addr_return_field
   while IFS='|' read -r otype token_field addr_field addr_return_field; do
@@ -490,6 +558,16 @@ routine_reap() {
       process_matches "${otype}" "${resp2}" "${addr_field}~=${PREFIX_REGEX}"
     fi
   done <<<"${NAMED_AND_ADDRESSED_TYPES}"
+
+  if [ -n "${NET_PREFIX}" ]; then
+    local v6_otype v6_addr_field v6_addr_return_field
+    while IFS='|' read -r v6_otype v6_addr_field v6_addr_return_field; do
+      [ -z "${v6_otype}" ] && continue
+      local resp3
+      resp3="$(wapi_search "${v6_otype}" --data-urlencode "${v6_addr_field}~=${PREFIX_V6_REGEX}" --data-urlencode "_return_fields=$(build_return_fields "${v6_otype}" "${v6_addr_return_field:-${v6_addr_field}}")")"
+      process_matches "${v6_otype}" "${resp3}" "${v6_addr_field}~=${PREFIX_V6_REGEX}"
+    done <<<"${IPV6_ADDRESSED_TYPES}"
+  fi
 }
 
 # ----------------------------------------------------------------------------
@@ -581,12 +659,14 @@ get_identity_fields() {
 #      distinguishes "still creates the bare literal" from "now creates a
 #      token-suffixed value that happens to start with it".
 #
-# Fails safe: an object type with no known examples/ mapping, or a family
-# directory that does not exist, is treated as LIVE (return 0) rather than
-# silently skipping verification — a --literal-sweep entry this script
-# cannot verify must never be reaped unattended.
+# Fails safe: an object type with no known examples/ mapping, a family
+# directory that does not exist, or a managed-resource file (one with a
+# top-level "spec:" key) whose forProvider block this script fails to
+# extract, is treated as LIVE (return 0) rather than silently skipping
+# verification — a --literal-sweep entry this script cannot verify must
+# never be reaped unattended.
 is_literal_live() {
-  local otype="$1" value="$2" dir examples_dir f
+  local otype="$1" value="$2" dir examples_dir f unparseable=""
   dir="$(example_dir_for "${otype}")"
   if [ -z "${dir}" ]; then
     return 0
@@ -608,10 +688,47 @@ is_literal_live() {
   pattern="(^|[[:space:]\"'])${escaped}([[:space:]\"']*)\$"
   for f in "${examples_dir}"/*.yaml; do
     [ -f "${f}" ] || continue
-    if grep -v '^[[:space:]]*#' "${f}" | grep -Eq -- "${pattern}"; then
+    # Restrict the search to the spec.forProvider block — the only place a
+    # WAPI identity field can legitimately live. Every example in this repo
+    # follows the same shape: a top-level "spec:" key, a "  forProvider:"
+    # child at 2-space indent, and the provider fields nested under it at
+    # 4+ spaces, terminated by the next 2-space sibling key (providerConfigRef,
+    # writeConnectionSecretToRef, ...). Searching the whole file instead
+    # would also catch metadata.name, which is a Kubernetes object name —
+    # unrelated to the Grid identity — and two families (range-template,
+    # extensible-attribute-def) reuse the pre-tokenisation literal there on
+    # purpose (metadata.name: example-range-template / example-ea-def),
+    # producing a false "still live" match that can never be reaped.
+    #
+    # A file with no top-level "spec:" key at all (a Secret, a Namespace, or
+    # any other non-managed-resource YAML a family directory might ship
+    # alongside its MR example) is not expected to have a forProvider block
+    # in the first place — skip it without comment, exactly like the
+    # not-a-file check above. But a file that DOES have "spec:" and still
+    # produces an empty forProvider block failed to parse (different
+    # indentation, an unexpected shape this script doesn't understand) —
+    # that is a verification failure, not evidence of absence, and must
+    # fail safe (treat the literal as LIVE) rather than silently being
+    # skipped, which would let the surrounding loop's final `return 1`
+    # (not live) fire on a file this script never actually checked.
+    grep -Eq '^spec:' "${f}" || continue
+    local for_provider_block
+    for_provider_block="$(awk '
+      /^  forProvider:/ { in_block=1; next }
+      in_block && /^  [^ ]/ { in_block=0 }
+      in_block { print }
+    ' "${f}")"
+    if [ -z "${for_provider_block}" ]; then
+      unparseable="1"
+      continue
+    fi
+    if printf '%s\n' "${for_provider_block}" | grep -v '^[[:space:]]*#' | grep -Eq -- "${pattern}"; then
       return 0
     fi
   done
+  if [ -n "${unparseable}" ]; then
+    return 0
+  fi
   return 1
 }
 
