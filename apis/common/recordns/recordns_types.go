@@ -52,8 +52,9 @@ type NSRecordParameters struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable after creation"
 	Name *string `json:"name"`
-	// FQDN of the authoritative server for the redirected zone.
+	// FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable anyway: this object's server-assigned handle is derived from (view, name, nameserver), and it is the only one of those three components WAPI does not already reject an update for. Changing it in place would rotate the handle out from under the provider with no way to re-establish which live object the resource still refers to, so an apply that changes it is rejected by the API server and the existing record is left unchanged. An operator who needs a different name server replaces the resource deliberately.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="nameserver is immutable after creation"
 	Nameserver *string `json:"nameserver"`
 	// DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Live-verified hard immutable (`supports=rws`, no `u`); the Go SDK already drops view from UpdateNSRecord's request body.
 	// +kubebuilder:validation:Required
@@ -78,10 +79,13 @@ type NSRecordObservation struct {
 	// +optional
 	ID string `json:"id,omitempty"` // atProvider
 	// Name of the NS record in FQDN format (the delegated zone/subdomain). Live-verified immutable (`supports=rws`, no `u`) — WAPI rejects a PUT that changes this field even though the Go SDK's UpdateNSRecord signature still accepts a name parameter.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable after creation"
 	Name *string `json:"name,omitempty"` // atProvider
-	// FQDN of the authoritative server for the redirected zone.
+	// FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable anyway: this object's server-assigned handle is derived from (view, name, nameserver), and it is the only one of those three components WAPI does not already reject an update for. Changing it in place would rotate the handle out from under the provider with no way to re-establish which live object the resource still refers to, so an apply that changes it is rejected by the API server and the existing record is left unchanged. An operator who needs a different name server replaces the resource deliberately.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="nameserver is immutable after creation"
 	Nameserver *string `json:"nameserver,omitempty"` // atProvider
 	// DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Live-verified hard immutable (`supports=rws`, no `u`); the Go SDK already drops view from UpdateNSRecord's request body.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="view is immutable after creation"
 	View *string `json:"view,omitempty"` // atProvider
 	// Glue address records for the name server. Live-verified REQUIRED on create (`field for create missing: addresses`) — corrects inventory.md's "optional" classification.
 	// +optional
@@ -91,6 +95,7 @@ type NSRecordObservation struct {
 	// Server-assigned opaque object reference (WAPI `_ref`). Mirrors the crossplane.io/external-name annotation for observability and uptest import verification.
 	Ref *string `json:"ref,omitempty"` // atProvider
 	// Zone in which the record resides, e.g. "zone.com". Derived from name/view by WAPI — not a CreateNSRecord parameter, so it has no ForProvider counterpart.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable after creation"
 	Zone *string `json:"zone,omitempty"` // atProvider
 	// Record creator. Live-verified read-only (`supports=rs`) — present on the RecordNS struct but omitted from inventory.md's static field table.
 	Creator *string `json:"creator,omitempty"` // atProvider

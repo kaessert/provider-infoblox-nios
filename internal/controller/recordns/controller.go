@@ -29,28 +29,53 @@
 //
 // This package still reuses identity.ManagerAndConnector purely as
 // connector-bundling infrastructure (newObjectManager below) — that is
-// unrelated to the identity ladder itself. Delete/Observe here instead
-// keep the natural-key resolution this provider used before the ladder
-// existed: a 404 on the stored _ref triggers a tightened natural-key
-// search (name+view+nameServer, an exact server-side filter — see
-// nsRecordExistsByNaturalKey) before concluding the object is gone, and
-// Delete refuses when that search still finds a live object under the
-// CR's own identity fields (see the staleref package doc). A natural-key
-// match is only ever provisional evidence — it tells you an object with
-// that name/view/nameserver exists right now, not that it is the same
-// logical object this CR has been managing; another controller or user
-// could have created an unrelated object under the same key since this CR
-// last observed it. That distinction is why a natural-key hit blocks the
-// delete instead of licensing it. If NIOS ever adds extattrs support to
-// record:ns, this resource should be migrated onto the shared ladder like
-// the other eight.
+// unrelated to the identity ladder itself. In its place, NSRecord
+// resolves identity from its own natural key: name, view, and nameserver
+// are now all immutable for the object's lifetime (CEL self==oldSelf on
+// all three). name and view were always server-enforced immutable
+// (live-verified ADR-IN-0004: `supports=rws`, no `u` — WAPI itself
+// rejects a PUT that changes either); nameserver is provider-imposed
+// immutable — WAPI genuinely allows updating it in place, but it was the
+// one mutable component of the tuple, so freezing it at the CRD/CEL layer
+// was what closed this resource's ownership-verification gap. Those same
+// three fields are exactly the tuple WAPI computes the object's `_ref`
+// from (live-verified ADR-IN-0004). Because none of the three can be
+// mutated into matching a different object's tuple, a Grid object that
+// matches this resource's (name, view, nameserver) IS this resource's
+// object, not merely an object that currently happens to look like it —
+// there is no mutation path by which some other object could drift into
+// the same shape. Exactly one match is therefore resolved as the same
+// object and adopted (see resolveNSRecordByNaturalKey for the boundary
+// this still enforces: more than one match refuses rather than assumes
+// WAPI's own addressing guarantee holds in every Grid state).
+//
+// Delete/Observe keep the two-step resolution most resources in this
+// provider use on a stale handle (see the staleref package doc for the
+// general case, still followed by resources that lack a sound way to
+// verify a natural-key match): a 404 on the stored _ref triggers the
+// natural-key search above before concluding the object is gone. Unlike
+// those resources, NSRecord's search result is conclusive by
+// construction once it resolves to exactly one match, so this package
+// does not import staleref — there is no "provisional, ownership
+// unverifiable" state left once every field composing the tuple is
+// immutable. resolveNSRecordForObserve and deleteNSRecordResolving404
+// both reach the same natural-key search and answer the same way: zero
+// matches means the object is genuinely gone, exactly one match is
+// adopted, and more than one match refuses (AmbiguousNaturalKeyMatchError)
+// rather than take the first result. The search also has no dependency on
+// a prior ref at all, so it doubles as create-crash-window recovery: a
+// Create() that reached the Grid but crashed before the external-name
+// annotation was persisted is found the same way a rotated ref is (see
+// observeRefFor).
 //
 // Dual-scope: cluster-scoped (cluster.go) and namespaced (namespaced.go).
-// Shared SDK plumbing, field comparison, and late-init logic lives here.
+// Shared SDK plumbing, field comparison, and identity resolution lives
+// here.
 package recordns
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -67,7 +92,6 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordns/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -144,12 +168,12 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 // newObjectManager constructs an authenticated
 // identity.ManagerAndConnector from the given credentials — the SDK's
 // high-level ObjectManager for the ordinary CRUD calls, and the
-// lower-level Connector that nsRecordExistsByNaturalKey needs directly
+// lower-level Connector that resolveNSRecordByNaturalKey needs directly
 // so it can issue a server-side filtered search and see the match count
 // (ObjectManager's typed getters hide that, and its GetAllRecordNS
 // helper additionally flattens a not-found result into a plain string
 // error that the type-based classifier in isNotFound cannot recognize —
-// see nsRecordExistsByNaturalKey's doc for the full rationale). The
+// see resolveNSRecordByNaturalKey's doc for the full rationale). The
 // Connector performs HTTP Basic Auth on every request and only validates
 // configuration locally — no network round-trip happens until the first
 // Observe/Create/Update/Delete call.
@@ -557,35 +581,73 @@ func deleteNSRecord(objMgr ibclient.IBObjectManager, ref string) error {
 	return err
 }
 
-// nsRecordExistsByNaturalKey reports whether a live NSRecord still exists
-// under the CR's own (name, view, nameserver) identity — the same tuple
-// WAPI uses to compute the _ref (name and view are hard-immutable, see
-// isUpToDate's doc comment; nameserver is mutable but still part of the
-// _ref identity — the live evidence recorded against this helper showed
-// two record:ns objects sharing (name, view) with different nameserver
-// values are both accepted by WAPI, so (name, view) alone is not unique).
-// Used by Delete() when the stored _ref 404s: a hit here means the _ref
-// is merely stale, not that the object is gone.
+// ── Natural-key identity resolution ─────────────────────────────────────
+//
+// See the package doc for why a natural-key match is sound evidence for
+// NSRecord specifically (unlike the general case the staleref package
+// doc describes): name, view, and nameserver are all immutable, and
+// together they are exactly the tuple WAPI computes the object's _ref
+// from, so a match on all three cannot be a different object that merely
+// looks the same right now.
+
+// AmbiguousNaturalKeyMatchError is returned when a natural-key search for
+// an NSRecord's (name, view, nameserver) tuple matches more than one Grid
+// object. WAPI's own addressing scheme should make this impossible — two
+// objects computing the same _ref cannot both exist — but
+// resolveNSRecordByNaturalKey verifies the match count rather than
+// assuming that guarantee holds for every Grid state, and refuses on
+// anything but exactly one match. This mirrors the posture
+// identity.AmbiguousMatchError enforces for the UID-in-EA ladder used by
+// every other rotating-handle resource in this provider: taking [0] from
+// more than one match is exactly the defect that posture exists to
+// prevent. Match with errors.As, e.g.:
+//
+//	var ambiguous *recordns.AmbiguousNaturalKeyMatchError
+//	if errors.As(err, &ambiguous) { ... }
+type AmbiguousNaturalKeyMatchError struct {
+	Name       string
+	View       string
+	Nameserver string
+	// Count is the number of objects the search matched (always > 1).
+	Count int
+}
+
+func (e *AmbiguousNaturalKeyMatchError) Error() string {
+	return fmt.Sprintf(
+		"refusing to resolve NSRecord: %d Grid objects match name=%q view=%q nameserver=%q — "+
+			"this tuple is expected to be unique (it is exactly what WAPI computes the object's _ref "+
+			"from), so this indicates a Grid state this provider cannot safely resolve automatically; "+
+			"an operator should reconcile the duplicate objects on the Grid directly",
+		e.Count, e.Name, e.View, e.Nameserver,
+	)
+}
+
+// resolveNSRecordByNaturalKey searches the Grid for a live NSRecord
+// matching the CR's own (name, view, nameserver) tuple and returns it
+// when exactly one object matches. Used by both resolveNSRecordForObserve
+// (stale-ref recovery and the create-crash window, where there has never
+// been a ref to try) and deleteNSRecordResolving404 (stale-ref recovery
+// before concluding an object is gone).
 //
 // This issues the search itself through the raw connector with all three
-// fields as server-side filters and answers from the match count,
-// mirroring the sibling helpers in recordtxt and zonedelegated — it does
-// NOT go through the SDK's GetAllRecordNS. That high-level helper wraps a
-// failed search with a plain "%s"-formatted error
-// ("failed getting NS Record: <cause>"), which discards the underlying
+// fields as server-side filters and answers from the match count — it
+// does NOT go through the SDK's GetAllRecordNS. That high-level helper
+// wraps a failed search with a plain "%s"-formatted error ("failed
+// getting NS Record: <cause>"), which discards the underlying
 // *ibclient.NotFoundError's type. A genuinely empty result set is exactly
 // how the real WAPI answers a search that matches nothing, so on the live
 // Grid GetAllRecordNS turns "the object is confirmed gone" into an
-// unrecognized error that isNotFound cannot classify — Delete() then
-// treats the search as failed rather than as a clean absence, and the
-// managed resource can never be deleted. Going through the connector
+// unrecognized error that isNotFound cannot classify — callers would then
+// treat the search as failed rather than as a clean absence, and the
+// managed resource could never be deleted. Going through the connector
 // directly keeps the *ibclient.NotFoundError's type intact so isNotFound
 // classifies it correctly. All three fields are required non-empty; when
-// any is missing there is no way to re-discover the object, so the
-// search is skipped (found=false) rather than treated as an error.
-func nsRecordExistsByNaturalKey(conn ibclient.IBConnector, name, view, nameserver *string) (bool, error) {
+// any is missing there is no way to search for the object, so the search
+// is skipped (nil, nil — treated as "not found") rather than treated as
+// an error.
+func resolveNSRecordByNaturalKey(conn ibclient.IBConnector, name, view, nameserver *string) (*ibclient.RecordNS, error) {
 	if strOrEmpty(name) == "" || strOrEmpty(view) == "" || strOrEmpty(nameserver) == "" {
-		return false, nil
+		return nil, nil
 	}
 	sf := map[string]string{
 		"name":       strOrEmpty(name),
@@ -596,20 +658,92 @@ func nsRecordExistsByNaturalKey(conn ibclient.IBConnector, name, view, nameserve
 	err := conn.GetObject(ibclient.NewEmptyRecordNS(), "", ibclient.NewQueryParams(false, sf), &res)
 	if err != nil {
 		if isNotFound(err) {
-			return false, nil
+			return nil, nil
 		}
-		return false, err
+		return nil, err
 	}
-	return len(res) > 0, nil
+	switch len(res) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &res[0], nil
+	default:
+		return nil, &AmbiguousNaturalKeyMatchError{
+			Name:       strOrEmpty(name),
+			View:       strOrEmpty(view),
+			Nameserver: strOrEmpty(nameserver),
+			Count:      len(res),
+		}
+	}
+}
+
+// observeRefFor derives the reference Observe() should try first. When
+// the external-name annotation still holds the framework's
+// NameAsExternalName default (the CR's own Kubernetes name), no real WAPI
+// _ref has ever been assigned, so this reports "" rather than handing
+// resolveNSRecordForObserve a value that can only ever 404 (or, worse,
+// hit the no-_ref search endpoint with an unrelated path segment). An
+// empty ref skips the GET entirely and goes straight to the natural-key
+// search — which is also exactly what recovers the create-crash window: a
+// Create() that reached the Grid but crashed before the runtime persisted
+// the external-name annotation leaves the CR in this same state.
+func observeRefFor(crName, externalName string) string {
+	if externalName == crName {
+		return ""
+	}
+	return externalName
+}
+
+// nsRecordObserveResult bundles a resolved NSRecord for Observe with
+// whether its reference was recovered through the natural-key search
+// rather than resolved directly from the stored ref. A recovered
+// reference must be persisted through a path crossplane-runtime actually
+// writes back to the API server — ResourceLateInitialized, since Observe
+// itself has no other conflict-safe way to persist an annotation change
+// (see the externalname package doc for why Update alone cannot be
+// trusted for this).
+type nsRecordObserveResult struct {
+	rec       *ibclient.RecordNS
+	refreshed bool
+}
+
+// resolveNSRecordForObserve resolves the NSRecord Observe() reports on:
+// it tries ref first (skipped entirely when ref is empty — see
+// observeRefFor), then falls back to the natural-key search on a 404. A
+// nil result with a nil error means the object is genuinely absent.
+func resolveNSRecordForObserve(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name, view, nameserver *string) (*nsRecordObserveResult, error) {
+	if ref != "" {
+		rec, err := objMgr.GetNSRecordByRef(ref)
+		if err == nil {
+			return &nsRecordObserveResult{rec: rec}, nil
+		}
+		if !isNotFound(err) {
+			return nil, err
+		}
+		// The stored ref 404'd — fall through to the natural-key search.
+	}
+
+	rec, err := resolveNSRecordByNaturalKey(conn, name, view, nameserver)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
+	}
+	return &nsRecordObserveResult{rec: rec, refreshed: true}, nil
 }
 
 // deleteNSRecordResolving404 issues the WAPI delete and, on a 404 against
 // the stored _ref, resolves the object's natural key before concluding
 // it is gone. A 404 on a derived handle is evidence the handle rotated,
-// not evidence the object was removed: if the natural-key search still
-// finds a live NS record, deleting is refused because ownership of that
-// record cannot be verified from the search alone (see the staleref
-// package doc for the full rationale).
+// not evidence the object was removed. Once resolved, exactly one match
+// is provably the same object (see the package doc), so it is deleted
+// under its current ref rather than refused — the ownership-unverifiable
+// refusal earlier revisions of this function applied to any natural-key
+// hit no longer applies once name, view, and nameserver are all
+// immutable; an ambiguous (more than one) match still refuses, since the
+// tuple's expected uniqueness is exactly what would be violated for that
+// to happen.
 func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.IBConnector, ref string, name, view, nameserver *string) error {
 	delErr := deleteNSRecord(objMgr, ref)
 	if delErr == nil {
@@ -618,12 +752,25 @@ func deleteNSRecordResolving404(objMgr ibclient.IBObjectManager, conn ibclient.I
 	if !isNotFound(delErr) {
 		return errors.Wrap(delErr, errDeleteNSRecord)
 	}
-	found, searchErr := nsRecordExistsByNaturalKey(conn, name, view, nameserver)
+
+	rec, searchErr := resolveNSRecordByNaturalKey(conn, name, view, nameserver)
 	if searchErr != nil {
+		// A resolution failure (including AmbiguousNaturalKeyMatchError)
+		// must never be reported as a successful delete — fail closed.
 		return errors.Wrap(searchErr, errDeleteNSRecord)
 	}
-	if found {
-		return staleref.RefusalError()
+	if rec == nil {
+		// Genuinely absent: the stale ref recovered nothing.
+		return nil
+	}
+
+	if delErr := deleteNSRecord(objMgr, rec.Ref); delErr != nil {
+		if isNotFound(delErr) {
+			// Raced with another deleter between the search and this
+			// call — the end state (gone) is what Delete() promises.
+			return nil
+		}
+		return errors.Wrap(delErr, errDeleteNSRecord)
 	}
 	return nil
 }

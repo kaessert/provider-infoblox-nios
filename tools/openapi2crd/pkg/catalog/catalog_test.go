@@ -216,7 +216,11 @@ func TestAliasRecordImmutableFields(t *testing.T) {
 
 // TestNSRecordImmutableFields verifies the live-verified immutable fields
 // carry Immutable=true: name and view. addresses must be
-// Required but NOT Immutable.
+// Required but NOT Immutable. nameserver is also Immutable=true — not a
+// WAPI restriction (WAPI allows an in-place update) but a provider-imposed
+// constraint: it is the one component of this object's server-assigned
+// handle that WAPI does not already reject an update for, and NSRecord has
+// no extattrs field to carry a stable identity stamp instead.
 func TestNSRecordImmutableFields(t *testing.T) {
 	rd, ok := FindResource("recordns")
 	if !ok {
@@ -226,6 +230,7 @@ func TestNSRecordImmutableFields(t *testing.T) {
 	wantImmutable := map[string]bool{
 		jsonNameName: true,
 		"view":       true,
+		"nameserver": true,
 	}
 	wantRequired := map[string]bool{
 		jsonNameName: true,
@@ -233,10 +238,16 @@ func TestNSRecordImmutableFields(t *testing.T) {
 		"view":       true,
 		"addresses":  true,
 	}
+	wantMutable := map[string]bool{
+		"addresses": true,
+	}
 
 	for _, f := range rd.Fields {
 		if wantImmutable[f.JSONName] && !f.Immutable {
 			t.Errorf("field %q: Immutable = false, want true", f.JSONName)
+		}
+		if wantMutable[f.JSONName] && f.Immutable {
+			t.Errorf("field %q: Immutable = true, want false", f.JSONName)
 		}
 		if wantRequired[f.JSONName] && !f.Required {
 			t.Errorf("field %q: Required = false, want true", f.JSONName)

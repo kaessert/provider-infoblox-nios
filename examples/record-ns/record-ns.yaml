@@ -15,12 +15,18 @@
 #               even though the underlying SDK's update call still
 #               accepts a name parameter.
 #   nameserver: FQDN of the authoritative server for the delegated zone.
-#               Mutable. Live-verified: changing it DOES rotate the
-#               `_ref` (WAPI reissues a new opaque reference on update);
-#               the controller's Update() detects when the returned ref
-#               differs from what was sent and refreshes the
-#               crossplane.io/external-name annotation accordingly, so
-#               no manual intervention is needed.
+#               Immutable after creation — enforced by a CEL rule on the
+#               CRD (self == oldSelf), so an apply that changes it is
+#               rejected at admission before it ever reaches the Grid;
+#               the live record is untouched. This is a provider-imposed
+#               restriction, not a WAPI one: WAPI itself would accept the
+#               update (and rotate the `_ref` in response). The provider
+#               freezes the field because record:ns has no extattrs field
+#               and so cannot carry the identity stamp every other
+#               managed resource uses — nameserver is the last mutable
+#               component of this record's natural key (name, view,
+#               nameserver), and fixing it makes that key the object's
+#               full, permanent identity.
 #   view:       the DNS view the record is created in. Live-verified hard
 #               immutable (CEL rule enforced) — the update call has no
 #               view parameter.
@@ -45,7 +51,7 @@
 # pre-provisioned Grid zone-apex ("Cannot add a manual NS record" above),
 # so it and `view` are shared context, not identity. `nameserver` is the
 # only tokenisable component of this record's natural key
-# `(name, view, nameserver)` (see nsRecordExistsByNaturalKey's doc
+# `(name, view, nameserver)` (see resolveNSRecordByNaturalKey's doc
 # comment in internal/controller/recordns/controller.go — (name, view)
 # alone is not unique) and is tokenised here so concurrent runs against
 # the same shared zone-apex/view don't request the same WAPI identity.
@@ -66,29 +72,34 @@ metadata:
     # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values).
     # Runs the per-field update tester after uptest asserts Ready.
     uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-ns.sh
-    # nameserver is NOT value-tested here even though it is the record's
-    # only mutable field, and that is deliberate: nameserver is part of
-    # this record's natural key (name, view, nameserver) — see the
-    # ${data.runToken} comment above — because name/view are shared
-    # Grid context across every concurrent run of this scope. A literal
-    # update-test value (e.g. "ns2.example.com") would make every
-    # concurrent run's record converge on the same (name, view,
-    # nameserver) triple the instant Update ran: isolation would hold
-    # through Create and break during Update. See the skip reason below.
+    # nameserver is NOT value-tested here — it is immutable after
+    # creation (enforced by a CEL rule on the CRD), so an update-test
+    # cannot run against it at all: an apply that changes it is rejected
+    # at admission before it ever reaches the controller. It is still
+    # part of this record's natural key (name, view, nameserver) — see
+    # the ${data.runToken} comment above — which is why it carries the
+    # token instead of a literal value: name/view are shared Grid
+    # context across every concurrent run of this scope, so nameserver
+    # is the run's only isolating identity component.
     #
-    # Context for that trade-off: unlike the other 25 cataloged
-    # resources, NSRecord is NOT wired to the UID-in-EA identity ladder
-    # — record:ns has no extattrs field (live-verified, WAPI 2.12
-    # _schema), so it keeps the pre-ladder natural-key fallback on
-    # view+name+nameserver instead. nameserver is itself one of that
-    # natural key's three components (live-verified by base64-decoding a
-    # record:ns _ref: "dns.bind_ns$.<view-id>.<reversed-zone>..<nameserver>"),
-    # so changing it rotates the _ref. Skipping it here therefore costs
-    # NSRecord's own end-to-end coverage of external-name refresh across
-    # a _ref rotation; that path remains covered by unit tests and by
-    # the ladder-backed resources' update-tests, which exercise the same
-    # Update()/external-name-refresh code but reach it via the ladder
-    # rather than the natural-key fallback.
+    # Structural note: unlike the other 25 cataloged resources, NSRecord
+    # is NOT wired to the UID-in-EA identity ladder — record:ns has no
+    # extattrs field (live-verified, WAPI 2.12 _schema), so it keeps the
+    # pre-ladder natural-key fallback on view+name+nameserver instead.
+    # nameserver is itself one of that natural key's three components
+    # (live-verified by base64-decoding a record:ns _ref:
+    # "dns.bind_ns$.<view-id>.<reversed-zone>..<nameserver>"), which is
+    # exactly why the field is now frozen rather than merely
+    # value-skipped: freezing it turns the natural key into the object's
+    # permanent identity instead of one that could drift out from under
+    # a resolved reference. Before this change nameserver was mutable and
+    # an update rotated the `_ref`; that rotation path is no longer
+    # reachable for NSRecord at all (the CEL rule blocks the apply before
+    # Update() ever runs), so its own end-to-end coverage of
+    # external-name refresh across a `_ref` rotation now lives only in
+    # unit tests. The ladder-backed resources' update-tests still
+    # exercise the same Update()/external-name-refresh mechanism end to
+    # end, just via the ladder rather than the natural-key fallback.
     # msDelegationName is skipped — it is the MS delegation point name,
     # only persisted on Microsoft/AD-integrated zones; NIOS silently
     # drops it (HTTP 200, field absent from the response) on ordinary
@@ -97,7 +108,7 @@ metadata:
     # uptest update-parameter note above).
     crossplane.io/update-test: |
       - field: nameserver
-        skip: "part of this record's natural key (name, view, nameserver); name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component and must not be set to a shared literal value — doing so would converge every concurrent run onto the same natural key at Update time. Mutability is exercised structurally by every other DNS record's update-test via the shared _ref-rotation-on-update code path (see record-a.yaml's name skip and record-srv.yaml's priority field)"
+        skip: "immutable after creation — enforced by a CEL rule on the CRD (self == oldSelf); an apply that changes it is rejected at admission and never reaches the controller, so no update-test can run against it. The field is also part of this record's natural key (name, view, nameserver), which is why it carries the run token instead of a literal value: name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component"
       - field: msDelegationName
         skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses

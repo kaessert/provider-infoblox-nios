@@ -989,8 +989,19 @@ manually.
 
 The `name` and `view` fields are immutable after creation: WAPI ties an NS
 record's `_ref` to `(view, zone, name)`, and the underlying SDK's update
-call drops both parameters from the request body. `addresses` is required
-on create — WAPI rejects a create request that omits it.
+call drops both parameters from the request body. `nameserver` is also
+immutable after creation, but for a different reason: `record:ns` has no
+`extattrs` field, so `NSRecord` cannot carry the `Crossplane Internal ID`
+identity stamp every other managed resource uses, and instead relies on
+its own `(name, view, nameserver)` triple as a natural key. The provider
+enforces `nameserver` immutability with a CEL rule on the CRD
+(`self == oldSelf`) so that natural key stays a permanent identity — WAPI
+itself would accept a `nameserver` update (and reissue a new `_ref` in
+response); the provider chooses to reject it before the request ever
+reaches the Grid. An apply that changes `nameserver` on an existing
+`NSRecord` is rejected at admission and the live record is left
+untouched. `addresses` is required on create — WAPI rejects a create
+request that omits it.
 
 Grid policy may block manual NS record creation for zones that are not
 delegated. Point `name`/`nameserver` at a zone/nameserver pair your Grid
@@ -1876,6 +1887,42 @@ attribute as an adoption case and writes the stamp, bringing the object under
 the same protection as one created by this build. The visible side effect is
 that a `Crossplane Internal ID` extensible attribute will start appearing
 against your existing managed objects in Grid Manager as this happens.
+
+### NSRecord `nameserver` immutability
+
+`NSRecord`'s `nameserver` field is now immutable after creation, enforced by
+a CEL rule on the CRD (`self == oldSelf`). An apply that changes
+`nameserver` on an existing `NSRecord` is **rejected by the Kubernetes API
+server at admission** — the request never reaches the controller or the
+Grid, and the live record keeps serving unchanged.
+
+This is a provider-imposed restriction, not a WAPI one: WAPI itself would
+accept a `nameserver` update and reissue a new opaque `_ref` in response.
+The provider freezes the field because `record:ns` has no `extattrs` field,
+so `NSRecord` is the one managed resource that cannot carry the
+`Crossplane Internal ID` stamp described above. Its only identity is the
+`_ref`, derived from `(view, name, nameserver)`; `view` and `name` were
+already immutable (WAPI-enforced), and freezing `nameserver` too turns that
+triple into the object's full, permanent identity, so a natural-key search
+match is provably the same object rather than one that merely looks alike.
+
+**In-place `nameserver` edits worked in provider builds published before
+this change.** If you have automation that edits `nameserver` on an
+existing `NSRecord`, it will start failing at admission after upgrading.
+This provider has no tagged release, but ad-hoc GHCR builds are already in
+use — check your existing resources for any that rely on this:
+
+```bash
+for grp in infobloxnios.crossplane.io infobloxnios.m.crossplane.io; do
+  kubectl get "nsrecords.${grp}" -A 2>/dev/null
+done
+```
+
+There is no provider-driven delete-and-recreate for this field — the
+provider never destroys a record to satisfy a spec edit. If you need to
+change an `NSRecord`'s `nameserver`, deleting the CR and creating a new one
+is your own deliberate action to take, on your own schedule: it causes a
+real delegation outage for the zone in between.
 
 ### TTL field type unification (ARecord, AAAARecord, CNAMERecord, MXRecord, SRVRecord)
 
