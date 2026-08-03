@@ -134,7 +134,17 @@
 #   BLOCK_INDEX byte --net-prefix's IPv4 /24 already draws (no second hash
 #   draw, no new flag), so this script derives an IPv6 prefix regex from
 #   --net-prefix itself: given --net-prefix=100.64.<N>.0/24, it matches
-#   2001:db8:<hex(N)>:*. Routine mode therefore reaps ipv6network /
+#   2001:db8:<hex(N)>:*, where hex(N) is the UNPADDED lowercase hex spelling
+#   of N with an optional leading zero (e.g. N=14 matches both "e" and "0e").
+#   The Grid canonicalizes the stored address per RFC 5952, which strips a
+#   lone hextet's leading zero, so for BLOCK_INDEX 0-15 the padded two-digit
+#   spelling gen-datasource.sh submits (e.g. "0e") is never what comes back
+#   from a query — only the unpadded form ("e") is. BLOCK_INDEX 16-255
+#   already render as two non-zero-leading hex digits, where padded and
+#   canonical agree. The optional leading zero in the regex matches the
+#   canonical stored form across all 256 possible BLOCK_INDEX values without
+#   needing to know in advance whether a given index falls in the padded or
+#   unpadded case. Routine mode therefore reaps ipv6network /
 #   ipv6networkcontainer (network field) and ipv6fixedaddress (ipv6addr
 #   field) whenever --net-prefix is supplied, alongside their IPv4
 #   counterparts — see routine_reap()'s IPV6_ADDRESSED_TYPES table. No other
@@ -342,12 +352,26 @@ if [ -n "${NET_PREFIX}" ]; then
   # Escape dots for use inside a WAPI regex (`~=`) match.
   PREFIX_REGEX="^100\\.64\\.${BLOCK_INDEX}\\."
   # IPv6 counterpart — gen-datasource.sh's netV6 sub-block reuses this SAME
-  # BLOCK_INDEX byte (rendered as 2 lowercase hex digits) spliced into the
-  # third hextet of the RFC 3849 documentation prefix. No second hash draw,
-  # no new flag: --net-prefix alone determines both the IPv4 and IPv6 scope
-  # for this run. Colons need no escaping in a POSIX ERE.
-  NET_V6_HEX="$(printf '%02x' "${BLOCK_INDEX}")"
-  PREFIX_V6_REGEX="^2001:db8:${NET_V6_HEX}:"
+  # BLOCK_INDEX byte spliced into the third hextet of the RFC 3849
+  # documentation prefix. No second hash draw, no new flag: --net-prefix
+  # alone determines both the IPv4 and IPv6 scope for this run. Colons need
+  # no escaping in a POSIX ERE.
+  #
+  # gen-datasource.sh writes that hextet zero-padded to two hex digits
+  # (e.g. BLOCK_INDEX=14 -> "0e") into the CR spec it submits, but the Grid
+  # canonicalizes the stored address per RFC 5952 before returning it: a
+  # single hextet that isn't part of the longest run of all-zero groups
+  # keeps its value but drops any leading zero, so "0e" is stored and
+  # returned as "e" for every BLOCK_INDEX 0-15. WAPI's `~=` regex operator
+  # matches against that canonicalized stored form and does not canonicalize
+  # the pattern itself, so a pattern built from the padded, zero-prefixed
+  # hex string can never match. BLOCK_INDEX 16-255 render as two hex digits
+  # with no leading zero either way (e.g. "1a", "ff"), so padded and
+  # canonical already agree there. Matching the unpadded hex string with an
+  # optional leading zero covers the stored form for every BLOCK_INDEX in
+  # 0-255, whether or not a caller ever submits the padded spelling.
+  NET_V6_HEX="$(printf '%x' "${BLOCK_INDEX}")"
+  PREFIX_V6_REGEX="^2001:db8:0?${NET_V6_HEX}:"
 fi
 
 WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
