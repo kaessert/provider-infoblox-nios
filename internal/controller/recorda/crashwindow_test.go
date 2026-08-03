@@ -117,7 +117,7 @@ func TestClusterCreateCrashWindowRecoversByUIDThenDeletesCleanly(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	// Step 1 — the create half of the window: a real Create() call, the
 	// WAPI POST genuinely lands, and the Grid object is genuinely stamped
@@ -190,7 +190,7 @@ func TestNamespacedCreateCrashWindowRecoversByUIDThenDeletesCleanly(t *testing.T
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	created := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
 	if _, err := e.Create(context.Background(), created); err != nil {
@@ -258,7 +258,7 @@ func TestClusterUpdateCrashWindowRecoversByRotation(t *testing.T) {
 	// NotFound — a truthful fake API server, not a stub pretending to
 	// fail. No fault-injection hook.
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	cr := newClusterARecord("my-arecord", oldRef)
 	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")
@@ -324,7 +324,7 @@ func TestNamespacedUpdateCrashWindowRecoversByRotation(t *testing.T) {
 	mc := newTestObjectManager(t, srv)
 
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	cr := newNamespacedARecord("default", "my-arecord", oldRef, "ProviderConfig")
 	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")

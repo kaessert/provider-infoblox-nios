@@ -415,10 +415,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestClients builds an identity.ManagerAndConnector pointed at the
@@ -461,7 +472,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.ForwardersOnly = boolPtr(true)
@@ -493,7 +504,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/does-not-exist:forward.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -517,7 +528,7 @@ func TestObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())     // simulate NameAsExternalName initializer
 
@@ -542,7 +553,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/test1:forward.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -555,7 +566,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/test1:forward.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -576,7 +587,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -619,7 +630,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -642,7 +653,7 @@ func TestClusterCreateError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "")
 
 	_, err := e.Create(context.Background(), cr)
@@ -671,7 +682,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableFields(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 	// Mutate the immutable fqdn/view/zoneFormat fields in spec — this must
 	// NOT affect ResourceUpToDate, since they are excluded from
@@ -704,7 +715,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -817,7 +828,7 @@ func TestClusterUpdateDoesNotSendImmutableFields(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -847,7 +858,7 @@ func TestClusterUpdateError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/test1:forward.example.com/default")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -870,7 +881,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"}})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -891,7 +902,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/does-not-exist:forward.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -907,7 +918,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/test1:forward.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -924,7 +935,7 @@ func TestClusterDeleteForbidden(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/test1:forward.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err == nil {
@@ -946,7 +957,7 @@ func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 	ref := m.seed(rec)
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -979,7 +990,7 @@ func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default")})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1012,7 +1023,7 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	liveRef := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: unexpected error recovering a rotated reference: %v", err)
@@ -1035,7 +1046,7 @@ func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "zone_forward/stale-ref:forward.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1057,7 +1068,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	ref := m.seed(rec)
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1080,7 +1091,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
+	e := &clusterExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1159,7 +1170,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1180,7 +1191,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/does-not-exist:forward.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1198,7 +1209,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1223,7 +1234,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/test1:forward.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1244,7 +1255,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1287,7 +1298,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1308,7 +1319,7 @@ func TestNamespacedCreateError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "", "ProviderConfig")
 
 	_, err := e.Create(context.Background(), cr)
@@ -1336,7 +1347,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1443,7 +1454,7 @@ func TestNamespacedUpdateError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/test1:forward.example.com/default", "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1472,7 +1483,7 @@ func TestNamespacedUpdateDoesNotSendImmutableFields(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -1502,7 +1513,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"}})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1523,7 +1534,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/does-not-exist:forward.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1539,7 +1550,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/test1:forward.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1561,7 +1572,7 @@ func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1591,7 +1602,7 @@ func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 	ref := m.seed(&ibclient.ZoneForward{Fqdn: "forward.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1619,7 +1630,7 @@ func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "zone_forward/stale-ref:forward.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1630,7 +1641,7 @@ func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 // ── namespaced: Disconnect ──────────────────────────────────────────────
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -2263,7 +2274,7 @@ func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref2 := m.seed(&ibclient.ZoneForward{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -2304,7 +2315,7 @@ func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref2 := m.seed(&ibclient.ZoneForward{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -2350,7 +2361,7 @@ func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2377,7 +2388,7 @@ func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneForward("default", "my-zone", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2400,7 +2411,7 @@ func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -2432,7 +2443,7 @@ func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "")
 	cr.UID = types.UID("")
 
@@ -2457,7 +2468,7 @@ func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", "")
 	cr.UID = types.UID("   ")
 
@@ -2494,7 +2505,7 @@ func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 	cr.UID = types.UID("   ")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -2528,7 +2539,7 @@ func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -2590,7 +2601,7 @@ func TestClusterObserveAtProviderExtAttrsRetainsIdentityKey(t *testing.T) {
 	})
 
 	mc := newTestClients(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneForward("my-zone", ref)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 

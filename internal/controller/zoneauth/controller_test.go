@@ -383,10 +383,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestConnector builds an ibclient.IBConnector pointed at the given
@@ -424,7 +435,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:      ibclient.EA{"env": "prod", identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -456,7 +467,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/does-not-exist:example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -484,7 +495,7 @@ func TestClusterObserveStripsIdentityEAFromExtAttrs(t *testing.T) {
 		Ea:   ibclient.EA{"env": "prod", identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.ExtAttrs = nil // force late-init from the observed EA
 
@@ -516,7 +527,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())      // simulate NameAsExternalName initializer
 
@@ -540,7 +551,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/test1:example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -552,7 +563,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/test1:example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -572,7 +583,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com"})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -611,7 +622,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "") // no external-name yet
 
 	_, err := e.Create(context.Background(), cr)
@@ -630,7 +641,7 @@ func TestClusterCreateSendsFullPayload(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.Spec.ForProvider.ZoneFormat = stringPtr("FORWARD")
 	cr.Spec.ForProvider.Comment = stringPtr("created by test")
@@ -674,7 +685,7 @@ func TestClusterIsUpToDateIgnoresImmutableField(t *testing.T) {
 		Ea:   ibclient.EA{identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	// Mutate the immutable view/zoneFormat fields in spec — this must
 	// NOT affect ResourceUpToDate, since WAPI rejects PUT changes to
@@ -701,7 +712,7 @@ func TestUpdateDoesNotSendImmutableField(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("updated")
 
@@ -737,7 +748,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment: stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -840,7 +851,7 @@ func TestClusterUpdateRefStaysStable(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("bump")
 
@@ -859,7 +870,7 @@ func TestClusterUpdateNestedFields(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.GridPrimary = []clusterv1alpha1.MemberServer{
 		{Name: stringPtr("member1.example.com"), Stealth: boolPtr(true)},
@@ -898,7 +909,7 @@ func TestClusterCreateForcesUseGridZoneTimerWhenSoaFieldSet(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
 	// useGridZoneTimer intentionally left unset.
@@ -930,7 +941,7 @@ func TestClusterUpdateForcesUseGridZoneTimerWhenSoaFieldSet(t *testing.T) {
 		UseGridZoneTimer: boolPtr(false),
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
 	// useGridZoneTimer intentionally left unset in spec.
@@ -968,7 +979,7 @@ func TestObserveConvergesAfterSoaSetWithoutExplicitFlag(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
 
@@ -1013,7 +1024,7 @@ func TestObserveNoInfiniteLoopWhenUseGridZoneTimerExplicitlyFalseWithSoaSet(t *t
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.Spec.ForProvider.SoaRefresh = uint32Ptr(21600)
 	cr.Spec.ForProvider.UseGridZoneTimer = boolPtr(false)
@@ -1042,7 +1053,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"}})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1062,7 +1073,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/does-not-exist:example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1077,7 +1088,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/test1:example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1101,7 +1112,7 @@ func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1133,7 +1144,7 @@ func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1165,7 +1176,7 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
 	liveRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: unexpected error recovering a rotated reference: %v", err)
@@ -1187,7 +1198,7 @@ func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "zone_auth/stale-ref:example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1207,7 +1218,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1287,7 +1298,7 @@ func TestClusterConnectProviderConfigNotFound(t *testing.T) {
 }
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1305,7 +1316,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		View: stringPtr("default"),
 	})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1325,7 +1336,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/does-not-exist:example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1344,7 +1355,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1364,7 +1375,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default")})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("namespaced update")
 
@@ -1459,7 +1470,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"}})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1479,7 +1490,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/does-not-exist:example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1494,7 +1505,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/test1:example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1515,7 +1526,7 @@ func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1544,7 +1555,7 @@ func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1571,7 +1582,7 @@ func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "zone_auth/stale-ref:example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1679,7 +1690,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1883,7 +1894,7 @@ func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	meta.SetExternalName(cr, cr.GetName()) // simulate NameAsExternalName initializer — forces the UID-only search path
 
@@ -1923,7 +1934,7 @@ func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref1 := m.seed(&ibclient.ZoneAuth{Fqdn: "one.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 	ref2 := m.seed(&ibclient.ZoneAuth{Fqdn: "two.example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: uid}})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1977,7 +1988,7 @@ func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 		// No identity.EAKey stamped — this object is unowned.
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -2006,7 +2017,7 @@ func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 		Disable: boolPtr(false),
 	})
 
-	e := &namespacedExternal{conn: newTestConnector(t, srv)}
+	e := &namespacedExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedZoneAuth("default", "my-zoneauth", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -2034,7 +2045,7 @@ func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -2072,7 +2083,7 @@ func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.UID = types.UID("")
 
@@ -2102,7 +2113,7 @@ func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", "")
 	cr.UID = types.UID("   ")
 
@@ -2137,7 +2148,7 @@ func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 		Comment: stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterZoneAuth("my-zoneauth", ref)
 	cr.UID = types.UID("   ")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -2176,7 +2187,7 @@ func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
 	newRef := m.seed(&ibclient.ZoneAuth{Fqdn: "example.com", View: stringPtr("default"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
 
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{conn: newTestConnector(t, srv)}
+	e := &clusterExternal{conn: newTestConnector(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {

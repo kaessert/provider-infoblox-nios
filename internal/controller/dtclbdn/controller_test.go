@@ -430,10 +430,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestClients builds a *dtcLbdnClients pointed at the given
@@ -472,7 +483,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 		Ea:       ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.Disable = boolPtr(false)
@@ -504,7 +515,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/does-not-exist:my-lbdn")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -527,7 +538,7 @@ func TestObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName()) // simulate NameAsExternalName initializer
 
@@ -551,7 +562,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/test1:my-lbdn")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -563,7 +574,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/test1:my-lbdn")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -583,7 +594,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -650,7 +661,7 @@ func TestClusterObservePoolsAuthZonesAndHealth(t *testing.T) {
 		Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.Pools = []clusterv1alpha1.DTCLBDNPoolLink{
 		{Pool: stringPtr(poolRefWeb), Ratio: uint32Ptr(1)},
@@ -684,7 +695,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "") // no external-name yet
 	cr.Spec.ForProvider.Pools = []clusterv1alpha1.DTCLBDNPoolLink{
 		{Pool: stringPtr(poolRefWeb), Ratio: uint32Ptr(1)},
@@ -721,7 +732,7 @@ func TestClusterCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -738,7 +749,7 @@ func TestClusterUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/test1:my-lbdn")
 
 	if _, err := e.Update(context.Background(), cr); err == nil {
@@ -758,7 +769,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 		Comment:  stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -870,7 +881,7 @@ func TestClusterUpdateSendsAllFields(t *testing.T) {
 		Patterns: []string{"*.example.com"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.LBMethod = stringPtr("RATIO")
 
@@ -912,7 +923,7 @@ func TestClusterUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
 		Patterns: []string{"*.example.com"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.Name = stringPtr("new-name")
 
@@ -938,7 +949,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "test-uid-cluster"}})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -958,7 +969,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/does-not-exist:my-lbdn")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -973,7 +984,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/test1:my-lbdn")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -997,7 +1008,7 @@ func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1029,7 +1040,7 @@ func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn")})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1061,7 +1072,7 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/stale-ref:my-lbdn")
 	liveRef := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: string(cr.GetUID())}})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: unexpected error recovering a rotated reference: %v", err)
@@ -1083,7 +1094,7 @@ func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "dtc:lbdn/stale-ref:my-lbdn")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1103,7 +1114,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1124,7 +1135,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 }
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
+	e := &clusterExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1202,7 +1213,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 		Patterns: []string{"*.example.com"},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1240,7 +1251,7 @@ func TestNamespacedObservePoolsAndHealth(t *testing.T) {
 		Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Pools = []namespacedv1alpha1.DTCLBDNPoolLink{
 		{Pool: stringPtr(poolRefWeb), Ratio: uint32Ptr(1)},
@@ -1268,7 +1279,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/does-not-exist:my-lbdn", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1285,7 +1296,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -1309,7 +1320,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/test1:my-lbdn", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1321,7 +1332,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusForbidden))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/test1:my-lbdn", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -1339,7 +1350,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -1390,7 +1401,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1407,7 +1418,7 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
@@ -1421,7 +1432,7 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/test1:my-lbdn", "ProviderConfig")
 
 	if _, err := e.Update(context.Background(), cr); err == nil {
@@ -1441,7 +1452,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 		Comment:  stringPtr("old comment"),
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1554,7 +1565,7 @@ func TestNamespacedUpdateRefreshesExternalNameOnRefChange(t *testing.T) {
 		Patterns: []string{"*.example.com"},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 	cr.Spec.ForProvider.Name = stringPtr("new-name")
 
@@ -1580,7 +1591,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "test-uid-namespaced"}})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1600,7 +1611,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/does-not-exist:my-lbdn", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1612,7 +1623,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/test1:my-lbdn", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1633,7 +1644,7 @@ func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1662,7 +1673,7 @@ func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 
 	ref := m.seed(&ibclient.DtcLbdn{Name: stringPtr("my-lbdn"), Ea: ibclient.EA{identity.EAKey: "someone-elses-uid"}})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", ref, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -1689,7 +1700,7 @@ func TestNamespacedDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN(nsDefault, "my-lbdn", "dtc:lbdn/stale-ref:my-lbdn", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1797,7 +1808,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -2340,7 +2351,7 @@ func TestClusterObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref1 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-one"), Ea: ibclient.EA{identity.EAKey: uid}})
 	ref2 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-two"), Ea: ibclient.EA{identity.EAKey: uid}})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -2380,7 +2391,7 @@ func TestNamespacedObserveAmbiguousMatchRefusesAndDoesNotMutate(t *testing.T) {
 	ref1 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-one"), Ea: ibclient.EA{identity.EAKey: uid}})
 	ref2 := m.seed(&ibclient.DtcLbdn{Name: stringPtr("lbdn-two"), Ea: ibclient.EA{identity.EAKey: uid}})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN("default", "my-lbdn", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -2425,7 +2436,7 @@ func TestClusterObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 		// No identity.EAKey stamped — this object is unowned.
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2451,7 +2462,7 @@ func TestNamespacedObserveAdoptedNeverReportsUpToDate(t *testing.T) {
 		Patterns: []string{"*.example.com"},
 	})
 
-	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedDTCLBDN("default", "my-lbdn", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2473,7 +2484,7 @@ func TestClusterCreateStampsIdentityEAExactlyOnce(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -2504,7 +2515,7 @@ func TestClusterCreateEmptyUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "")
 	cr.UID = types.UID("")
 
@@ -2528,7 +2539,7 @@ func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", "")
 	cr.UID = types.UID("   ")
 
@@ -2564,7 +2575,7 @@ func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 		Comment:  stringPtr("old comment"),
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.UID = types.UID("   ")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -2597,7 +2608,7 @@ func TestClusterObserveRecoversRotatedRefPersistsAcrossReGet(t *testing.T) {
 
 	scheme := newTestScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 
 	got, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -2684,7 +2695,7 @@ func TestClusterObserveAtProviderExtAttrsRetainsIdentityKey(t *testing.T) {
 		Ea:       ibclient.EA{eaKeyEnv: eaValProd, identity.EAKey: "test-uid-cluster"},
 	})
 
-	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv)}
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterDTCLBDN("my-lbdn", ref)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{eaKeyEnv: eaValProd}
 

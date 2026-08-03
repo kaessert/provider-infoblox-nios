@@ -389,7 +389,7 @@ func TestClusterObserveResolvedUpToDate(t *testing.T) {
 	ref := m.seed(fa, false)
 
 	cr := newClusterFixedAddress("my-addr", ref)
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -407,7 +407,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterFixedAddress("my-addr", "fixedaddress/doesnotexist:x")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -425,7 +425,7 @@ func TestObservePreCreateState(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterFixedAddress("my-addr", "my-addr")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -453,7 +453,7 @@ func TestClusterObserveAdoptsUnstampedObjectAndForcesUpdate(t *testing.T) {
 	ref := m.seed(fa, false)
 
 	cr := newClusterFixedAddress("my-addr", ref)
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -479,7 +479,7 @@ func TestClusterObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
 
 	cr := newClusterFixedAddress("my-addr", "fixedaddress/stale:x")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -504,7 +504,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	ref := m.seed(fa, false)
 
 	cr := newClusterFixedAddress("my-addr", ref)
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
 		t.Fatal("expected an error for foreign identity")
@@ -530,7 +530,7 @@ func TestObserveFindsIPv6Object(t *testing.T) {
 	m.seed(fa, true)
 
 	cr := newClusterFixedAddressIPv6("my-addr", "")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	obs, err := e.Observe(context.Background(), cr)
 	if err != nil {
@@ -550,7 +550,7 @@ func TestClusterCreateStampsIdentity(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterFixedAddress("my-addr", "my-addr")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -597,7 +597,7 @@ func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 
 	cr := newClusterFixedAddress("my-addr", "my-addr")
 	cr.UID = "   "
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
 		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
@@ -625,7 +625,7 @@ func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {
 	cr := newClusterFixedAddress("my-addr", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("updated")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -823,7 +823,7 @@ func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	cr.UID = "   "
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Update(context.Background(), cr); err == nil {
 		t.Fatal("Update: want a hard error for a whitespace-only uid, got nil")
@@ -850,7 +850,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	ref := m.seed(fa, false)
 
 	cr := newClusterFixedAddress("my-addr", ref)
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -869,7 +869,7 @@ func TestClusterDeleteNotFoundIsSuccess(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterFixedAddress("my-addr", "fixedaddress/gone:x")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("expected nil error for already-gone object, got %v", err)
@@ -886,7 +886,7 @@ func TestClusterDeleteRefusesUnverifiedOwnership(t *testing.T) {
 	ref := m.seed(fa, false)
 
 	cr := newClusterFixedAddress("my-addr", ref)
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Delete(context.Background(), cr); err == nil {
 		t.Fatal("expected delete to be refused for an unstamped object")
@@ -1126,14 +1126,14 @@ func TestObserveFromFixedAddressIPv4StillReportsMac(t *testing.T) {
 }
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{}
+	e := &clusterExternal{prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{}
+	e := &namespacedExternal{prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

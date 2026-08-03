@@ -371,7 +371,7 @@ func TestClusterCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterFixedAddress("my-addr", "my-addr")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -397,7 +397,7 @@ func TestClusterCreateRefusesBlankUID(t *testing.T) {
 
 	cr := newClusterFixedAddress("my-addr", "my-addr")
 	cr.UID = ""
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
 		t.Fatal("Create: expected an error for a blank uid")
@@ -416,7 +416,7 @@ func TestNamespacedCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newNamespacedFixedAddress("ns", "my-addr", "my-addr", "ProviderConfig")
-	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -448,7 +448,7 @@ func TestClusterUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) {
 
 	cr := newClusterFixedAddress("my-addr", oldRef)
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.99")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -481,7 +481,7 @@ func TestNamespacedUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) 
 
 	cr := newNamespacedFixedAddress("ns", "my-addr", oldRef, "ProviderConfig")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.99")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {

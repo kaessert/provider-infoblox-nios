@@ -573,10 +573,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestObjectManager builds an identity.ManagerAndConnector pointed at
@@ -619,7 +630,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("hello")
 	cr.Spec.ForProvider.TTL = uint32Ptr(300)
@@ -653,7 +664,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/does-not-exist:host.example.com/default")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -681,7 +692,7 @@ func TestObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "") // external-name unset
 	meta.SetExternalName(cr, cr.GetName())    // simulate NameAsExternalName initializer
 
@@ -706,7 +717,7 @@ func TestClusterObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -719,7 +730,7 @@ func TestClusterObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/test1:host.example.com/default")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -745,7 +756,7 @@ func TestClusterObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.RecordA{})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -807,7 +818,7 @@ func TestClusterObserveAdoptsUnstampedObjectAndForcesUpdate(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 
 	got, err := e.Observe(context.Background(), cr)
@@ -843,7 +854,7 @@ func TestClusterObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	staleRef := "record:a/stale-ref:host.example.com/default"
 	cr := newClusterARecord("my-arecord", staleRef)
 
@@ -879,7 +890,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", foreignRef)
 
 	_, err := e.Observe(context.Background(), cr)
@@ -900,7 +911,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	// cidr/networkView are unset here (zero value) and ipv4Addr is
 	// static — this also serves as the regression guard proving the
 	// cidr next-available-IP path (added below) did not change the
@@ -940,7 +951,7 @@ func TestClusterCreateWithCidrAllocatesNextAvailableIP(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "")
 	cr.Spec.ForProvider.IPv4Addr = nil
 	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
@@ -982,7 +993,7 @@ func TestClusterCreateWithCidrDefaultsNetworkView(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "")
 	cr.Spec.ForProvider.IPv4Addr = nil
 	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
@@ -1011,7 +1022,7 @@ func TestClusterCreateCidrAndIPv4AddrMutuallyExclusive(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "")
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.5")
 	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
@@ -1248,7 +1259,7 @@ func TestClusterCreateDefaultsToSharedProberAndEndpointFallback(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -1303,7 +1314,7 @@ func TestClusterObserveMirrorsCidrAndNetworkView(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.Cidr = stringPtr("10.0.0.0/24")
 	cr.Spec.ForProvider.NetworkView = stringPtr("my-view")
@@ -1334,7 +1345,7 @@ func TestClusterObserveIsUpToDateIgnoresCidrAndNetworkView(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	// cidr/networkView are create-time-only allocation hints, never
 	// echoed back by the WAPI — they must not participate in the
@@ -1364,7 +1375,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	// Mutate the immutable view field in spec — this must NOT affect
 	// ResourceUpToDate, since view is excluded from isUpToDate (WAPI has
@@ -1395,7 +1406,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
 
@@ -1511,7 +1522,7 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -1552,7 +1563,7 @@ func TestClusterUpdateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.UID = types.UID("   ")
 	cr.Spec.ForProvider.Comment = stringPtr("new comment")
@@ -1593,7 +1604,7 @@ func TestClusterUpdateRefreshesExternalNameOnRename(t *testing.T) {
 
 	kube := &recordingKubeClient{}
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", oldRef)
 	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")
 
@@ -1640,7 +1651,7 @@ func TestClusterDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.RecordA{Name: stringPtr("host.example.com"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1661,7 +1672,7 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/does-not-exist:host.example.com/default")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -1677,7 +1688,7 @@ func TestClusterDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/test1:host.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1706,7 +1717,7 @@ func TestClusterDeleteRefusesOnForeignIdentity(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", foreignRef)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -1745,7 +1756,7 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	// The stored external-name is stale — the object now lives at newRef
 	// (simulating a rotation the annotation never caught up with).
 	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
@@ -2093,7 +2104,7 @@ func TestClusterDeleteSteadyStateNeverProbesPrerequisite(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
+	e := &clusterExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -2284,7 +2295,7 @@ func TestNamespacedObserveSuccess(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2305,7 +2316,7 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2325,7 +2336,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -2350,7 +2361,7 @@ func TestNamespacedObserveServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -2363,7 +2374,7 @@ func TestNamespacedObserveForbidden(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/test1:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Observe(context.Background(), cr); err == nil {
@@ -2382,7 +2393,7 @@ func TestNamespacedObserveMinimalResponse(t *testing.T) {
 	ref := m.seed(&ibclient.RecordA{})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -2431,7 +2442,7 @@ func TestNamespacedCreateSuccess(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -2456,7 +2467,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.2")
 
@@ -2566,7 +2577,7 @@ func TestNamespacedDeleteSuccess(t *testing.T) {
 	ref := m.seed(&ibclient.RecordA{Name: stringPtr("host.example.com"), View: "default", Ea: identity.Stamp(nil, testUIDNamespaced)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -2580,7 +2591,7 @@ func TestNamespacedDeleteNotFound(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/does-not-exist:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -2596,7 +2607,7 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/test1:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -2623,7 +2634,7 @@ func TestNamespacedDeleteRefusesOnForeignIdentity(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", foreignRef, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -2658,7 +2669,7 @@ func TestNamespacedDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/stale-ref:host.example.com/default", "ProviderConfig")
 
 	if _, err := e.Delete(context.Background(), cr); err != nil {
@@ -3066,7 +3077,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -3239,7 +3250,7 @@ func TestObserveDoesNotLateInitializeRequiredFields(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.Name = stringPtr("host.example.com")
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.1")
@@ -3636,7 +3647,7 @@ func TestClusterDeleteIgnoresRemoveAssociatedPtr(t *testing.T) {
 			ref := m.seed(&ibclient.RecordA{Name: stringPtr("host.example.com"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
 
 			mc := newTestObjectManager(t, srv)
-			e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+			e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 			cr := newClusterARecord("my-arecord", ref)
 			cr.Spec.ForProvider.RemoveAssociatedPtr = removeAssociatedPtr
 
@@ -3676,7 +3687,7 @@ func TestClusterObserveEmptyExternalNameRecoversSingleMatch(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "")
 	meta.SetExternalName(cr, cr.GetName()) // simulate the NameAsExternalName pre-create state
 
@@ -3715,7 +3726,7 @@ func TestNamespacedObserveEmptyExternalNameRecoversSingleMatch(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
 	meta.SetExternalName(cr, cr.GetName())
 
@@ -3756,7 +3767,7 @@ func TestNamespacedObserveAdoptsUnstampedObjectAndForcesUpdate(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 
 	got, err := e.Observe(context.Background(), cr)
@@ -3784,7 +3795,7 @@ func TestNamespacedObserveRecoversRotatedRefAndPersistsAnnotation(t *testing.T) 
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	staleRef := "record:a/stale-ref:host.example.com/default"
 	cr := newNamespacedARecord("default", "my-arecord", staleRef, "ProviderConfig")
 
@@ -3816,7 +3827,7 @@ func TestNamespacedObserveRefusesOnForeignIdentity(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", foreignRef, "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -3848,7 +3859,7 @@ func TestClusterObserveRefusesOnAmbiguousMatch(t *testing.T) {
 	m.seed(&ibclient.RecordA{Name: stringPtr("host-b.example.com"), Ipv4Addr: stringPtr("10.0.0.2"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -3870,7 +3881,7 @@ func TestNamespacedObserveRefusesOnAmbiguousMatch(t *testing.T) {
 	m.seed(&ibclient.RecordA{Name: stringPtr("host-b.example.com"), Ipv4Addr: stringPtr("10.0.0.2"), View: "default", Ea: identity.Stamp(nil, testUIDNamespaced)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/stale-ref:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Observe(context.Background(), cr)
@@ -3892,7 +3903,7 @@ func TestClusterDeleteRefusesOnAmbiguousMatch(t *testing.T) {
 	refB := m.seed(&ibclient.RecordA{Name: stringPtr("host-b.example.com"), Ipv4Addr: stringPtr("10.0.0.2"), View: "default", Ea: identity.Stamp(nil, testUIDCluster)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", "record:a/stale-ref:host.example.com/default")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -3922,7 +3933,7 @@ func TestNamespacedDeleteRefusesOnAmbiguousMatch(t *testing.T) {
 	refB := m.seed(&ibclient.RecordA{Name: stringPtr("host-b.example.com"), Ipv4Addr: stringPtr("10.0.0.2"), View: "default", Ea: identity.Stamp(nil, testUIDNamespaced)})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "record:a/stale-ref:host.example.com/default", "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -3965,7 +3976,7 @@ func TestClusterDeleteRefusesOnUnstampedObject(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 
 	_, err := e.Delete(context.Background(), cr)
@@ -3997,7 +4008,7 @@ func TestNamespacedDeleteRefusesOnUnstampedObject(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 
 	_, err := e.Delete(context.Background(), cr)
@@ -4024,7 +4035,7 @@ func TestNamespacedCreateStampsIdentity(t *testing.T) {
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", "", "ProviderConfig")
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
@@ -4066,7 +4077,7 @@ func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.2")
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
@@ -4099,7 +4110,7 @@ func TestNamespacedUpdateReassertsIdentityStamp(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newNamespacedARecord("default", "my-arecord", ref, "ProviderConfig")
 	cr.Spec.ForProvider.IPv4Addr = stringPtr("10.0.0.2")
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
@@ -4144,7 +4155,7 @@ func TestClusterUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -4180,7 +4191,7 @@ func TestNamespacedUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) 
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
 
 	mc := newTestObjectManager(t, srv)
-	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed.example.com")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -4242,7 +4253,7 @@ func TestClusterObserveAtProviderExtAttrsIncludesIdentityKey(t *testing.T) {
 	})
 
 	mc := newTestObjectManager(t, srv)
-	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr := newClusterARecord("my-arecord", ref)
 	cr.Spec.ForProvider.ExtAttrs = map[string]string{"env": "prod"}
 
