@@ -1994,7 +1994,8 @@ ceiling, and `activeUsersCount`/the nested `weight` are response-only
 counters from NIOS. No mechanism in this provider enforces those
 conventional ranges, so this is an observation about typical usage, not a
 guarantee. If any existing `SRVRecord` was created with an unusually large
-or negative value for one of these five fields, check it before upgrading:
+or negative value for one of the three `spec.forProvider` fields, check it
+before upgrading:
 
 ```bash
 for grp in recordsrv.infobloxnios.crossplane.io recordsrv.infobloxnios.m.crossplane.io; do
@@ -2006,9 +2007,17 @@ for grp in recordsrv.infobloxnios.crossplane.io recordsrv.infobloxnios.m.crosspl
 done
 ```
 
-Any resource this reports must have the offending field corrected to the
-`0`-`2147483647` range before you reapply the CRDs, or the update will be
-rejected by admission.
+`priority`, `weight`, and `port` carry no `minimum`/`maximum` CRD markers,
+so a negative value on any of them is admitted — only values outside the
+`int32`-representable range (`-2147483648` to `2147483647`) are rejected
+by admission. The Go type backing these fields is `*uint32`, so a negative
+value that gets past admission fails to decode the next time the
+controller reads the object, producing a client-side unmarshal error
+instead of a clean admission rejection. Any resource this reports must
+have the offending field corrected to the `0`-`2147483647` range before
+you reapply the CRDs. `status.atProvider.awsRte53RecordInfo.weight` and
+`status.atProvider.msAdUserData.activeUsersCount` are provider-written and
+not operator-correctable; they are not covered by this check.
 
 **Action required:** reapply the `SRVRecord` CRDs after upgrading the
 provider (`kubectl apply -f package/crds/`, or let your package manager do
