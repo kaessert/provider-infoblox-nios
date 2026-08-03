@@ -874,6 +874,7 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/record-mx/record-mx.yaml
 kubectl apply -f examples/record-mx/record-mx-namespaced.yaml
+```
 
 ### NSRecord
 
