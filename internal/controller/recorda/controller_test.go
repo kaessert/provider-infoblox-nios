@@ -665,8 +665,8 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
-// TestObservePreCreateState verifies the pre-create guard's new behavior
-// per ADR-IN-0006 §3: when the external-name still equals the CR's
+// TestObservePreCreateState verifies the pre-create guard's new behavior:
+// when the external-name still equals the CR's
 // Kubernetes name (no real WAPI _ref has ever been assigned), Observe no
 // longer short-circuits — it still searches by the managed resource's
 // stamped identity attribute before concluding the object does not
@@ -697,7 +697,7 @@ func TestObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -920,7 +920,7 @@ func TestClusterCreateSuccess(t *testing.T) {
 	// Create must stamp the managed resource's own uid into the object's
 	// identity extensible attribute in the same request that creates it
 	// — no follow-up call, no window in which the object exists
-	// unstamped (ADR-IN-0006 §1).
+	// unstamped.
 	m.mu.Lock()
 	stored := m.records[got]
 	m.mu.Unlock()
@@ -1142,7 +1142,7 @@ func TestClusterCreateIdentityDefinitionAbsentAndForbidden(t *testing.T) {
 		t.Fatalf("Create: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
 	}
 	if !strings.Contains(err.Error(), "nios.example.com") || !strings.Contains(err.Error(), "POST /wapi/v2.12/extensibleattributedef") {
-		t.Errorf("Create: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+		t.Errorf("Create: error = %v, want the missing-extensible-attribute-definition remediation text verbatim", err)
 	}
 
 	m.mu.Lock()
@@ -1720,7 +1720,7 @@ func TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T)
 		t.Fatalf("Observe: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
 	}
 	if !strings.Contains(err.Error(), "grid-observe-undefined-ea") || !strings.Contains(err.Error(), "POST /wapi/v2.12/extensibleattributedef") {
-		t.Errorf("Observe: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+		t.Errorf("Observe: error = %v, want the missing-extensible-attribute-definition remediation text verbatim", err)
 	}
 
 	m.mu.Lock()
@@ -1961,7 +1961,7 @@ func TestClusterDeleteSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) 
 		t.Fatalf("Delete: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
 	}
 	if !strings.Contains(err.Error(), "grid-delete-undefined-ea") {
-		t.Errorf("Delete: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+		t.Errorf("Delete: error = %v, want the missing-extensible-attribute-definition remediation text verbatim", err)
 	}
 }
 
@@ -2253,7 +2253,7 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -2533,7 +2533,7 @@ func TestNamespacedObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing
 		t.Fatalf("Observe: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
 	}
 	if !strings.Contains(err.Error(), "grid-namespaced-observe-undefined-ea") {
-		t.Errorf("Observe: error = %v, want the ADR-IN-0006 §4 remediation text verbatim", err)
+		t.Errorf("Observe: error = %v, want the missing-extensible-attribute-definition remediation text verbatim", err)
 	}
 }
 
@@ -3487,7 +3487,7 @@ func TestClusterDeleteIgnoresRemoveAssociatedPtr(t *testing.T) {
 // matching object → ResourceExists:false). These tests cover the other
 // half: no annotation at all, but exactly one object already carries this
 // resource's stamped identity attribute — the create-crash-window
-// recovery path (ADR-IN-0006 §3, identity.OutcomeFoundByUID).
+// recovery path (identity.OutcomeFoundByUID).
 
 func TestClusterObserveEmptyExternalNameRecoversSingleMatch(t *testing.T) {
 	m := newMockWapiServer()

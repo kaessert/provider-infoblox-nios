@@ -51,9 +51,9 @@
 //
 // — was temporarily replaced with an unconditional early return
 // (`return zero, OutcomeNotFound, nil`) before the search is ever issued
-// when ref == "", reproducing the exact defect ADR-IN-0006 §3 exists to
-// close: a provider that gives up instead of searching when it has no
-// prior reference. With that mutation in place,
+// when ref == "", reproducing the exact defect the identity-EA search
+// exists to close: a provider that gives up instead of searching when it
+// has no prior reference. With that mutation in place,
 // TestClusterCreateCrashWindowRecoversByUIDThenDeletesCleanly and
 // TestNamespacedCreateCrashWindowRecoversByUIDThenDeletesCleanly both
 // failed — "Observe: ResourceExists=false after the crash window — the

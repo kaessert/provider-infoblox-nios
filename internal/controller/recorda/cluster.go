@@ -97,10 +97,11 @@ type clusterExternal struct {
 	// against directly — it needs visibility into search match counts
 	// that objMgr's typed methods hide. See resolveARecordIdentity.
 	conn ibclient.IBConnector
-	// prober checks the identity extensible-attribute-definition
-	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
-	// new object. nil defaults to identity.DefaultProber — see
-	// ensureIdentityPrerequisite.
+	// prober checks that the Grid's "Crossplane Internal ID" extensible
+	// attribute definition exists before Create stamps identity onto a
+	// new object — without the definition WAPI rejects the write with an
+	// opaque error, so the probe surfaces an actionable one instead. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key,
 	// resolved by Connect from the ProviderConfig's Grid host. See
@@ -109,18 +110,21 @@ type clusterExternal struct {
 }
 
 // Observe resolves the ARecord through the shared UID-in-EA identity
-// ladder (ADR-IN-0006 §2/§3) and compares the result against the desired
-// spec. See observeARecord for the ladder itself.
+// ladder — steady-state resolve, adopt when the EA is missing, or a
+// rotation search by uid when the stored _ref 404s — and compares the
+// result against the desired spec. See observeARecord for the ladder
+// itself.
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
 	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
-		// A *identity.PrerequisiteError carries the ADR-IN-0006 §4
-		// operator remediation verbatim in its own Error() text — return
-		// it unwrapped, matching Create's behavior, instead of burying it
-		// under the generic "cannot observe ARecord" prefix below.
+		// A *identity.PrerequisiteError carries the missing-extensible-
+		// attribute-definition remediation text verbatim in its own
+		// Error() text — return it unwrapped, matching Create's behavior,
+		// instead of burying it under the generic "cannot observe ARecord"
+		// prefix below.
 		var prereq *identity.PrerequisiteError
 		if errors.As(err, &prereq) {
 			return managed.ExternalObservation{}, err

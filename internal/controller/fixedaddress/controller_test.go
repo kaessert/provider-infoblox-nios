@@ -317,8 +317,8 @@ func (m *mockWapiServer) handler() http.Handler {
 		m.mu.Lock()
 		// UNSTABLE _ref: changing a fixed address's IP mints a new _ref —
 		// mirrors live NIOS Grid Manager behavior (the _ref encodes the
-		// address). ADR-IN-0004 documents ipv4addr specifically as
-		// _ref-mutating for this resource.
+		// address): ipv4addr is _ref-mutating for this resource,
+		// live-verified against a real Grid.
 		renamed := existing.IPv4Address != incoming.IPv4Address || existing.IPv6Address != incoming.IPv6Address
 		existing.Comment = incoming.Comment
 		existing.Ea = incoming.Ea

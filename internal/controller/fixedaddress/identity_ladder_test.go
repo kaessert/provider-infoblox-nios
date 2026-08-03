@@ -5,7 +5,7 @@
 // always known from spec (ipv4Addr vs ipv6Addr — see
 // newEmptyFixedAddress's doc), so there is no "unknown family" fallback
 // to test here. Its ipv4Addr/ipv6Addr fields are genuinely mutable and
-// ADR-IN-0004 documents them as _ref-mutating, so a real Update()-
+// live-verified as _ref-mutating, so a real Update()-
 // triggered rotation is directly reachable (like ARecord/RangeTemplate,
 // not a defensive no-op).
 package fixedaddress

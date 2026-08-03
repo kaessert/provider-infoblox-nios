@@ -317,7 +317,7 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 }
 
 // Update patches the mutable FixedAddress fields. Because ipv4addr is
-// _ref-mutating (UNSTABLE external name, ADR-IN-0004), the external-name
+// _ref-mutating (UNSTABLE external name, live-verified), the external-name
 // annotation is refreshed whenever the WAPI response returns a different
 // _ref than the one used to issue the request. Every call re-asserts the
 // identity stamp.

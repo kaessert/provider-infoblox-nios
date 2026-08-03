@@ -313,7 +313,7 @@ func isNotFound(err error) bool {
 
 // isUpToDate compares the desired mutable NSRecord fields (nameserver,
 // addresses, msDelegationName) against the observed RecordNS. name and
-// view are hard-immutable (live-verified ADR-IN-0004: `supports=rws`, no
+// view are hard-immutable (live-verified against a real Grid: `supports=rws`, no
 // `u` — WAPI rejects a PUT that changes either field even though the Go
 // SDK's UpdateNSRecord signature still accepts them) and zone is
 // derived/response-only — all three are intentionally excluded from this
@@ -518,7 +518,7 @@ func observeCloudInfo(ci *ibclient.GridCloudapiInfo) *nsCloudInfo {
 
 // createNSRecord issues the WAPI create call. name, nameserver, and view
 // are all required by WAPI on create; addresses is also required
-// (live-verified ADR-IN-0004 — the SDK's CreateNSRecord rejects an empty
+// (live-verified — the SDK's CreateNSRecord rejects an empty
 // addresses list).
 func createNSRecord(objMgr ibclient.IBObjectManager, name, nameserver, view, msDelegationName *string, addresses []nsRecordAddress) (*ibclient.RecordNS, error) {
 	return objMgr.CreateNSRecord(
@@ -535,8 +535,8 @@ func createNSRecord(objMgr ibclient.IBObjectManager, name, nameserver, view, msD
 // intentionally passed as empty strings — the SDK's NewRecordNS helper
 // (called internally by UpdateNSRecord) tags both fields `omitempty`, so
 // an empty value drops them from the outgoing JSON entirely rather than
-// echoing the current (unchanged) value. Live verification (ADR-IN-0004)
-// confirmed WAPI rejects the PUT outright if either field is present, so
+// echoing the current (unchanged) value. Live verification against a
+// real Grid confirmed WAPI rejects the PUT outright if either field is present, so
 // they must never appear in the request body — not even unchanged.
 // Update semantics for record:ns are partial/merge (fields omitted from
 // the body keep their existing server-side value), so this is safe.

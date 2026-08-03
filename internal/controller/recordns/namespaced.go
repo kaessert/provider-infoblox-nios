@@ -257,7 +257,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	// See clusterExternal.Update — UpdateNSRecord returns the object's
-	// current _ref, and NS-record _refs are unstable (ADR-IN-0004).
+	// current _ref, and NS-record _refs are unstable (live-verified).
 	if rec.Ref != "" && rec.Ref != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)

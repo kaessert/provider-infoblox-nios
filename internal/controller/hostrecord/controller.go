@@ -136,10 +136,11 @@ func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.
 type hostRecordClient struct {
 	objMgr ibclient.IBObjectManager
 	conn   ibclient.IBConnector
-	// prober checks the identity extensible-attribute-definition
-	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
-	// new object. nil defaults to identity.DefaultProber — see
-	// ensureIdentityPrerequisite.
+	// prober checks that the Grid's "Crossplane Internal ID" extensible
+	// attribute definition exists before Create stamps identity onto a
+	// new object — without the definition WAPI rejects the write with an
+	// opaque error, so the probe surfaces an actionable one instead. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key,
 	// set by Connect from the ProviderConfig's Grid host after

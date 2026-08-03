@@ -508,9 +508,9 @@ func TestClusterObserveStripsIdentityEAFromExtAttrs(t *testing.T) {
 // TestObservePreCreateState verifies that Observe runs one identity
 // search (not a hard-coded no-op) when the external-name still equals
 // the CR's Kubernetes name — the pre-create state for a server-assigned
-// external-name strategy. Per ADR-IN-0006 §3 the pre-create guard no
-// longer short-circuits: it maps the annotation to "" and lets the
-// identity ladder search by uid before concluding ResourceExists:false.
+// external-name strategy. The pre-create guard does not short-circuit:
+// it maps the annotation to "" and lets the identity ladder search by
+// uid before concluding ResourceExists:false.
 func TestObservePreCreateState(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -532,7 +532,7 @@ func TestObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -1718,7 +1718,7 @@ func TestNewConnectorWithSchemeUsesConfiguredSslVerify(t *testing.T) {
 // AmbiguousMatchError is the second typed refusal the identity ladder can
 // return (alongside HandleReuseError) — when more than one Grid object
 // carries this managed resource's identity stamp, the ladder must refuse
-// rather than silently pick the first match. Per ADR-IN-0006, taking an
+// rather than silently pick the first match. Taking an
 // arbitrary match risks mutating or deleting an object this resource does
 // not actually own.
 

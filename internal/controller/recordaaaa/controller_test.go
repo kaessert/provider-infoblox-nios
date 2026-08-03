@@ -677,7 +677,7 @@ func TestClusterObserveNotFound(t *testing.T) {
 
 // TestObservePreCreateState verifies that Observe no longer
 // short-circuits on the pre-create state (external-name == CR name):
-// per the identity ladder (ADR-IN-0006 §3), it maps that state to "" and
+// per the identity ladder, it maps that state to "" and
 // runs one identity-EA search before concluding ResourceExists:false —
 // closing the create-crash-window recovery path. The extra WAPI call
 // returning zero matches is accepted and must not be optimized away.
@@ -702,7 +702,7 @@ func TestObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
