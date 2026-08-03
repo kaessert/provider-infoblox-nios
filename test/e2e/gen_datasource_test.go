@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -908,19 +909,92 @@ func canonicalIPv6String(t *testing.T, value string) string {
 	return ip.String()
 }
 
+// netV6KeyExpectedOType maps each netV6* key gen-datasource.sh emits to the
+// WAPI object type reap.sh's IPv6 sweep must cover it as. Matching the
+// regex alone is not sufficient: reap.sh's PREFIX_V6_REGEX is the exact
+// same regex string for every IPv6 object-type row in IPV6_ADDRESSED_TYPES,
+// so ANY single scope entry vacuously "covers" every other type's address
+// too — a sweep narrowed to one object type (dropping the other two
+// entirely) still passes a check that only compares regexes. Requiring the
+// otype to match as well is what makes object-type coverage drift visible.
+var netV6KeyExpectedOType = map[string]string{
+	keyNetV6NetworkCluster:          "ipv6network",
+	keyNetV6NetworkNamespaced:       "ipv6network",
+	keyNetV6ContainerCluster:        "ipv6networkcontainer",
+	keyNetV6ContainerNamespaced:     "ipv6networkcontainer",
+	keyNetV6FixedAddrParent:         "ipv6network",
+	keyNetV6FixedAddrHostCluster:    "ipv6fixedaddress",
+	keyNetV6FixedAddrHostNamespaced: "ipv6fixedaddress",
+}
+
+// netV6KeyExpectedField maps each netV6* key to the WAPI field the scope
+// entry for its object type must search. ipv6network and
+// ipv6networkcontainer objects are keyed on their "network" field;
+// ipv6fixedaddress objects are keyed on "ipv6addr". An entry with the
+// right otype but the wrong field would still never find the object it
+// claims to cover.
+var netV6KeyExpectedField = map[string]string{
+	keyNetV6NetworkCluster:          "network",
+	keyNetV6NetworkNamespaced:       "network",
+	keyNetV6ContainerCluster:        "network",
+	keyNetV6ContainerNamespaced:     "network",
+	keyNetV6FixedAddrParent:         "network",
+	keyNetV6FixedAddrHostCluster:    "ipv6addr",
+	keyNetV6FixedAddrHostNamespaced: "ipv6addr",
+}
+
+// knownV6Keys is the floor list of netV6* keys gen-datasource.sh is known
+// to emit today. datasourceV6Keys derives the actual set fresh on every
+// run so a newly ADDED key is picked up automatically with no test edit
+// required; this floor guards the opposite failure — the datasource
+// silently emitting FEWER netV6* keys than it should, which would let the
+// per-key loop below iterate a shrunken (or empty) set and pass vacuously.
+var knownV6Keys = []string{
+	keyNetV6NetworkCluster, keyNetV6NetworkNamespaced,
+	keyNetV6ContainerCluster, keyNetV6ContainerNamespaced,
+	keyNetV6FixedAddrParent,
+	keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced,
+}
+
+// datasourceV6Keys returns every key gen-datasource.sh actually emitted
+// whose name starts with "netV6", derived from the datasource output
+// itself rather than a hand-maintained list. This is what lets
+// TestReapScopeCoversDatasourceV6Keys catch a new IPv6 sub-allocation
+// added to gen-datasource.sh with no corresponding reap.sh sweep entry: the
+// key shows up here automatically and then fails the otype lookup below.
+// Sorted for a deterministic iteration order and deterministic failure
+// messages (map iteration order is randomized).
+func datasourceV6Keys(values map[string]string) []string {
+	var keys []string
+	for key := range values {
+		if strings.HasPrefix(key, "netV6") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // TestReapScopeCoversDatasourceV6Keys is the drift guard between
 // gen-datasource.sh's netV6* keys and reap.sh's IPv6 sweep scope. The two
 // evolved independently more than once, and each time they silently fell
-// out of sync: gen-datasource.sh started emitting an address shape
-// reap.sh's regex no longer matched. A dry run with nothing to reap prints
-// the exact same "Nothing to reap" whether the sweep is precisely scoped
-// or blind to a whole object type — the failure mode is silent by
-// construction. This test closes that gap mechanically: for each netV6*
-// key gen-datasource.sh emits, at least one object-type/regex pair
-// `reap.sh --print-scope` reports for that SAME run's --net-prefix must
-// match the key's CANONICAL (WAPI-stored) rendering. If a future netV6 key
-// is added to gen-datasource.sh without a matching reap.sh sweep entry,
-// this test fails instead of the coverage gap surviving to production.
+// out of sync in one of two ways: gen-datasource.sh started emitting an
+// address shape reap.sh's regex no longer matched, or reap.sh's sweep
+// stopped covering one of the three IPv6 WAPI object types
+// (ipv6network / ipv6networkcontainer / ipv6fixedaddress) while its regex
+// kept matching addresses of the type it still did cover — a coverage gap
+// invisible to any check that only compares regexes, because
+// PREFIX_V6_REGEX is identical across all three rows in
+// IPV6_ADDRESSED_TYPES. A dry run with nothing to reap prints the exact
+// same "Nothing to reap" in both failure modes — the gap is silent by
+// construction. This test closes both gaps mechanically: for every
+// netV6* key gen-datasource.sh actually emits (derived fresh each run, not
+// a hardcoded list — a floor guards against the set shrinking to nothing),
+// at least one `reap.sh --print-scope` entry for that SAME run's
+// --net-prefix must have the object type and field that key's WAPI object
+// is actually created as/on, and its regex must match the key's CANONICAL
+// (WAPI-stored) rendering. A scope entry that matches only on regex, or
+// only on otype, does not count.
 func TestReapScopeCoversDatasourceV6Keys(t *testing.T) {
 	// Seeds below were chosen by running gen-datasource.sh and reading the
 	// BLOCK_INDEX each one derives, not guessed — an unverified guess is
@@ -938,12 +1012,6 @@ func TestReapScopeCoversDatasourceV6Keys(t *testing.T) {
 		"TestReapScopeCoversDatasourceV6Keys-seed-c", // BLOCK_INDEX 153
 		"TestReapScopeCoversDatasourceV6Keys-seed-f", // BLOCK_INDEX 5 (< 16)
 	}
-	v6Keys := []string{
-		keyNetV6NetworkCluster, keyNetV6NetworkNamespaced,
-		keyNetV6ContainerCluster, keyNetV6ContainerNamespaced,
-		keyNetV6FixedAddrParent,
-		keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced,
-	}
 
 	sawLowBlockIndex := false
 	for _, seed := range seeds {
@@ -957,18 +1025,31 @@ func TestReapScopeCoversDatasourceV6Keys(t *testing.T) {
 			t.Fatalf("seed %q: reap.sh --print-scope reported an empty scope for --net-prefix=%s", seed, values[keyNetPrefix])
 		}
 
+		v6Keys := datasourceV6Keys(values)
+		if len(v6Keys) < len(knownV6Keys) {
+			t.Fatalf("seed %q: gen-datasource.sh emitted only %d netV6* keys %v, expected at least the %d known keys %v — the datasource's IPv6 sub-allocation may have regressed",
+				seed, len(v6Keys), v6Keys, len(knownV6Keys), knownV6Keys)
+		}
+
 		for _, key := range v6Keys {
+			wantOType, ok := netV6KeyExpectedOType[key]
+			if !ok {
+				t.Errorf("seed %q: netV6* key %q has no entry in netV6KeyExpectedOType — a new IPv6 sub-allocation was added to gen-datasource.sh without declaring which WAPI object type reap.sh's sweep must cover it as",
+					seed, key)
+				continue
+			}
+			wantField := netV6KeyExpectedField[key]
 			canonical := canonicalIPv6String(t, values[key])
 			matched := false
 			for _, entry := range scope {
-				if entry.regex.MatchString(canonical) {
+				if entry.otype == wantOType && entry.field == wantField && entry.regex.MatchString(canonical) {
 					matched = true
 					break
 				}
 			}
 			if !matched {
-				t.Errorf("seed %q (BLOCK_INDEX=%d, netPrefix=%s): %s=%q (canonical %q) is not matched by any reap.sh --print-scope regex: %v",
-					seed, blockIndex, values[keyNetPrefix], key, values[key], canonical, scope)
+				t.Errorf("seed %q (BLOCK_INDEX=%d, netPrefix=%s): %s=%q (canonical %q) is not covered by any reap.sh --print-scope entry with otype=%q field=%q: %v",
+					seed, blockIndex, values[keyNetPrefix], key, values[key], canonical, wantOType, wantField, scope)
 			}
 		}
 	}

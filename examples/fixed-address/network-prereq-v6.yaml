@@ -15,9 +15,9 @@
 # single per-run ipv6network object safely covers both
 # fixed-address-v6.yaml's ${data.netV6FixedAddrHostCluster} host and
 # fixed-address-v6-namespaced.yaml's
-# ${data.netV6FixedAddrHostNamespaced} host. This replaces what was
-# formerly a shared, non-per-run literal (2001:db8:e2e6:5::/64)
-# provisioned once by test/setup.sh (see ADR-IN-0007).
+# ${data.netV6FixedAddrHostNamespaced} host. Each E2E run provisions
+# its own such object from its own per-run sub-allocation, so
+# concurrent runs never contend over one shared network.
 #
 # ${data.netV6FixedAddrParent}: a per-run /64 reserved specifically
 # for this prerequisite (see test/e2e/gen-datasource.sh's
