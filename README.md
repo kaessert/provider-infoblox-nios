@@ -55,8 +55,70 @@ resources declaratively using Kubernetes custom resources.
 - Kubernetes cluster with [Crossplane v2](https://docs.crossplane.io/) installed
 - An Infoblox NIOS Grid Manager appliance reachable from the cluster, with a
   WAPI-capable user account (host, username, password)
+- A `Crossplane Internal ID` extensible attribute definition on the Grid — see
+  [Identity extensible attribute definition](#identity-extensible-attribute-definition)
+  below
+
+### Identity extensible attribute definition
+
+The NIOS WAPI reference (`_ref`) that identifies a Grid object is derived from
+that object's own identity fields, not a stable backend-assigned ID — changing
+a field like a record's priority computes a different `_ref` for the same
+object. To keep track of an object reliably across such changes, this
+provider stamps its own `metadata.uid` onto every object it creates, in a
+`Crossplane Internal ID` extensible attribute, and resolves objects through
+that attribute rather than trusting the stored `_ref` alone.
+
+This applies to every managed resource in this provider's catalog, with two
+exceptions that don't need it:
+
+- **`ExtensibleAttributeDef`** — its `name` is unique Grid-wide, so a name
+  lookup resolves it unambiguously without a stamp.
+- **`NSRecord`** — the WAPI `record:ns` object type has no `extattrs` field at
+  all, so it cannot carry one.
+
+**Before installing the provider (or immediately after), make sure the
+attribute definition exists on your Grid.** Create it once with a superuser
+credential:
+
+```
+POST /wapi/v2.12/extensibleattributedef
+{"name":"Crossplane Internal ID","type":"STRING","flags":"CR"}
+```
+
+Managing extensible attribute definitions is a superuser-only Grid operation —
+NIOS has no `permission.resource_type` value that covers it, so it cannot be
+delegated to a non-superuser admin group. You have two options:
+
+- **Run the `POST` above once**, with any superuser credential, independently
+  of the credential the provider itself uses.
+- **Give the provider's own credential (the one in its Secret) superuser
+  access.** The provider probes for the definition automatically and creates
+  it itself the first time it's needed.
+
+If neither is done, the provider still starts, and controllers that don't
+need the guarantee — including the `ExtensibleAttributeDef` controller that
+manages this very definition — keep reconciling normally. Only the resources
+that need the guarantee are affected: their `Synced` condition turns `False`,
+carrying the exact `POST` command above as remediation text, so the problem is
+discoverable from `kubectl describe` without reading this document. This
+applies to reads as well as writes: with the definition absent, NIOS answers
+an identity lookup with `HTTP 400 AdmConProtoError: Unknown extensible
+attribute: Crossplane Internal ID`, not an empty result, so even `Observe`
+fails closed rather than reporting the resource as gone. Once the definition
+exists, the refusal clears on its own — the provider caches the check per
+Grid endpoint for about five minutes — with no pod restart or resource
+re-creation required.
+
+> This failure mode is implemented and unit-tested as described above. It has
+> not yet been exercised end-to-end against a live Grid, so treat this as the
+> designed behavior rather than a field-proven one.
 
 ## Installation
+
+Complete the [Prerequisites](#prerequisites) above — in particular, the
+identity extensible attribute definition — before or immediately after
+installing the provider.
 
 ### Using kubectl (recommended)
 
@@ -1799,6 +1861,22 @@ kubectl apply -f examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
 
 ## Upgrade Notes
 
+### Identity extensible attribute adoption
+
+Every managed resource covered by the [identity extensible attribute
+definition](#identity-extensible-attribute-definition) stamps a
+`Crossplane Internal ID` value onto its Grid object at create time. Objects
+created by a provider build that predates this mechanism — or any object the
+provider has adopted via `crossplane.io/external-name` without having created
+it itself — carry no such stamp yet.
+
+No action is required: the next time the provider reconciles such an object
+and can still resolve it through its stored reference, it treats the missing
+attribute as an adoption case and writes the stamp, bringing the object under
+the same protection as one created by this build. The visible side effect is
+that a `Crossplane Internal ID` extensible attribute will start appearing
+against your existing managed objects in Grid Manager as this happens.
+
 ### TTL field type unification (ARecord, AAAARecord, CNAMERecord, MXRecord, SRVRecord)
 
 The `ttl` field on `ARecord`, `AAAARecord`, `CNAMERecord`, `MXRecord`, and
@@ -1807,10 +1885,27 @@ and `status.atProvider.ttl`) changed its CRD schema format from `int64` to
 `int32`. This aligns `ttl` with every other DNS record type in the provider,
 all of which already used the 32-bit form.
 
-No existing value is out of range — `ttl` has always been constrained to
-`0`-`2147483647` (unsigned 32-bit) by the CRD's `minimum`/`maximum` markers,
-and that constraint is unchanged. This is a schema-shape change only, not a
-behavior change.
+The `minimum: 0` / `maximum: 2147483647` bounds on `ttl` were introduced in
+the same change as this type conversion. If you are upgrading from a build
+published before 2026-07-30, your existing `ttl` values were never
+range-checked and the field had no lower bound at all — a negative or
+otherwise out-of-range value could have been persisted, and such a resource
+will fail CRD validation once you apply the new schema. Check your existing
+resources before upgrading:
+
+```bash
+for res in arecords.recorda aaaarecords.recordaaaa cnamerecords.recordcname mxrecords.recordmx srvrecords.recordsrv; do
+  for grp in infobloxnios.crossplane.io infobloxnios.m.crossplane.io; do
+    kubectl get "${res}.${grp}" -A -o json 2>/dev/null | jq -r \
+      '.items[] | select(.spec.forProvider.ttl != null and (.spec.forProvider.ttl < 0 or .spec.forProvider.ttl > 2147483647)) |
+       "\(.kind) \(.metadata.namespace // "-")/\(.metadata.name): ttl=\(.spec.forProvider.ttl)"'
+  done
+done
+```
+
+Any resource this reports must have its `ttl` corrected to the `0`-`2147483647`
+range before you reapply the CRDs, or the update will be rejected by
+admission.
 
 **Action required:** reapply the CRDs for these five kinds after upgrading
 the provider (`kubectl apply -f package/crds/`, or let your package manager

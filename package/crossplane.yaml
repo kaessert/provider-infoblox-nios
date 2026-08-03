@@ -11,6 +11,11 @@ metadata:
     meta.crossplane.io/readme: |
       `provider-infobloxnios` is a Crossplane Provider for managing
       Infoblox NIOS DDI (DNS, DHCP, IPAM) resources.
+
+      Before installing, create the `Crossplane Internal ID` extensible
+      attribute definition on your Grid (or use a superuser credential so
+      the provider can create it itself) — see the Prerequisites section of
+      the provider's README for details and the exact WAPI call.
     friendly-name.meta.crossplane.io: Provider Infoblox NIOS
 spec:
   capabilities:
