@@ -455,6 +455,11 @@ func validateAAAARecordCreateInputs(ipv6Addr, cidr *string, uid string) error {
 	return nil
 }
 
+// defaultNetworkView is the NIOS Grid's built-in network view name, used
+// when a next-available-IP create call is issued without an explicit
+// network view.
+const defaultNetworkView = "default"
+
 // createAAAARecord issues the WAPI create call, stamping the owning
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp) — there is no follow-up
@@ -464,9 +469,9 @@ func validateAAAARecordCreateInputs(ipv6Addr, cidr *string, uid string) error {
 // (func:nextavailableip) instead of using a caller-supplied static
 // address — cidr and ipv6Addr are mutually exclusive, enforced above
 // before the SDK call is issued. CreateAAAARecord already defaults an
-// empty network view to "default" internally; this wrapper applies the
-// same default explicitly for consistency with createARecord (whose SDK
-// counterpart does not self-default).
+// empty network view to defaultNetworkView internally; this wrapper
+// applies the same default explicitly for consistency with createARecord
+// (whose SDK counterpart does not self-default).
 func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string, uid string) (*ibclient.RecordAAAA, error) {
 	if err := validateAAAARecordCreateInputs(ipv6Addr, cidr, uid); err != nil {
 		return nil, err
@@ -475,7 +480,7 @@ func createAAAARecord(objMgr ibclient.IBObjectManager, name, view, ipv6Addr, com
 	cidrVal := strOrEmpty(cidr)
 	netView := strOrEmpty(networkView)
 	if cidrVal != "" && netView == "" {
-		netView = "default"
+		netView = defaultNetworkView
 	}
 
 	ea := identity.Stamp(buildEA(extAttrs), uid)

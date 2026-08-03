@@ -82,6 +82,9 @@ const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
 const wapiVersion = "2.9.7"
 
+// defaultDNSViewName is the NIOS Grid's built-in default DNS view name.
+const defaultDNSViewName = "default"
+
 // wellKnownDNSViewNames holds the three views the NIOS Grid Manager always
 // provisions. They can be renamed and reconfigured, but the appliance
 // rejects deleting the last remaining view and this controller additionally
@@ -90,9 +93,9 @@ const wapiVersion = "2.9.7"
 // resolution. Delete() treats these as a no-op success (see cluster.go /
 // namespaced.go) so the Kubernetes object can still be removed.
 var wellKnownDNSViewNames = map[string]bool{
-	"default":  true,
-	"External": true,
-	"Internal": true,
+	defaultDNSViewName: true,
+	"External":         true,
+	"Internal":         true,
 }
 
 // isWellKnownDNSViewName reports whether name identifies one of the three
