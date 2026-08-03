@@ -1,6 +1,7 @@
 # network-allocate.yaml — Network created via the EA-based dynamic
 # allocation path: filterParams + allocatePrefixLen + object, instead of a
-# static spec.forProvider.network CIDR. Apply network-allocate-parent.yaml
+# static spec.forProvider.network CIDR. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_NETWORK_ALLOCATE) applies network-allocate-parent.yaml
 # first — the controller resolves filterParams to that parent object
 # (matched by its extAttrs.Site value) via WAPI's AllocateNetworkByEA
 # call, allocates a free /allocatePrefixLen block from it, and
@@ -21,22 +22,12 @@
 # on Network, alongside filterParams) remains unexercised by any example —
 # out of scope for this manifest, which documents only the EA-based path.
 #
-# NOT wired into `make e2e`. filterParams is a Grid-wide
-# extensible-attribute search: it matches ANY object carrying a matching
-# EA value, not just network-allocate-parent.yaml's. A concurrent E2E run
-# — or a leftover parent from a crashed run — could silently capture or
-# contend for this allocation on the shared Grid. Safe automated wiring
-# needs both the EA value and the parent CIDR to come from per-run
-# identity, sized so a single shared parent can't be exhausted by
-# concurrent runs; the existing uptest `${data.runToken}` /
-# `${data.netPrefix}` datasource values are close but not sufficient on
-# their own — `netPrefix` is one shared value per run, not scoped to this
-# resource pair, so a second addressed-object example adopting it directly
-# would collide with this one in the same run. That resource-scoped
-# sub-allocation is being handled as part of the broader E2E isolation
-# effort for IPAM resources; wiring this pair into `make e2e` is left to
-# that effort. Apply both manifests by hand against a live NIOS Grid
-# Manager to exercise this path.
+# ${data.runToken}: matches network-allocate-parent.yaml's
+# extAttrs.Site value. filterParams is a Grid-wide extensible-attribute
+# search — it matches ANY object carrying the value, not just this run's
+# parent — so both sides use the same per-run token instead of a fixed
+# literal to keep the search scoped to exactly this run's parent even
+# while other runs' parents exist concurrently on the shared Grid.
 #
 # Live-verified end-to-end through the controller (not just a raw WAPI
 # probe) with a /25 parent and matching Site value: reached Ready/Synced
@@ -49,12 +40,42 @@ metadata:
   name: example-network-allocate
   annotations:
     meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — it has
+    # known bugs in uptest v2.2.0 (shell-quoting breaks JSON values). Runs
+    # the per-field update tester after uptest asserts Ready.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-network-allocate.sh
+    # comment is the only mutable scalar exercised here — same rationale
+    # as network.yaml. networkView, filterParams, allocatePrefixLen, and
+    # object are all create-time-only allocation inputs (drive
+    # AllocateNetworkByEA at Create) and are not safely re-postable after
+    # the resource is already Ready. network itself is late-initialized
+    # from the allocation result, not a user-set field, so it is not
+    # update-tested either.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: networkView
+        skip: "fixed at creation — absent from the UpdateNetwork SDK method signature"
+      - field: network
+        skip: "late-initialized from the AllocateNetworkByEA result, not a user-set field on this example"
+      - field: parentCidr
+        skip: "create-time-only allocation input, mutually exclusive with filterParams"
+      - field: allocatePrefixLen
+        skip: "create-time-only allocation input consumed by AllocateNetworkByEA at Create"
+      - field: filterParams
+        skip: "create-time-only EA-based allocation input consumed by AllocateNetworkByEA at Create"
+      - field: object
+        skip: "only valid when filterParams is set; identifies the parent object type consumed at Create"
 spec:
   forProvider:
     networkView: default
     filterParams:
-      "*Site": network-allocate-demo
+      "*Site": ${data.runToken}
     allocatePrefixLen: 28
     object: networkcontainer
+    comment: Managed by Crossplane
   providerConfigRef:
     name: default

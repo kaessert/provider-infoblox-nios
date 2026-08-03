@@ -95,6 +95,7 @@ const (
 	keyNetRangeParentNamespaced     = "netRangeParentNamespaced"
 	keyNetRangeStartNamespaced      = "netRangeStartNamespaced"
 	keyNetRangeEndNamespaced        = "netRangeEndNamespaced"
+	keyNetAllocParentCluster        = "netAllocParentCluster"
 	keyNetPtrHostCluster            = "netPtrHostCluster"
 	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
 	keyNetV6NetworkCluster          = "netV6NetworkCluster"
@@ -125,6 +126,7 @@ var requiredKeys = []string{
 	keyNetRangeParentNamespaced,
 	keyNetRangeStartNamespaced,
 	keyNetRangeEndNamespaced,
+	keyNetAllocParentCluster,
 	keyNetPtrHostCluster,
 	keyNetPtrHostNamespaced,
 	keyNetV6NetworkCluster,
@@ -189,6 +191,32 @@ func TestGenDatasourceUsageError(t *testing.T) {
 	}
 }
 
+// TestGenDatasourceScriptIsExecutable guards against the owner-execute bit
+// silently getting stripped from gen-datasource.sh — e.g. by an editor or a
+// git operation that rewrites the index entry as 100644 instead of 100755.
+// Every other test in this file already fails loudly when that happens
+// (exec.CommandContext returns "permission denied"), but those failures are
+// easy to misdiagnose as a script bug. This test names the actual cause
+// directly so the fix is obvious: chmod +x and `git update-index
+// --chmod=+x`.
+//
+// This package (test/e2e) is outside GO_SUBDIRS, so `make test` /
+// `make reviewable` does not compile or run it — this guard only fires when
+// `go test ./test/e2e/...` is run explicitly (as the E2E flow's own
+// pre-flight steps do). A Makefile-side check that runs unconditionally
+// during `make reviewable` would be the more durable option, but the
+// Makefile is scaffolder-owned; this test is the guard available within the
+// tester's file charter.
+func TestGenDatasourceScriptIsExecutable(t *testing.T) {
+	info, err := os.Stat(scriptPath(t))
+	if err != nil {
+		t.Fatalf("stat gen-datasource.sh: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("gen-datasource.sh is not executable (mode %s) — run: chmod +x test/e2e/gen-datasource.sh && git update-index --chmod=+x test/e2e/gen-datasource.sh", info.Mode())
+	}
+}
+
 // TestGenDatasourceSubBlocksShareBlockIndex asserts every netXxx sub-block
 // key is carved from the SAME third octet (BLOCK_INDEX) as netPrefix — the
 // whole point of sub-blocking is that every consumer draws from the one
@@ -207,6 +235,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
+		keyNetAllocParentCluster,
 	}
 	for _, key := range cidrKeys {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -258,6 +287,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		keyNetSharedMemberCluster, keyNetSharedMemberNamespaced,
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
+		keyNetAllocParentCluster,
 	}
 	// Range is a contiguous [start, end] address span, not a CIDR.
 	rangeSpans := [][2]string{

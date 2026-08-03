@@ -56,9 +56,14 @@
 #               illustrative field values (record-a's ipv4Addr, dtc-server's
 #               host, record-ns's address), so a generated block inside it
 #               can literally equal one of those hardcoded literals. It is
-#               also not 198.51.100/101.0/24, 203.0.113.0/24, 10.0.0.0/24 or
-#               172.25/26.0.0/16 — every one of those is already the fixed
-#               CIDR of an existing addressed-object example.
+#               also not 198.51.100.0/24, 198.51.101.0/24, 203.0.113.0/24,
+#               10.0.0.0/24, or 172.25.0.0/16 / 172.26.0.0/16 — every
+#               addressed-object example that once hardcoded a CIDR from
+#               one of those ranges has since been tokenised onto a
+#               ${data.*} sub-block below, so none of them is a live
+#               literal any more, but the ranges stay excluded here as a
+#               defensive margin against a future example reintroducing
+#               one by hand.
 #
 #               A SINGLE run applies every family in ONE `make e2e` (CORE)
 #               invocation with ONE netPrefix, and WAPI rejects overlapping
@@ -96,7 +101,24 @@
 #                 .161-181 netRangeStartCluster/netRangeEndCluster          (Range, cluster — 21 addresses, inside the block above)
 #                 .192/27  netRangeParentNamespaced      (prerequisite parent Network for Range, namespaced)
 #                 .193-213 netRangeStartNamespaced/netRangeEndNamespaced    (Range, namespaced — 21 addresses, inside the block above)
-#                 .224-254 reserved / unused — room to grow
+#                 .224/27  netAllocParentCluster         (prerequisite parent NetworkContainer for the EA-based
+#                                                          dynamic-allocation Network example, cluster only — no
+#                                                          namespaced sibling exists for this pair yet)
+#                 .130-.159 reserved / unused — room to grow
+#
+#               netAllocParentCluster arithmetic: the allocate example
+#               requests a /28 (16 addresses) via allocatePrefixLen, so the
+#               /27 parent (32 addresses, .224-.255) contains exactly two
+#               candidate /28 halves — .224-.239 and .240-.255 — and
+#               AllocateNetworkByEA may pick either one; its choice is not
+#               contractual. Sizing the parent to fit two full /28s gives it
+#               room to pick without tripping over the parent's own
+#               network/broadcast addresses — the same "child fits with
+#               headroom" sizing Range's /27 parent uses above for its
+#               21-address span. A per-run parent (nothing else was ever
+#               provisioned in it before this run) also makes exhaustion
+#               moot either way; the headroom is about allocation room, not
+#               about surviving repeat allocations.
 #
 #               HostRecord does not need its own parent Network object (it
 #               bypasses the requirement via configureForDns). FixedAddress
@@ -252,6 +274,7 @@ NET_RANGE_END_CLUSTER="100.64.${BLOCK_INDEX}.181"
 NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
 NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
 NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
+NET_ALLOC_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.224/27"
 
 # netV6Network{Cluster,Namespaced} — Network's IPv6 (ipv6network) variant,
 # see the header comment's netV6 section. Reuses BLOCK_INDEX (same byte
@@ -293,6 +316,7 @@ netRangeEndCluster: "${NET_RANGE_END_CLUSTER}"
 netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
 netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
+netAllocParentCluster: "${NET_ALLOC_PARENT_CLUSTER}"
 netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
 netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
 netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"
