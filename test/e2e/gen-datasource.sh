@@ -104,20 +104,21 @@
 #                 .224/27  netAllocParentCluster         (prerequisite parent NetworkContainer for the EA-based
 #                                                          dynamic-allocation Network example, cluster only — no
 #                                                          namespaced sibling exists for this pair yet)
-#                 .130-159, .255 reserved / unused — room to grow
+#                 .130-.159 reserved / unused — room to grow
 #
 #               netAllocParentCluster arithmetic: the allocate example
 #               requests a /28 (16 addresses) via allocatePrefixLen, so the
-#               /27 parent (32 addresses, .224-.255) gives it one full
-#               spare, unused /28 sibling block (.240-.255) alongside the
-#               one WAPI actually allocates into (.224-.239) — the same
-#               "child fits with headroom" sizing Range's /27 parent uses
-#               above for its 21-address span. A per-run parent (nothing
-#               else was ever provisioned in it before this run) also makes
-#               exhaustion moot either way; the headroom is about giving
-#               AllocateNetworkByEA room to pick without tripping over the
-#               parent's own network/broadcast addresses, not about
-#               surviving repeat allocations.
+#               /27 parent (32 addresses, .224-.255) contains exactly two
+#               candidate /28 halves — .224-.239 and .240-.255 — and
+#               AllocateNetworkByEA may pick either one; its choice is not
+#               contractual. Sizing the parent to fit two full /28s gives it
+#               room to pick without tripping over the parent's own
+#               network/broadcast addresses — the same "child fits with
+#               headroom" sizing Range's /27 parent uses above for its
+#               21-address span. A per-run parent (nothing else was ever
+#               provisioned in it before this run) also makes exhaustion
+#               moot either way; the headroom is about allocation room, not
+#               about surviving repeat allocations.
 #
 #               HostRecord does not need its own parent Network object (it
 #               bypasses the requirement via configureForDns). FixedAddress
