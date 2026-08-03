@@ -188,6 +188,38 @@
 #               — it never lands in the third-and-fourth-both-zero /64 no
 #               matter what BLOCK_INDEX hashes to.
 #
+#               The fourth-hextet allocation continues past Network's 1/2
+#               for every other dual-object-type IPv6 gate that needs its
+#               own disjoint /64 within the same run — same reasoning, same
+#               reused netV6Hex, no new hash draw:
+#
+#                 netV6ContainerCluster:    2001:db8:<netV6Hex>:3::/64  (NetworkContainer, cluster)
+#                 netV6ContainerNamespaced: 2001:db8:<netV6Hex>:4::/64  (NetworkContainer, namespaced)
+#                 netV6FixedAddrParent:     2001:db8:<netV6Hex>:5::/64  (prerequisite parent ipv6network for FixedAddress — ONE block, shared by both scopes)
+#                 netV6FixedAddrHostCluster:    2001:db8:<netV6Hex>:5::50  (FixedAddress ipv6addr, cluster — inside the block above)
+#                 netV6FixedAddrHostNamespaced: 2001:db8:<netV6Hex>:5::51  (FixedAddress ipv6addr, namespaced — inside the block above)
+#
+#               FixedAddress's IPv6 parent is deliberately ONE shared /64
+#               (hextet 5) rather than two per-scope blocks the way the
+#               IPv4 sub-allocation map gives FixedAddress separate
+#               netFixedAddrParentCluster/Namespaced /28s. AllocateIP's
+#               parent-network requirement is scoped to (network_view,
+#               network), not to a Kubernetes API scope — WAPI does not
+#               care whether the K8s object that requested the address was
+#               cluster- or namespace-scoped — so a single per-run
+#               ipv6network can safely cover both the cluster and
+#               namespaced FixedAddress examples, exactly as the
+#               pre-isolation static 2001:db8:e2e6:5::/64 literal
+#               (formerly provisioned once by test/setup.sh) did before
+#               this mechanism replaced it with a per-run
+#               network-prereq-v6.yaml manifest. The two host addresses
+#               (::50, ::51) stay distinct fixed offsets inside that one
+#               block so the two scopes never collide with each other
+#               within one run. Every one of hextets 3/4/5 is nonzero, so
+#               none of them can ever land in the third-and-fourth-both-zero
+#               /64 record-aaaa's payload addresses occupy, for the same
+#               reason 1/2 cannot.
+#
 # ── ptrHost — record-ptr's reverse-zone exception ──────────────────────────
 #
 #   ptrHostCluster / ptrHostNamespaced — PTRRecord needs a reverse-mapping
@@ -285,6 +317,18 @@ NET_V6_HEX="$(printf '%02x' "${BLOCK_INDEX}")"
 NET_V6_NETWORK_CLUSTER="2001:db8:${NET_V6_HEX}:1::/64"
 NET_V6_NETWORK_NAMESPACED="2001:db8:${NET_V6_HEX}:2::/64"
 
+# netV6Container{Cluster,Namespaced} and netV6FixedAddr{Parent,HostCluster,
+# HostNamespaced} — the same netV6Hex byte, continuing the fourth-hextet
+# allocation past Network's 1/2 (see the header comment's netV6 section).
+# netV6FixedAddrParent is a SINGLE shared /64 for both FixedAddress scopes
+# — WAPI's parent-network requirement is not K8s-scope-aware, so one
+# per-run ipv6network safely covers both host offsets below.
+NET_V6_CONTAINER_CLUSTER="2001:db8:${NET_V6_HEX}:3::/64"
+NET_V6_CONTAINER_NAMESPACED="2001:db8:${NET_V6_HEX}:4::/64"
+NET_V6_FIXEDADDR_PARENT="2001:db8:${NET_V6_HEX}:5::/64"
+NET_V6_FIXEDADDR_HOST_CLUSTER="2001:db8:${NET_V6_HEX}:5::50"
+NET_V6_FIXEDADDR_HOST_NAMESPACED="2001:db8:${NET_V6_HEX}:5::51"
+
 # ptrHost — record-ptr's separate, independently-drawn shared-pool
 # exception. PTR_OCTET is a second, independent byte of the hash so this
 # draw is not perfectly correlated with BLOCK_INDEX.
@@ -319,6 +363,11 @@ netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
 netAllocParentCluster: "${NET_ALLOC_PARENT_CLUSTER}"
 netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
 netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
+netV6ContainerCluster: "${NET_V6_CONTAINER_CLUSTER}"
+netV6ContainerNamespaced: "${NET_V6_CONTAINER_NAMESPACED}"
+netV6FixedAddrParent: "${NET_V6_FIXEDADDR_PARENT}"
+netV6FixedAddrHostCluster: "${NET_V6_FIXEDADDR_HOST_CLUSTER}"
+netV6FixedAddrHostNamespaced: "${NET_V6_FIXEDADDR_HOST_NAMESPACED}"
 netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"
 netPtrHostNamespaced: "${NET_PTRHOST_NAMESPACED}"
 DATASOURCE

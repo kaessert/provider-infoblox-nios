@@ -1,0 +1,49 @@
+# network-prereq-v6.yaml — prerequisite parent ipv6network for
+# fixed-address-v6.yaml AND fixed-address-v6-namespaced.yaml.
+#
+# FixedAddress's AllocateIP call unconditionally requires an existing
+# parent Network object covering the address, for IPv6 exactly as for
+# IPv4 (see fixed-address.yaml's field docs). Makefile
+# prerequisite-bundling (UPTEST_MANIFESTS_FIXED_ADDRESS_V6) applies
+# this manifest before fixed-address-v6.yaml and
+# fixed-address-v6-namespaced.yaml so the parent network exists first.
+#
+# ONE shared /64: unlike the IPv4 sub-allocation map, which gives
+# FixedAddress separate netFixedAddrParentCluster/Namespaced /28s per
+# scope, WAPI's AllocateIP parent-network requirement is scoped to
+# (network_view, network), not to a Kubernetes API scope — so a
+# single per-run ipv6network object safely covers both
+# fixed-address-v6.yaml's ${data.netV6FixedAddrHostCluster} host and
+# fixed-address-v6-namespaced.yaml's
+# ${data.netV6FixedAddrHostNamespaced} host. This replaces what was
+# formerly a shared, non-per-run literal (2001:db8:e2e6:5::/64)
+# provisioned once by test/setup.sh (see ADR-IN-0007).
+#
+# ${data.netV6FixedAddrParent}: a per-run /64 reserved specifically
+# for this prerequisite (see test/e2e/gen-datasource.sh's
+# sub-allocation map), disjoint from every other addressed example's
+# sub-block — including examples/network/network-v6.yaml's own
+# ${data.netV6NetworkCluster} — so this object never collides with
+# the standalone Network(v6) example even when both apply in the
+# same E2E run (`make e2e` / CORE tier).
+#
+# This manifest intentionally carries no update-test annotation and
+# no uptest.upbound.io/post-assert-hook annotation: both
+# fixed-address-v6 examples' allocations depend on this object's
+# CIDR staying stable for the whole run, and it is not itself a
+# resource under test — see examples/network/network-v6.yaml for the
+# general-purpose, independently update-tested Network(v6) example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-fixed-address-network-v6
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: default
+    network: ${data.netV6FixedAddrParent}
+    comment: "Prerequisite parent ipv6network for fixed-address-v6.yaml and fixed-address-v6-namespaced.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default

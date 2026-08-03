@@ -8,12 +8,17 @@
 # namespace-scoped ProviderConfig — see examples/provider/config.yaml for
 # both options.
 #
-# Distinct identity: the address below differs from fixed-address-v6.yaml's
-# so both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same address. Both share the same parent
-# 2001:db8:e2e6:5::/64 network (see fixed-address-v6.yaml's prerequisite
-# note) — mirroring how fixed-address.yaml and fixed-address-namespaced.yaml
-# share the IPv4 prerequisite network 10.0.0.0/24.
+# ${data.netV6FixedAddrHostNamespaced}: injected by uptest from the
+# --data-source file (see test/e2e/gen-datasource.sh), distinct from
+# fixed-address-v6.yaml's ${data.netV6FixedAddrHostCluster} (::51 vs.
+# ::50) so both examples can be applied to the same NIOS Grid Manager at
+# once without colliding on the same address. Both share the SAME parent
+# ${data.netV6FixedAddrParent} network, provisioned once by
+# network-prereq-v6.yaml (see fixed-address-v6.yaml's prerequisite note)
+# — mirroring how fixed-address.yaml and fixed-address-namespaced.yaml
+# each get their OWN per-scope IPv4 prerequisite network, except the IPv6
+# parent-network requirement is not Kubernetes-scope-aware, so one shared
+# ipv6network object safely covers both scopes here.
 apiVersion: fixedaddress.infobloxnios.m.crossplane.io/v1alpha1
 kind: FixedAddress
 metadata:
@@ -61,7 +66,7 @@ metadata:
         skip: "list field of DHCP option structs, not a scalar update-test target; also subject to the same read-path gap as the other DHCP-relay fields"
 spec:
   forProvider:
-    ipv6addr: 2001:db8:e2e6:5::51
+    ipv6addr: ${data.netV6FixedAddrHostNamespaced}
     mac: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:66"
     networkView: default
     comment: Managed by Crossplane (IPv6, namespaced)
