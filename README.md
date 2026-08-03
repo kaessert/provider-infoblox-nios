@@ -1218,18 +1218,22 @@ spec:
     name: default
 ```
 
+The `network-allocate-demo` value above is illustrative — it shows the
+`filterParams` API shape. The shipped example pair derives its own value
+per run (see below).
+
 `filterParams` keys must carry the WAPI extensible-attribute search prefix
 `*` — `"*Site"`, not `"Site"`. A bare key is rejected by WAPI with
 `AdmConProtoError: Unknown argument/field: 'Site'`. The parent object
 (here, a NetworkContainer) must already exist and carry a matching
-extensible attribute (`Site: network-allocate-demo`) for the allocation to
-succeed — see `examples/network/network-allocate-parent.yaml` and
-`examples/network/network-allocate.yaml` for a runnable pair. The
-controller late-initializes `spec.forProvider.network` with the allocated
-CIDR once creation succeeds. A `parentCidr` field is also available for
-allocating from a fixed parent CIDR instead of an extensible-attribute
-search; `network`, `parentCidr`, and `filterParams` are mutually exclusive
-— exactly one must be set.
+extensible attribute for the allocation to succeed — see
+`examples/network/network-allocate-parent.yaml` and
+`examples/network/network-allocate.yaml` for the version wired into the
+E2E suite. The controller late-initializes `spec.forProvider.network` with
+the allocated CIDR once creation succeeds. A `parentCidr` field is also
+available for allocating from a fixed parent CIDR instead of an
+extensible-attribute search; `network`, `parentCidr`, and `filterParams`
+are mutually exclusive — exactly one must be set.
 (e.g. `zone_forward/ZG5zLnpvbmUk...:forward.example.com/default`).
 Crossplane stores this in the `crossplane.io/external-name` annotation — do
 not set it manually.
