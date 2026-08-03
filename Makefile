@@ -266,7 +266,9 @@ e2e-preflight: ## Validate credentials before E2E
 	if [ "$$FREE" -lt "$(E2E_MIN_FREE_GB)" ]; then \
 	  echo "ERROR: only $${FREE}GB free on / — E2E needs >= $(E2E_MIN_FREE_GB)GB." >&2; \
 	  echo "  A full disk fails E2E as a BOGUS PROVIDER error 30+ min from now." >&2; \
-	  echo "  Reclaim: factory/runbooks/disk-reclaim.md" >&2; \
+	  echo "  Reclaim: docker image prune -f; rm -rf ~/.cache/grype;" >&2; \
+	  echo "           find /tmp -maxdepth 1 \( -name 'go-build*' -o -name 'lint-home-*' \) \\" >&2; \
+	  echo "                -type d -mmin +720 -exec rm -rf {} +" >&2; \
 	  exit 1; \
 	fi
 	@echo "e2e-preflight: $(E2E_MIN_FREE_GB)GB minimum free space OK"
