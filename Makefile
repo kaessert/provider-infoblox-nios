@@ -207,6 +207,15 @@ UPTEST_DEFAULT_TIMEOUT ?= 3600s
 
 UPTEST_SETUP_SCRIPT ?= test/setup.sh
 
+# Minimum free space (in GB) required on / before starting an E2E run.
+# A full root filesystem doesn't announce itself as a disk error — it
+# surfaces as a build or pod failure that never mentions disk, while the
+# kind node's DiskPressure condition stays False the whole time (kubelet
+# never evicts, nothing self-heals). Without this guard, the run burns its
+# full E2E timeout and reports a misleading provider failure. `?=` keeps
+# this overridable per invocation (e.g. `make e2e-preflight E2E_MIN_FREE_GB=5`).
+E2E_MIN_FREE_GB ?= 15
+
 # Per-run uptest test-directory isolation (each concurrent E2E run gets its own
 # staging directory) — without this, concurrent E2E runs share /tmp/uptest-e2e
 # and corrupt each other's staged chainsaw test files.
@@ -253,6 +262,14 @@ uptest: e2e-datasource
 # E2E preflight: validate NIOS Grid Manager credentials before running the
 # (expensive) uptest pipeline.
 e2e-preflight: ## Validate credentials before E2E
+	@FREE=$$(df -BG --output=avail / | tail -1 | tr -dc '0-9'); \
+	if [ "$$FREE" -lt "$(E2E_MIN_FREE_GB)" ]; then \
+	  echo "ERROR: only $${FREE}GB free on / — E2E needs >= $(E2E_MIN_FREE_GB)GB." >&2; \
+	  echo "  A full disk fails E2E as a BOGUS PROVIDER error 30+ min from now." >&2; \
+	  echo "  Reclaim: factory/runbooks/disk-reclaim.md" >&2; \
+	  exit 1; \
+	fi
+	@echo "e2e-preflight: $(E2E_MIN_FREE_GB)GB minimum free space OK"
 	@MISSING=""; \
 	[ -z "$${INFOBLOX_HOST:-}" ] && MISSING="$$MISSING INFOBLOX_HOST"; \
 	[ -z "$${INFOBLOX_USER:-}" ] && MISSING="$$MISSING INFOBLOX_USER"; \
