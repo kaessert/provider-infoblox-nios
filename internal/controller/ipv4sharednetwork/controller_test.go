@@ -16,11 +16,10 @@ import (
 	"sync"
 	"testing"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
 	cperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,8 +72,8 @@ func newClusterSharedNetwork(crName, externalName string) *clusterv1alpha1.IPv4S
 	cr := &clusterv1alpha1.IPv4SharedNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: testUIDCluster},
 		Spec: clusterv1alpha1.IPv4SharedNetworkSpec{
-			ResourceSpec: xpv1.ResourceSpec{
-				ProviderConfigReference: &xpv1.Reference{Name: "default"},
+			ClusterManagedResourceSpec: xpv2.ClusterManagedResourceSpec{
+				ProviderConfigReference: &xpv2.Reference{Name: "default"},
 			},
 			ForProvider: clusterv1alpha1.IPv4SharedNetworkParameters{
 				Name:     stringPtr("test-shared-network"),
@@ -93,7 +92,7 @@ func newNamespacedSharedNetwork(ns, crName, externalName, pcKind string) *namesp
 		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: testUIDNamespaced},
 		Spec: namespacedv1alpha1.IPv4SharedNetworkSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
-				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
+				ProviderConfigReference: &xpv2.ProviderConfigReference{Kind: pcKind, Name: "default"},
 			},
 			ForProvider: namespacedv1alpha1.IPv4SharedNetworkParameters{
 				Name:     stringPtr("test-shared-network"),
@@ -1020,9 +1019,9 @@ func TestClusterConnectSuccess(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "default"},
 		Spec: clusterpcv1alpha1.ProviderConfigSpec{
 			Credentials: clusterpcv1alpha1.ProviderCredentials{
-				Source: xpv1.CredentialsSourceSecret,
-				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{Key: "creds", SecretReference: xpv2.SecretReference{Name: "creds", Namespace: "ns"}},
 				},
 			},
 		},
@@ -1059,9 +1058,9 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "default"},
 		Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 			Credentials: namespacedpcv1alpha1.ProviderCredentials{
-				Source: xpv1.CredentialsSourceSecret,
-				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-					SecretRef: &xpv1.SecretKeySelector{Key: "creds", SecretReference: xpv1.SecretReference{Name: "creds", Namespace: "ns"}},
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{Key: "creds", SecretReference: xpv2.SecretReference{Name: "creds", Namespace: "ns"}},
 				},
 			},
 		},

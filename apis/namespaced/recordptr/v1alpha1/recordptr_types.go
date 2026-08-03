@@ -5,8 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -277,9 +276,9 @@ type PTRRecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1.ARecord
 	Ptrdname *string `json:"ptrdname"`
 	// +optional
-	PtrdnameRef *xpv1.NamespacedReference `json:"ptrdnameRef,omitempty"`
+	PtrdnameRef *xpv2.NamespacedReference `json:"ptrdnameRef,omitempty"`
 	// +optional
-	PtrdnameSelector *xpv1.NamespacedSelector `json:"ptrdnameSelector,omitempty"`
+	PtrdnameSelector *xpv2.NamespacedSelector `json:"ptrdnameSelector,omitempty"`
 	// PTR record name in FQDN (in-addr.arpa/ip6.arpa) format. Auto-derived from ipv4Addr/ipv6Addr when omitted; renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"`
 	// IPv4 address the PTR record is keyed by (mutually exclusive with ipv6Addr).
@@ -389,7 +388,7 @@ type PTRRecordSpec struct {
 
 // PTRRecordStatus defines the observed state of PTRRecord.
 type PTRRecordStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

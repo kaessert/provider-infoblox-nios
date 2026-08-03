@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,7 +49,7 @@ type NetworkViewObservation struct {
 
 // NetworkViewSpec defines the desired state of NetworkView.
 type NetworkViewSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this NetworkView.
 	// +kubebuilder:validation:Required
@@ -58,7 +58,7 @@ type NetworkViewSpec struct {
 
 // NetworkViewStatus defines the observed state of NetworkView.
 type NetworkViewStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

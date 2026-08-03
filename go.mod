@@ -29,7 +29,6 @@ require (
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b // indirect
-	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -59,11 +58,9 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.25.5 // indirect
 	github.com/gobuffalo/flect v1.0.3 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/cel-go v0.26.1 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.7 // indirect
@@ -81,18 +78,16 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/stoewer/go-strcase v1.3.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.39.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
@@ -116,31 +111,8 @@ require (
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20260127142750-a19766b6e2d4 // indirect
 	k8s.io/utils v0.0.0-20260108192941-914a6e750570 // indirect
-	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.34.0 // indirect
 	sigs.k8s.io/controller-tools v0.20.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 )
-
-// Pin crossplane-runtime/v2's actually-resolved code at v2.0.0 even though the
-// require directive above states v2.3.3. crossplane-runtime/v2 v2.3.3 deletes
-// the apis/common/v1 and apis/common/v2 packages entirely -- common
-// managed-resource types move to github.com/crossplane/crossplane/apis/v2's
-// core/v2 package instead. This provider's apis/** and internal/controller/**
-// packages still import the old apis/common paths (that migration is a
-// separate, atomic follow-up ticket), so the real v2.3.3 code cannot compile
-// against this tree yet. This replace keeps the pre-migration code building
-// while the go.mod require line documents the target version. Remove this
-// replace in the same commit that migrates apis/** and internal/controller/**
-// off apis/common.
-replace github.com/crossplane/crossplane-runtime/v2 => github.com/crossplane/crossplane-runtime/v2 v2.0.0
-
-// Pin controller-runtime at v2.0.0's compatible version (crossplane-runtime/v2
-// v2.0.0's pkg/resource/unstructured wrapperStatusClient does not implement
-// the newer client.SubResourceWriter interface -- missing Apply -- required
-// by controller-runtime >= v0.23.1). github.com/crossplane/crossplane/apis/v2
-// v2.3.3's go.mod requires controller-runtime >= v0.23.1 directly, so MVS
-// would otherwise select that version the instant apis/v2 is required,
-// breaking the build. Remove this replace alongside the one above.
-replace sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.21.0

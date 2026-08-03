@@ -9,8 +9,8 @@ package dualclient
 import (
 	"context"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,8 +42,8 @@ type Credentials struct {
 // used for a ProviderConfig's primary credentials, reused unchanged for a
 // readEndpoint's credentialsRef. TLS verification is not read from this
 // Secret — it is a ProviderConfig-level policy field (see Connect).
-func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.CredentialsSource, secretRef *xpv1.SecretKeySelector, fallbackNamespace string) (Credentials, error) {
-	if source != xpv1.CredentialsSourceSecret {
+func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string) (Credentials, error) {
+	if source != xpv2.CredentialsSourceSecret {
 		return Credentials{}, errors.New(errUnsupportedCreds)
 	}
 	if secretRef == nil {

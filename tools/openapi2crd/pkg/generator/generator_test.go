@@ -139,7 +139,7 @@ func TestCRDCategories(t *testing.T) {
 }
 
 // TestDualScopeSpecEmbedding verifies the cluster variant embeds
-// xpv1.ResourceSpec and the namespaced variant embeds
+// xpv2.ClusterManagedResourceSpec and the namespaced variant embeds
 // xpv2.ManagedResourceSpec (convention governing dual-scope type
 // embedding).
 func TestDualScopeSpecEmbedding(t *testing.T) {
@@ -149,10 +149,10 @@ func TestDualScopeSpecEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderScopeTypes(cluster): %v", err)
 	}
-	if !strings.Contains(string(clusterSrc), "xpv1.ResourceSpec") {
-		t.Errorf("cluster-scoped ARecordSpec must embed xpv1.ResourceSpec")
+	if !strings.Contains(string(clusterSrc), "xpv2.ClusterManagedResourceSpec") {
+		t.Errorf("cluster-scoped ARecordSpec must embed xpv2.ClusterManagedResourceSpec")
 	}
-	if strings.Contains(string(clusterSrc), "xpv2.ManagedResourceSpec") {
+	if strings.Contains(string(clusterSrc), "xpv2.ManagedResourceSpec `json") {
 		t.Errorf("cluster-scoped ARecordSpec must NOT embed xpv2.ManagedResourceSpec")
 	}
 
@@ -243,11 +243,11 @@ func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
 	if !strings.Contains(cs, "// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView") {
 		t.Errorf("expected cluster reference type marker targeting NetworkView, got:\n%s", cs)
 	}
-	if !strings.Contains(cs, "NetworkViewRef *xpv1.Reference") {
-		t.Errorf("expected cluster NetworkViewRef *xpv1.Reference field, got:\n%s", cs)
+	if !strings.Contains(cs, "NetworkViewRef *xpv2.Reference") {
+		t.Errorf("expected cluster NetworkViewRef *xpv2.Reference field, got:\n%s", cs)
 	}
-	if !strings.Contains(cs, "NetworkViewSelector *xpv1.Selector") {
-		t.Errorf("expected cluster NetworkViewSelector *xpv1.Selector field, got:\n%s", cs)
+	if !strings.Contains(cs, "NetworkViewSelector *xpv2.Selector") {
+		t.Errorf("expected cluster NetworkViewSelector *xpv2.Selector field, got:\n%s", cs)
 	}
 
 	namespacedSrc, err := RenderScopeTypes(BuildScopeData(rd, false))
@@ -256,11 +256,11 @@ func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
 	}
 	ns := string(namespacedSrc)
 
-	if !strings.Contains(ns, "NetworkViewRef *xpv1.NamespacedReference") {
-		t.Errorf("expected namespaced NetworkViewRef *xpv1.NamespacedReference field, got:\n%s", ns)
+	if !strings.Contains(ns, "NetworkViewRef *xpv2.NamespacedReference") {
+		t.Errorf("expected namespaced NetworkViewRef *xpv2.NamespacedReference field, got:\n%s", ns)
 	}
-	if !strings.Contains(ns, "NetworkViewSelector *xpv1.NamespacedSelector") {
-		t.Errorf("expected namespaced NetworkViewSelector *xpv1.NamespacedSelector field, got:\n%s", ns)
+	if !strings.Contains(ns, "NetworkViewSelector *xpv2.NamespacedSelector") {
+		t.Errorf("expected namespaced NetworkViewSelector *xpv2.NamespacedSelector field, got:\n%s", ns)
 	}
 
 	// The value field itself must also carry the immutability CEL rule

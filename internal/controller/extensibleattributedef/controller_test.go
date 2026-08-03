@@ -16,10 +16,9 @@ import (
 	"sync"
 	"testing"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,8 +106,8 @@ func newClusterEADef(crName, externalName string) *clusterv1alpha1.ExtensibleAtt
 	cr := &clusterv1alpha1.ExtensibleAttributeDef{
 		ObjectMeta: metav1.ObjectMeta{Name: crName, UID: "test-uid-cluster"},
 		Spec: clusterv1alpha1.ExtensibleAttributeDefSpec{
-			ResourceSpec: xpv1.ResourceSpec{
-				ProviderConfigReference: &xpv1.Reference{Name: "default"},
+			ClusterManagedResourceSpec: xpv2.ClusterManagedResourceSpec{
+				ProviderConfigReference: &xpv2.Reference{Name: "default"},
 			},
 			ForProvider: clusterv1alpha1.ExtensibleAttributeDefParameters{
 				Name: "MyAttribute",
@@ -128,7 +127,7 @@ func newNamespacedEADef(ns, crName, externalName, pcKind string) *namespacedv1al
 		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: ns, UID: "test-uid-namespaced"},
 		Spec: namespacedv1alpha1.ExtensibleAttributeDefSpec{
 			ManagedResourceSpec: xpv2.ManagedResourceSpec{
-				ProviderConfigReference: &xpv1.ProviderConfigReference{Kind: pcKind, Name: "default"},
+				ProviderConfigReference: &xpv2.ProviderConfigReference{Kind: pcKind, Name: "default"},
 			},
 			ForProvider: namespacedv1alpha1.ExtensibleAttributeDefParameters{
 				Name: "MyAttribute",
@@ -417,7 +416,7 @@ func TestClusterObserveSuccess(t *testing.T) {
 	if cr.Status.AtProvider.ID != ref {
 		t.Errorf("AtProvider.ID = %q, want %q", cr.Status.AtProvider.ID, ref)
 	}
-	if cond := cr.GetCondition(xpv1.TypeReady); cond.Status != corev1.ConditionTrue {
+	if cond := cr.GetCondition(xpv2.TypeReady); cond.Status != corev1.ConditionTrue {
 		t.Errorf("condition Ready = %v, want True", cond.Status)
 	}
 }
@@ -893,10 +892,10 @@ func TestClusterConnectSuccess(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: clusterpcv1alpha1.ProviderConfigSpec{
 					Credentials: clusterpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+						Source: xpv2.CredentialsSourceSecret,
+						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+							SecretRef: &xpv2.SecretKeySelector{
+								SecretReference: xpv2.SecretReference{Name: secret, Namespace: ns},
 								Key:             "unused",
 							},
 						},
@@ -1301,10 +1300,10 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+						Source: xpv2.CredentialsSourceSecret,
+						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+							SecretRef: &xpv2.SecretKeySelector{
+								SecretReference: xpv2.SecretReference{Name: secret, Namespace: ns},
 								Key:             "unused",
 							},
 						},
@@ -1341,10 +1340,10 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
-						Source: xpv1.CredentialsSourceSecret,
-						CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-							SecretRef: &xpv1.SecretKeySelector{
-								SecretReference: xpv1.SecretReference{Name: secret, Namespace: ns},
+						Source: xpv2.CredentialsSourceSecret,
+						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+							SecretRef: &xpv2.SecretKeySelector{
+								SecretReference: xpv2.SecretReference{Name: secret, Namespace: ns},
 								Key:             "unused",
 							},
 						},
@@ -1687,8 +1686,8 @@ func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	secret.Data["ssl_verify"] = []byte("false")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	creds, err := extractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
+	creds, err := extractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
 		Key:             "unused",
 	}, "")
 	if err != nil {

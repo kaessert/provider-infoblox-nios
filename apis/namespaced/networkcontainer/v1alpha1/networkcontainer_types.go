@@ -5,8 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -19,9 +18,9 @@ type NetworkContainerParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView"`
 	// +optional
-	NetworkViewRef *xpv1.NamespacedReference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.NamespacedReference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.NamespacedSelector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.NamespacedSelector `json:"networkViewSelector,omitempty"`
 	// CIDR of the container network, e.g. "10.0.0.0/16". Immutable — absent from UpdateNetworkContainer. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
 	Network *string `json:"network,omitempty"`
@@ -84,7 +83,7 @@ type NetworkContainerSpec struct {
 
 // NetworkContainerStatus defines the observed state of NetworkContainer.
 type NetworkContainerStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

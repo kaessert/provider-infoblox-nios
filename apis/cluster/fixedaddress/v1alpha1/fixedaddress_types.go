@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -66,9 +66,9 @@ type FixedAddressParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR used to resolve a dynamically-allocated address at create time, e.g. "10.0.0.0/24". Only meaningful when ipv4addr/ipv6addr is not a literal address.
 	Network *string `json:"network,omitempty"`
 	// Display name of the fixed address.
@@ -154,7 +154,7 @@ type FixedAddressObservation struct {
 
 // FixedAddressSpec defines the desired state of FixedAddress.
 type FixedAddressSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this FixedAddress.
 	// +kubebuilder:validation:Required
@@ -163,7 +163,7 @@ type FixedAddressSpec struct {
 
 // FixedAddressStatus defines the observed state of FixedAddress.
 type FixedAddressStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

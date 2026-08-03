@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -15,9 +15,9 @@ type DTCPoolServerLink struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1.DTCServer
 	Server *string `json:"server,omitempty"`
 	// +optional
-	ServerRef *xpv1.Reference `json:"serverRef,omitempty"`
+	ServerRef *xpv2.Reference `json:"serverRef,omitempty"`
 	// +optional
-	ServerSelector *xpv1.Selector `json:"serverSelector,omitempty"`
+	ServerSelector *xpv2.Selector `json:"serverSelector,omitempty"`
 	// The load-balancing weight of the server within the pool.
 	Ratio *uint32 `json:"ratio,omitempty"`
 }
@@ -169,7 +169,7 @@ type DTCPoolObservation struct {
 
 // DTCPoolSpec defines the desired state of DTCPool.
 type DTCPoolSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this DTCPool.
 	// +kubebuilder:validation:Required
@@ -178,7 +178,7 @@ type DTCPoolSpec struct {
 
 // DTCPoolStatus defines the observed state of DTCPool.
 type DTCPoolStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

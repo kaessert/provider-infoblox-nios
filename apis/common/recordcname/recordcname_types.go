@@ -9,7 +9,7 @@
 package recordcname
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // CNAMERecordParameters are the configurable fields of a CNAMERecord.
@@ -22,9 +22,9 @@ type CNAMERecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1.ARecord
 	Canonical *string `json:"canonical"`
 	// +optional
-	CanonicalRef *xpv1.Reference `json:"canonicalRef,omitempty"`
+	CanonicalRef *xpv2.Reference `json:"canonicalRef,omitempty"`
 	// +optional
-	CanonicalSelector *xpv1.Selector `json:"canonicalSelector,omitempty"`
+	CanonicalSelector *xpv2.Selector `json:"canonicalSelector,omitempty"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
 	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.

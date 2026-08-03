@@ -9,7 +9,7 @@
 package hostrecord
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // HostRecordIpv4Addr holds one IPv4 address entry for a HostRecord.
@@ -52,9 +52,9 @@ type HostRecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// DNS view in which the record resides. Mutable — changing it moves the record between DNS views and changes the _ref.
 	View *string `json:"view,omitempty"`
 	// List of alias FQDNs for the host.

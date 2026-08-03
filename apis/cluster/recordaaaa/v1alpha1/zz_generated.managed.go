@@ -6,54 +6,54 @@
 
 package v1alpha1
 
-import xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 // GetCondition of this AAAARecord.
-func (mg *AAAARecord) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (mg *AAAARecord) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
 // GetDeletionPolicy of this AAAARecord.
-func (mg *AAAARecord) GetDeletionPolicy() xpv1.DeletionPolicy {
+func (mg *AAAARecord) GetDeletionPolicy() xpv2.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
 // GetManagementPolicies of this AAAARecord.
-func (mg *AAAARecord) GetManagementPolicies() xpv1.ManagementPolicies {
+func (mg *AAAARecord) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
 // GetProviderConfigReference of this AAAARecord.
-func (mg *AAAARecord) GetProviderConfigReference() *xpv1.Reference {
+func (mg *AAAARecord) GetProviderConfigReference() *xpv2.Reference {
 	return mg.Spec.ProviderConfigReference
 }
 
 // GetWriteConnectionSecretToReference of this AAAARecord.
-func (mg *AAAARecord) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+func (mg *AAAARecord) GetWriteConnectionSecretToReference() *xpv2.SecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
 // SetConditions of this AAAARecord.
-func (mg *AAAARecord) SetConditions(c ...xpv1.Condition) {
+func (mg *AAAARecord) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
 // SetDeletionPolicy of this AAAARecord.
-func (mg *AAAARecord) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+func (mg *AAAARecord) SetDeletionPolicy(r xpv2.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
 // SetManagementPolicies of this AAAARecord.
-func (mg *AAAARecord) SetManagementPolicies(r xpv1.ManagementPolicies) {
+func (mg *AAAARecord) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
 // SetProviderConfigReference of this AAAARecord.
-func (mg *AAAARecord) SetProviderConfigReference(r *xpv1.Reference) {
+func (mg *AAAARecord) SetProviderConfigReference(r *xpv2.Reference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
 // SetWriteConnectionSecretToReference of this AAAARecord.
-func (mg *AAAARecord) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+func (mg *AAAARecord) SetWriteConnectionSecretToReference(r *xpv2.SecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }

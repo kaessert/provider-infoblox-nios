@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -87,7 +87,7 @@ type ExtensibleAttributeDefObservation struct {
 
 // ExtensibleAttributeDefSpec defines the desired state of ExtensibleAttributeDef.
 type ExtensibleAttributeDefSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this ExtensibleAttributeDef.
 	// +kubebuilder:validation:Required
@@ -96,7 +96,7 @@ type ExtensibleAttributeDefSpec struct {
 
 // ExtensibleAttributeDefStatus defines the observed state of ExtensibleAttributeDef.
 type ExtensibleAttributeDefStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

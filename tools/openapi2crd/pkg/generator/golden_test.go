@@ -59,8 +59,8 @@ func TestGoldenCommonReferenceARecord(t *testing.T) {
 }
 
 // TestGoldenScopeTypesARecordCluster pins the exact rendered output of the
-// cluster-scoped recorda_types.go (embeds xpv1.ResourceSpec, categories
-// {crossplane,managed,infobloxnios}).
+// cluster-scoped recorda_types.go (embeds xpv2.ClusterManagedResourceSpec,
+// categories {crossplane,managed,infobloxnios}).
 func TestGoldenScopeTypesARecordCluster(t *testing.T) {
 	rd := aRecordDescriptor(t)
 	src, err := RenderScopeTypes(BuildScopeData(rd, true))

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -32,7 +32,7 @@ const (
 
 // ReadRoutingConditionType is the status condition type every resource
 // using a read endpoint reports.
-const ReadRoutingConditionType xpv1.ConditionType = "ReadRouting"
+const ReadRoutingConditionType xpv2.ConditionType = "ReadRouting"
 
 // DefaultTimeout and DefaultPollInterval mirror the ConvergenceConfig CRD
 // defaults (kubebuilder:default) so callers that build a Gate without a
@@ -67,16 +67,16 @@ type RouteDecision struct {
 // ReadRoutingCondition converts a RouteDecision into the ReadRouting
 // status condition every managed resource using a read endpoint must
 // report.
-func ReadRoutingCondition(d RouteDecision) xpv1.Condition {
+func ReadRoutingCondition(d RouteDecision) xpv2.Condition {
 	status := corev1.ConditionFalse
 	if d.UseCandidate {
 		status = corev1.ConditionTrue
 	}
-	return xpv1.Condition{
+	return xpv2.Condition{
 		Type:               ReadRoutingConditionType,
 		Status:             status,
 		LastTransitionTime: metav1.Now(),
-		Reason:             xpv1.ConditionReason(d.Reason),
+		Reason:             xpv2.ConditionReason(d.Reason),
 		Message:            d.Message,
 	}
 }

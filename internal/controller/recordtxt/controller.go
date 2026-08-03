@@ -34,7 +34,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordtxt/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordtxt/v1alpha1"
@@ -92,8 +92,8 @@ type nioCredentials struct {
 // kind this provider defines (cluster ProviderConfig, namespaced
 // ProviderConfig, namespaced ClusterProviderConfig) — so this single
 // helper serves all three connectors.
-func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv1.CredentialsSource, secretRef *xpv1.SecretKeySelector, fallbackNamespace string) (*nioCredentials, error) {
-	if source != xpv1.CredentialsSourceSecret {
+func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string) (*nioCredentials, error) {
+	if source != xpv2.CredentialsSourceSecret {
 		return nil, errors.New(errUnsupportedCreds)
 	}
 	if secretRef == nil {

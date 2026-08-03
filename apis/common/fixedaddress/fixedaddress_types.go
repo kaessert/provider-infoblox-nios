@@ -9,7 +9,7 @@
 package fixedaddress
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // FixedAddressDhcpOption is one DHCP option entry for a FixedAddress (mirrors the SDK's Dhcpoption struct).
@@ -69,9 +69,9 @@ type FixedAddressParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR used to resolve a dynamically-allocated address at create time, e.g. "10.0.0.0/24". Only meaningful when ipv4addr/ipv6addr is not a literal address.
 	Network *string `json:"network,omitempty"`
 	// Display name of the fixed address.

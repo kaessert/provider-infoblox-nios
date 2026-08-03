@@ -9,7 +9,7 @@
 package recordptr
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // PTRRecordAwsRte53RecordInfo carries AWS Route 53 record information for a cloud-managed PTRRecord (mirrors the SDK's Awsrte53recordinfo struct).
@@ -279,9 +279,9 @@ type PTRRecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1.ARecord
 	Ptrdname *string `json:"ptrdname"`
 	// +optional
-	PtrdnameRef *xpv1.Reference `json:"ptrdnameRef,omitempty"`
+	PtrdnameRef *xpv2.Reference `json:"ptrdnameRef,omitempty"`
 	// +optional
-	PtrdnameSelector *xpv1.Selector `json:"ptrdnameSelector,omitempty"`
+	PtrdnameSelector *xpv2.Selector `json:"ptrdnameSelector,omitempty"`
 	// PTR record name in FQDN (in-addr.arpa/ip6.arpa) format. Auto-derived from ipv4Addr/ipv6Addr when omitted; renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"`
 	// IPv4 address the PTR record is keyed by (mutually exclusive with ipv6Addr).

@@ -6,44 +6,44 @@
 
 package v1alpha1
 
-import xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 // GetCondition of this FixedAddress.
-func (mg *FixedAddress) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (mg *FixedAddress) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
 // GetManagementPolicies of this FixedAddress.
-func (mg *FixedAddress) GetManagementPolicies() xpv1.ManagementPolicies {
+func (mg *FixedAddress) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
 // GetProviderConfigReference of this FixedAddress.
-func (mg *FixedAddress) GetProviderConfigReference() *xpv1.ProviderConfigReference {
+func (mg *FixedAddress) GetProviderConfigReference() *xpv2.ProviderConfigReference {
 	return mg.Spec.ProviderConfigReference
 }
 
 // GetWriteConnectionSecretToReference of this FixedAddress.
-func (mg *FixedAddress) GetWriteConnectionSecretToReference() *xpv1.LocalSecretReference {
+func (mg *FixedAddress) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
 // SetConditions of this FixedAddress.
-func (mg *FixedAddress) SetConditions(c ...xpv1.Condition) {
+func (mg *FixedAddress) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
 // SetManagementPolicies of this FixedAddress.
-func (mg *FixedAddress) SetManagementPolicies(r xpv1.ManagementPolicies) {
+func (mg *FixedAddress) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
 // SetProviderConfigReference of this FixedAddress.
-func (mg *FixedAddress) SetProviderConfigReference(r *xpv1.ProviderConfigReference) {
+func (mg *FixedAddress) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
 // SetWriteConnectionSecretToReference of this FixedAddress.
-func (mg *FixedAddress) SetWriteConnectionSecretToReference(r *xpv1.LocalSecretReference) {
+func (mg *FixedAddress) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }
