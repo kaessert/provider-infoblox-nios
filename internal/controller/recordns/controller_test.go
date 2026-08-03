@@ -20,6 +20,7 @@ import (
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
@@ -365,11 +366,31 @@ func fixedStatusHandler(status int) http.Handler {
 	})
 }
 
+// staleRefWithBrokenSearchHandler emulates a stored _ref that 404s (as a
+// stale handle would) paired with a natural-key search endpoint that
+// itself fails with a 500 — proving that a resolution failure (as
+// opposed to a clean zero-match absence) is never reported as a
+// successful delete or a clean "does not exist".
+func staleRefWithBrokenSearchHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/record:ns", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"Error":"boom"}`))
+	})
+	mux.HandleFunc("DELETE /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	return mux
+}
+
 // newTestObjectManager builds an identity.ManagerAndConnector pointed at
 // the given httptest.Server via plain HTTP (no TLS needed — the
 // WapiRequestBuilder only switches to HTTPS when hostCfg.Scheme !=
 // "http"). Callers that only need the high-level ObjectManager can use
-// .Manager; nsRecordExistsByNaturalKey additionally needs .Connector.
+// .Manager; resolveNSRecordByNaturalKey additionally needs .Connector.
 func newTestObjectManager(t *testing.T, srv *httptest.Server) identity.ManagerAndConnector {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
@@ -455,13 +476,19 @@ func TestClusterObserveNotFound(t *testing.T) {
 	}
 }
 
-// TestObservePreCreateState verifies that Observe short-circuits (no HTTP
-// call) when the external-name still equals the CR's Kubernetes name — the
-// pre-create state for a server-assigned external-name strategy.
+// TestObservePreCreateState covers the pre-create state (external-name
+// still equals the CR's own Kubernetes name — the framework's
+// NameAsExternalName default before Create() has ever run) when no Grid
+// object matches the CR's natural key. observeRefFor reports "" for this
+// state, so resolveNSRecordForObserve skips the ref-GET entirely and
+// goes straight to the natural-key search — proven here by using a real
+// mock server whose search endpoint answers truthfully (zero matches),
+// not a zero-route server, because the search itself is now expected to
+// run (see TestClusterObserveRecoversInCreateCrashWindow for the
+// matching-object companion of this same pre-create state).
 func TestObservePreCreateState(t *testing.T) {
-	// Zero-route server: any request is an error, proving Observe never
-	// calls it during the pre-create guard.
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
@@ -474,7 +501,42 @@ func TestObservePreCreateState(t *testing.T) {
 		t.Fatalf("Observe: unexpected error: %v", err)
 	}
 	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+		t.Error("Observe: want ResourceExists=false in pre-create state with no matching Grid object, got true")
+	}
+}
+
+// TestClusterObserveRecoversInCreateCrashWindow proves the create-crash
+// window closes even without an identity-EA ladder: a Create() that
+// reached the Grid but crashed before the runtime persisted the
+// external-name annotation leaves the CR in exactly the pre-create state
+// (external-name == CR name). The next Observe must still find the
+// object through the natural-key search — observeRefFor reports "" for
+// this state, so there is no ref to try first, and resolution depends
+// entirely on the search.
+func TestClusterObserveRecoversInCreateCrashWindow(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "")
+	meta.SetExternalName(cr, cr.GetName()) // pre-create state — no ref has ever been assigned
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error recovering from the create crash window: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: ResourceExists=false after the crash window — the next reconcile would call Create() again and collide with the object the first Create() already made")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: ResourceLateInitialized=false — the recovered reference must be persisted through a path crossplane-runtime actually writes back")
+	}
+	if got := meta.GetExternalName(cr); got != liveRef {
+		t.Errorf("Observe: external-name = %q after recovery, want the discovered ref %q", got, liveRef)
 	}
 }
 
@@ -938,13 +1000,14 @@ func TestClusterDeleteNotFound(t *testing.T) {
 	}
 }
 
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// core defect fix: a 404 against the stored _ref must not be treated as
-// "already deleted" when a natural-key search finds the same identity
-// still live under a different _ref. Deleting that record would be
-// unverifiable ownership, so Delete() must refuse and leave the record in
-// place.
-func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterDeleteRecoversWhenStaleRefStillMatchesLiveObject verifies
+// the resolution this ticket makes sound: a 404 against the stored _ref
+// must not be treated as "already deleted" when a natural-key search
+// finds the same identity still live under a different _ref. Because
+// name, view, and nameserver are all immutable, a single match on that
+// tuple is provably the same object — Delete() adopts it under its
+// current ref and deletes it, rather than refusing.
+func TestClusterDeleteRecoversWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -955,19 +1018,15 @@ func TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a single natural-key match, got: %v", err)
 	}
 
 	m.mu.Lock()
 	_, stillExists := m.records[liveRef]
 	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	if stillExists {
+		t.Error("Delete: live record recovered by the natural-key search was not removed")
 	}
 }
 
@@ -1012,15 +1071,16 @@ func TestClusterDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject verifies the
-// Observe()-side half of the same defect: crossplane-runtime's managed
-// reconciler calls Observe() before Delete() on the deletion path, and if
-// Observe() reports ResourceExists:false the reconciler never calls
-// Delete() at all — it just clears the finalizer, orphaning the Grid
-// object. A 404 against the stored _ref must not be silently treated as
-// "does not exist" when a natural-key search finds a live object under
-// the CR's own identity fields.
-func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRecoversWhenStaleRefStillMatchesLiveObject verifies
+// the Observe()-side half of the resolution this ticket makes sound: a
+// 404 against the stored _ref must not be silently treated as "does not
+// exist" when a natural-key search finds a live object under the CR's
+// own identity fields. Because name, view, and nameserver are all
+// immutable, a single match on that tuple is provably the same object —
+// Observe() adopts it, refreshes the external-name annotation (via
+// ResourceLateInitialized, the one path crossplane-runtime persists an
+// Observe-time change through), and reports it as found.
+func TestClusterObserveRecoversWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1031,12 +1091,18 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error recovering a single natural-key match, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true after recovering the live object via the natural-key search")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true so the recovered ref is persisted")
+	}
+	if got := meta.GetExternalName(cr); got != liveRef {
+		t.Errorf("Observe: external-name = %q after recovery, want the discovered ref %q", got, liveRef)
 	}
 
 	m.mu.Lock()
@@ -1047,12 +1113,12 @@ func TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	}
 }
 
-// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces the
-// live-Grid defect this ticket fixes: WAPI accepts two record:ns objects
-// sharing (name, view) with different nameserver values, so a sibling
-// under the loose tuple must not wedge deletion of an MR whose own
-// object was genuinely deleted out-of-band. Before the fix,
-// nsRecordExistsByNaturalKey searched on (name, view) only and found the
+// TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey reproduces a
+// live-Grid defect an earlier fix closed: WAPI accepts two record:ns
+// objects sharing (name, view) with different nameserver values, so a
+// sibling under the loose tuple must not wedge deletion of an MR whose
+// own object was genuinely deleted out-of-band. Before that fix, the
+// natural-key search searched on (name, view) only and found the
 // sibling, incorrectly refusing the delete forever.
 func TestClusterDeleteSucceedsWhenOnlySiblingMatchesLooseKey(t *testing.T) {
 	m := newMockWapiServer()
@@ -1111,13 +1177,14 @@ func TestClusterObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing.T)
 	}
 }
 
-// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey seeds
-// BOTH the CR's own object (matching the full (name, view, nameserver)
-// tuple) AND a sibling sharing only the loose (name, view) tuple, to
-// prove nsRecordExistsByNaturalKey's server-side filtered search
-// resolves the own object correctly even when an ambiguous sibling is
-// also present — not just when each is seeded alone.
-func TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+// TestClusterDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings
+// seeds BOTH the CR's own object (matching the full (name, view,
+// nameserver) tuple) AND a sibling sharing only the loose (name, view)
+// tuple, to prove resolveNSRecordByNaturalKey's server-side filtered
+// search resolves the own object correctly — and only the own object —
+// even when a same-zone sibling is also present, not just when each is
+// seeded alone.
+func TestClusterDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1129,36 +1196,99 @@ func TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error resolving the own object among siblings, got: %v", err)
 	}
 
 	m.mu.Lock()
 	_, ownStillExists := m.records[ownRef]
 	_, siblingStillExists := m.records[siblingRef]
 	m.mu.Unlock()
-	if !ownStillExists {
-		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	if ownStillExists {
+		t.Error("Delete: own record (exact tuple match) was not removed")
 	}
 	if !siblingStillExists {
-		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own resolved object")
 	}
 }
 
-// TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is the
+// TestClusterObserveRecoversWhenOwnObjectMatchesExactTupleAmongSiblings is
+// the Observe()-side companion of
+// TestClusterDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings.
+func TestClusterObserveRecoversWhenOwnObjectMatchesExactTupleAmongSiblings(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error resolving the own object among siblings, got: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for the own object's exact tuple match")
+	}
+	if got := meta.GetExternalName(cr); got != ownRef {
+		t.Errorf("Observe: external-name = %q, want the own object's ref %q", got, ownRef)
+	}
+}
+
+// TestClusterDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous seeds
+// two Grid objects that both match the CR's exact (name, view,
+// nameserver) tuple — a Grid state WAPI's own addressing should make
+// impossible, but resolveNSRecordByNaturalKey verifies the match count
+// rather than assuming that guarantee holds, and must refuse rather than
+// take either match. This is the boundary a single-match adoption still
+// respects: exactly one match is sound identity evidence, more than one
+// is not.
+func TestClusterDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	firstRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	secondRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected a refusal error for a genuinely ambiguous natural-key match, got nil")
+	}
+	var ambiguous *AmbiguousNaturalKeyMatchError
+	if !errors.As(err, &ambiguous) {
+		t.Errorf("Delete: error = %v, want it to wrap *AmbiguousNaturalKeyMatchError", err)
+	} else if ambiguous.Count != 2 {
+		t.Errorf("Delete: AmbiguousNaturalKeyMatchError.Count = %d, want 2", ambiguous.Count)
+	}
+
+	m.mu.Lock()
+	_, firstStillExists := m.records[firstRef]
+	_, secondStillExists := m.records[secondRef]
+	m.mu.Unlock()
+	if !firstStillExists || !secondStillExists {
+		t.Error("Delete: no mutating call may be made when the natural-key search is ambiguous")
+	}
+}
+
+// TestClusterObserveRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous is the
 // Observe()-side companion of
-// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
-func TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+// TestClusterDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous.
+func TestClusterObserveRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
-	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	mc := newTestObjectManager(t, srv)
 	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
@@ -1166,10 +1296,52 @@ func TestClusterObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+		t.Fatal("Observe: expected a refusal error for a genuinely ambiguous natural-key match, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var ambiguous *AmbiguousNaturalKeyMatchError
+	if !errors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want it to wrap *AmbiguousNaturalKeyMatchError", err)
+	}
+}
+
+// TestClusterDeleteFailsClosedWhenNaturalKeyResolutionFails proves Delete()
+// never reports success when it cannot resolve whether the object is
+// really gone: a stale-ref 404 paired with a natural-key search that
+// itself errors (as opposed to a clean zero-match) must surface that
+// error, not fall through to "already deleted".
+func TestClusterDeleteFailsClosedWhenNaturalKeyResolutionFails(t *testing.T) {
+	srv := httptest.NewServer(staleRefWithBrokenSearchHandler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected an error when natural-key resolution itself fails, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteNSRecord) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteNSRecord)
+	}
+}
+
+// TestClusterObserveFailsWhenNaturalKeyResolutionFails is the Observe()
+// companion of TestClusterDeleteFailsClosedWhenNaturalKeyResolutionFails.
+func TestClusterObserveFailsWhenNaturalKeyResolutionFails(t *testing.T) {
+	srv := httptest.NewServer(staleRefWithBrokenSearchHandler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newClusterNSRecord("my-nsrecord", "record:ns/stale-ref:delegated.example.com/default")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when natural-key resolution itself fails, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errObserveNSRecord) {
+		t.Errorf("Observe: error = %q, want it to contain %q (wrapped, not swallowed)", got, errObserveNSRecord)
 	}
 }
 
@@ -1404,8 +1576,11 @@ func TestNamespacedObserveNotFound(t *testing.T) {
 	}
 }
 
+// TestNamespacedObservePreCreateState is the namespaced-scope counterpart
+// of TestObservePreCreateState.
 func TestNamespacedObservePreCreateState(t *testing.T) {
-	srv := httptest.NewServer(fixedStatusHandler(http.StatusInternalServerError))
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	mc := newTestObjectManager(t, srv)
@@ -1418,7 +1593,36 @@ func TestNamespacedObservePreCreateState(t *testing.T) {
 		t.Fatalf("Observe: unexpected error: %v", err)
 	}
 	if got.ResourceExists {
-		t.Error("Observe: want ResourceExists=false in pre-create state, got true")
+		t.Error("Observe: want ResourceExists=false in pre-create state with no matching Grid object, got true")
+	}
+}
+
+// TestNamespacedObserveRecoversInCreateCrashWindow is the namespaced-scope
+// counterpart of TestClusterObserveRecoversInCreateCrashWindow.
+func TestNamespacedObserveRecoversInCreateCrashWindow(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	liveRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "", "ProviderConfig")
+	meta.SetExternalName(cr, cr.GetName())
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error recovering from the create crash window: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: ResourceExists=false after the crash window — the next reconcile would call Create() again and collide with the object the first Create() already made")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: ResourceLateInitialized=false — the recovered reference must be persisted through a path crossplane-runtime actually writes back")
+	}
+	if got := meta.GetExternalName(cr); got != liveRef {
+		t.Errorf("Observe: external-name = %q after recovery, want the discovered ref %q", got, liveRef)
 	}
 }
 
@@ -1624,10 +1828,10 @@ func TestNamespacedDeleteServerError(t *testing.T) {
 	}
 }
 
-// TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject is the
+// TestNamespacedDeleteRecoversWhenStaleRefStillMatchesLiveObject is the
 // namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterDeleteRecoversWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedDeleteRecoversWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1638,19 +1842,15 @@ func TestNamespacedDeleteRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T)
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when a natural-key search still matches a live object, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error recovering a single natural-key match, got: %v", err)
 	}
 
 	m.mu.Lock()
 	_, stillExists := m.records[liveRef]
 	m.mu.Unlock()
-	if !stillExists {
-		t.Error("Delete: live record was removed despite the refusal — DELETE must not have been issued against it")
+	if stillExists {
+		t.Error("Delete: live record recovered by the natural-key search was not removed")
 	}
 }
 
@@ -1671,10 +1871,10 @@ func TestNamespacedDeleteSucceedsWhenStaleRefHasNoNaturalKeyMatch(t *testing.T) 
 	}
 }
 
-// TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject is the
+// TestNamespacedObserveRecoversWhenStaleRefStillMatchesLiveObject is the
 // namespaced-scope counterpart of
-// TestClusterObserveRefusesWhenStaleRefStillMatchesLiveObject.
-func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T) {
+// TestClusterObserveRecoversWhenStaleRefStillMatchesLiveObject.
+func TestNamespacedObserveRecoversWhenStaleRefStillMatchesLiveObject(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1685,12 +1885,18 @@ func TestNamespacedObserveRefusesWhenStaleRefStillMatchesLiveObject(t *testing.T
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
-	_, err := e.Observe(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Observe: expected refusal error when a natural-key search still matches a live object, got nil")
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error recovering a single natural-key match, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true after recovering the live object via the natural-key search")
+	}
+	if !got.ResourceLateInitialized {
+		t.Error("Observe: want ResourceLateInitialized=true so the recovered ref is persisted")
+	}
+	if got := meta.GetExternalName(cr); got != liveRef {
+		t.Errorf("Observe: external-name = %q after recovery, want the discovered ref %q", got, liveRef)
 	}
 
 	m.mu.Lock()
@@ -1758,10 +1964,10 @@ func TestNamespacedObserveDoesNotRefuseWhenOnlySiblingMatchesLooseKey(t *testing
 	}
 }
 
-// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
-// the namespaced-scope counterpart of
-// TestClusterDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
-func TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+// TestNamespacedDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings
+// is the namespaced-scope counterpart of
+// TestClusterDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings.
+func TestNamespacedDeleteSucceedsWhenOwnObjectMatchesExactTupleAmongSiblings(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -1773,36 +1979,92 @@ func TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testi
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
 	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
 
-	_, err := e.Delete(context.Background(), cr)
-	if err == nil {
-		t.Fatal("Delete: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
-	}
-	if !strings.Contains(err.Error(), "refusing to delete") {
-		t.Errorf("Delete: error = %q, want it to explain the refusal", err.Error())
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error resolving the own object among siblings, got: %v", err)
 	}
 
 	m.mu.Lock()
 	_, ownStillExists := m.records[ownRef]
 	_, siblingStillExists := m.records[siblingRef]
 	m.mu.Unlock()
-	if !ownStillExists {
-		t.Error("Delete: own record was removed despite the refusal — DELETE must not have been issued against it")
+	if ownStillExists {
+		t.Error("Delete: own record (exact tuple match) was not removed")
 	}
 	if !siblingStillExists {
-		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own external-name ref")
+		t.Error("Delete: sibling record was removed — Delete() must only ever target the CR's own resolved object")
 	}
 }
 
-// TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey is
-// the Observe()-side companion of
-// TestNamespacedDeleteRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey.
-func TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *testing.T) {
+// TestNamespacedObserveRecoversWhenOwnObjectMatchesExactTupleAmongSiblings
+// is the namespaced-scope counterpart of
+// TestClusterObserveRecoversWhenOwnObjectMatchesExactTupleAmongSiblings.
+func TestNamespacedObserveRecoversWhenOwnObjectMatchesExactTupleAmongSiblings(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ownRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error resolving the own object among siblings, got: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Error("Observe: want ResourceExists=true for the own object's exact tuple match")
+	}
+	if got := meta.GetExternalName(cr); got != ownRef {
+		t.Errorf("Observe: external-name = %q, want the own object's ref %q", got, ownRef)
+	}
+}
+
+// TestNamespacedDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous is
+// the namespaced-scope counterpart of
+// TestClusterDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous.
+func TestNamespacedDeleteRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	firstRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+	secondRef := m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected a refusal error for a genuinely ambiguous natural-key match, got nil")
+	}
+	var ambiguous *AmbiguousNaturalKeyMatchError
+	if !errors.As(err, &ambiguous) {
+		t.Errorf("Delete: error = %v, want it to wrap *AmbiguousNaturalKeyMatchError", err)
+	}
+
+	m.mu.Lock()
+	_, firstStillExists := m.records[firstRef]
+	_, secondStillExists := m.records[secondRef]
+	m.mu.Unlock()
+	if !firstStillExists || !secondStillExists {
+		t.Error("Delete: no mutating call may be made when the natural-key search is ambiguous")
+	}
+}
+
+// TestNamespacedObserveRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous is
+// the namespaced-scope counterpart of
+// TestClusterObserveRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous.
+func TestNamespacedObserveRefusesWhenNaturalKeySearchIsGenuinelyAmbiguous(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
 
 	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
-	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns2.example.com")})
+	m.seed(&ibclient.RecordNS{Name: "delegated.example.com", View: "default", Nameserver: stringPtr("ns1.example.com")})
 
 	mc := newTestObjectManager(t, srv)
 	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
@@ -1810,10 +2072,51 @@ func TestNamespacedObserveRefusesWhenAmbiguousSiblingAlsoMatchesLooseKey(t *test
 
 	_, err := e.Observe(context.Background(), cr)
 	if err == nil {
-		t.Fatal("Observe: expected refusal error when the own object matches the full tuple even with an ambiguous sibling present, got nil")
+		t.Fatal("Observe: expected a refusal error for a genuinely ambiguous natural-key match, got nil")
 	}
-	if !strings.Contains(err.Error(), "cannot observe") {
-		t.Errorf("Observe: error = %q, want it to explain the refusal", err.Error())
+	var ambiguous *AmbiguousNaturalKeyMatchError
+	if !errors.As(err, &ambiguous) {
+		t.Errorf("Observe: error = %v, want it to wrap *AmbiguousNaturalKeyMatchError", err)
+	}
+}
+
+// TestNamespacedDeleteFailsClosedWhenNaturalKeyResolutionFails is the
+// namespaced-scope counterpart of
+// TestClusterDeleteFailsClosedWhenNaturalKeyResolutionFails.
+func TestNamespacedDeleteFailsClosedWhenNaturalKeyResolutionFails(t *testing.T) {
+	srv := httptest.NewServer(staleRefWithBrokenSearchHandler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Delete(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Delete: expected an error when natural-key resolution itself fails, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errDeleteNSRecord) {
+		t.Errorf("Delete: error = %q, want it to contain %q (wrapped, not swallowed)", got, errDeleteNSRecord)
+	}
+}
+
+// TestNamespacedObserveFailsWhenNaturalKeyResolutionFails is the
+// namespaced-scope counterpart of
+// TestClusterObserveFailsWhenNaturalKeyResolutionFails.
+func TestNamespacedObserveFailsWhenNaturalKeyResolutionFails(t *testing.T) {
+	srv := httptest.NewServer(staleRefWithBrokenSearchHandler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector}
+	cr := newNamespacedNSRecord("default", "my-nsrecord", "record:ns/stale-ref:delegated.example.com/default", "ProviderConfig")
+
+	_, err := e.Observe(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Observe: expected an error when natural-key resolution itself fails, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, errObserveNSRecord) {
+		t.Errorf("Observe: error = %q, want it to contain %q (wrapped, not swallowed)", got, errObserveNSRecord)
 	}
 }
 

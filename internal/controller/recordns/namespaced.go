@@ -19,7 +19,6 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordns/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 )
 
@@ -109,7 +108,7 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
-	// conn is the lower-level WAPI connector nsRecordExistsByNaturalKey
+	// conn is the lower-level WAPI connector resolveNSRecordByNaturalKey
 	// searches against directly — it needs visibility into the match
 	// count that objMgr's typed getters hide. See that helper's doc.
 	conn ibclient.IBConnector
@@ -166,37 +165,31 @@ func namespacedCloudInfoFromShared(ci *nsCloudInfo) *namespacedv1alpha1.NSRecord
 	return out
 }
 
-// Observe fetches the NSRecord from the WAPI by its _ref external name
-// and compares it against the desired spec.
+// Observe resolves the NSRecord through its natural key (name, view,
+// nameserver — see the package doc for why this tuple is sound identity
+// evidence) and compares the result against the desired spec.
 func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.NSRecord) (managed.ExternalObservation, error) {
-	externalID := meta.GetExternalName(cr)
+	ref := observeRefFor(cr.GetName(), meta.GetExternalName(cr))
 
-	// Pre-create guard (server-assigned external-name strategy) — see
-	// clusterExternal.Observe for the full rationale.
-	if externalID == cr.GetName() {
-		return managed.ExternalObservation{ResourceExists: false}, nil
-	}
-
-	rec, err := e.objMgr.GetNSRecordByRef(externalID)
+	result, err := resolveNSRecordForObserve(e.objMgr, e.conn, ref, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
 	if err != nil {
-		if isNotFound(err) {
-			// The stored external-name is a derived handle: it rotates
-			// whenever an identity-composing field changes, so a 404 here
-			// is not proof the object is gone (see the staleref package
-			// doc). Resolve the natural key before concluding that.
-			found, searchErr := nsRecordExistsByNaturalKey(e.conn, cr.Spec.ForProvider.Name, cr.Spec.ForProvider.View, cr.Spec.ForProvider.Nameserver)
-			if searchErr != nil {
-				return managed.ExternalObservation{}, errors.Wrap(searchErr, errObserveNSRecord)
-			}
-			if found {
-				return managed.ExternalObservation{}, staleref.ObserveRefusalError()
-			}
-			return managed.ExternalObservation{ResourceExists: false}, nil
-		}
 		return managed.ExternalObservation{}, errors.Wrap(err, errObserveNSRecord)
 	}
+	if result == nil {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	rec := result.rec
 
-	o := observeFromRecordNS(externalID, rec)
+	// A ref recovered through the natural-key search (rather than
+	// resolved directly) must be persisted through ResourceLateInitialized
+	// below — that is the one path crossplane-runtime's managed
+	// reconciler actually writes an Observe-time external-name change
+	// back to the API server.
+	if result.refreshed {
+		meta.SetExternalName(cr, rec.Ref)
+	}
+
+	o := observeFromRecordNS(rec.Ref, rec)
 	cr.Status.AtProvider = namespacedv1alpha1.NSRecordObservation{
 		Name:             o.Name,
 		Nameserver:       o.Nameserver,
@@ -218,7 +211,7 @@ func (e *namespacedExternal) Observe(_ context.Context, cr *namespacedv1alpha1.N
 	cr.Status.AtProvider.ID = o.ID
 
 	p := &cr.Spec.ForProvider
-	lateInit := lateInitialize(&p.MsDelegationName, rec)
+	lateInit := lateInitialize(&p.MsDelegationName, rec) || result.refreshed
 
 	// Set Available condition — required in crossplane-runtime v2, not
 	// set automatically.
