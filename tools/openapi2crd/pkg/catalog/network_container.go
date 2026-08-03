@@ -3,9 +3,10 @@ package catalog
 // networkContainer returns the NetworkContainer resource descriptor.
 //
 // Source: tools/openapi/inventory.md, "### NetworkContainer" section
-// (fields request=0, response=1, both=4) and manifests blueprint decision
-// ADR-IN-0004 (Phase 6 live API verification) — derived from the pinned
-// infoblox-go-client/v2 SDK (tools/openapi/specs/infobloxopen/).
+// (fields request=0, response=1, both=4) and corrections found by live
+// CRUD verification against a NIOS Grid Manager appliance — derived
+// from the pinned infoblox-go-client/v2 SDK
+// (tools/openapi/specs/infobloxopen/).
 //
 // External-name strategy: server-assigned (the WAPI `_ref` returned by
 // CreateNetworkContainer).

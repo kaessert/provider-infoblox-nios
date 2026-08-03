@@ -39,8 +39,9 @@
 # in DNS view "Internal" (no reverse zone exists in view "default"), so this
 # example intentionally deviates from record-a's 192.0.2.0/24 (TEST-NET-1)
 # convention and view "default". test/setup.sh creates no per-run reverse
-# zone (ADR-IN-0007 keeps setup.sh a convergent, non-per-run provisioner),
-# and a 100.64.0.0/16 netPrefix address has no reverse zone at all, so this
+# zone — it stays a convergent, idempotent provisioner of shared prerequisites
+# rather than a per-run mutator — and a 100.64.0.0/16 netPrefix address has no
+# reverse zone at all, so this
 # resource cannot use the netPrefix mechanism the other IPAM-wave resources
 # use. Instead ${data.netPtrHostCluster} is a per-run host offset drawn
 # from a second, independent byte of the seed hash and confined to the

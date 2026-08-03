@@ -164,7 +164,7 @@ func newNamespacedDTCLBDN(ns, crName, externalName, pcKind string) *namespacedv1
 // type so the wire format exactly matches what the SDK sends and expects.
 // The PUT handler simulates the live-verified _ref instability: renaming
 // the LBDN (a `name` change) assigns it a new _ref, mirroring the real
-// Grid Manager's behavior (ADR-IN-0004).
+// Grid Manager's behavior (live-verified).
 
 type mockDtcLbdnServer struct {
 	mu      sync.Mutex
@@ -519,9 +519,9 @@ func TestClusterObserveNotFound(t *testing.T) {
 // TestObservePreCreateState verifies that Observe runs one identity
 // search (not a hard-coded no-op) when the external-name still equals
 // the CR's Kubernetes name — the pre-create state for a server-assigned
-// external-name strategy. Per ADR-IN-0006 §3 the pre-create guard no
-// longer short-circuits: it maps the annotation to "" and lets the
-// identity ladder search by uid before concluding ResourceExists:false.
+// external-name strategy. The pre-create guard does not short-circuit:
+// it maps the annotation to "" and lets the identity ladder search by
+// uid before concluding ResourceExists:false.
 func TestObservePreCreateState(t *testing.T) {
 	m := newMockDtcLbdnServer()
 	srv := httptest.NewServer(m.handler())
@@ -543,7 +543,7 @@ func TestObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -816,7 +816,7 @@ func TestClusterUpdateSendsAllFields(t *testing.T) {
 }
 
 // TestClusterUpdateRefreshesExternalNameOnRefChange pins the _ref-instability
-// contract (live-verified, ADR-IN-0004): renaming a DTCLBDN changes its
+// contract (live-verified against a real Grid): renaming a DTCLBDN changes its
 // WAPI `_ref`, so Update must detect the change and refresh the
 // crossplane.io/external-name annotation from the PUT response.
 func TestClusterUpdateRefreshesExternalNameOnRefChange(t *testing.T) {

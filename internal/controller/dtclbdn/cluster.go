@@ -196,8 +196,8 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCLBD
 	}
 
 	// UpdateDtcLbdn always returns the object's current _ref. Renaming a
-	// DTC LBDN (a mutable field) may change its _ref (live-verified,
-	// ADR-IN-0004) — refresh the annotation whenever it differs.
+	// DTC LBDN (a mutable field) may change its _ref (live-verified
+	// against a real Grid) — refresh the annotation whenever it differs.
 	if rec.Ref != "" && rec.Ref != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)

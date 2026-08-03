@@ -552,9 +552,9 @@ func deleteARecord(objMgr ibclient.IBObjectManager, ref string) error {
 
 // ── Identity EA-definition prerequisite probe (shared by both scopes) ────
 //
-// ADR-IN-0006 §4: the "Crossplane Internal ID" extensible-attribute
-// definition is an install prerequisite for every resource that stamps or
-// resolves identity through it. Wired into Create() (before the identity
+// The "Crossplane Internal ID" extensible-attribute definition is an
+// install prerequisite for every resource that stamps or resolves
+// identity through it. Wired into Create() (before the identity
 // stamp), and into observeARecord/deleteARecordIdentity's identity-EA
 // search fallback (see the doc on those functions for why the guard is
 // reactive — only exercised on the search's own failure — instead of an
@@ -598,10 +598,13 @@ func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, co
 
 // ── Identity resolution (shared by both scopes) ─────────────────────────
 //
-// ADR-IN-0006 replaces this resource's original natural-key delete
-// refusal with the UID-in-EA ladder implemented once in
-// internal/clients/identity and reused by every rotating-identifier NIOS
-// type. ARecord is the pilot wiring.
+// WAPI's only object handle for this type (_ref) is a rendering of the
+// object's own mutable identity fields (name, view), so it rotates
+// whenever they change — a bare 404 on the stored handle is therefore not
+// proof the object is gone. This replaces the resource's original
+// natural-key delete refusal with the UID-in-EA ladder implemented once
+// in internal/clients/identity and reused by every rotating-identifier
+// NIOS type. ARecord is the pilot wiring.
 //
 // The identity-EA search (searchByUID inside identity.Resolve, hit
 // whenever the stored reference is empty or has 404'd — both in
@@ -611,7 +614,7 @@ func ensureIdentityPrerequisite(ctx context.Context, prober *identity.Prober, co
 // Create-time stamp does when the definition is absent — WAPI returns
 // HTTP 400 ("AdmConProtoError: Unknown extensible attribute: Crossplane
 // Internal ID"), not an empty result set — so an unguarded search would
-// surface that opaque 400 instead of the ADR §4 remediation.
+// surface that opaque 400 instead of the operator remediation text.
 //
 // Unlike Create (which always stamps identity and so always needs the
 // prerequisite before it runs), the search is only reached on the

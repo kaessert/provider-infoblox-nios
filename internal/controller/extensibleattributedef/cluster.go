@@ -232,7 +232,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.Extens
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateEADefinition)
 	}
 
-	// Live verification (see ADR-IN-0004) confirmed renaming an
+	// Live verification against a real Grid confirmed renaming an
 	// ExtensibleAttributeDef changes its _ref, so the external-name
 	// annotation must be refreshed here.
 	if newRef != "" && newRef != externalID {

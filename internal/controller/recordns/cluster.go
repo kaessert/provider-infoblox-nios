@@ -237,7 +237,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.NSReco
 	}
 
 	// UpdateNSRecord returns the object's current _ref. Live verification
-	// (ADR-IN-0004) found the _ref for NS records is unstable — a
+	// against a real Grid found the _ref for NS records is unstable — a
 	// nameserver/addresses change can cause NIOS to mutate the _ref — so
 	// the external-name annotation must be refreshed here whenever the
 	// returned ref differs from what we sent.

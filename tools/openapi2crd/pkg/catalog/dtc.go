@@ -5,10 +5,10 @@ package catalog
 // Source: tools/openapi/inventory.md, "### DTCPool" section (fields
 // request=0, response=3, both=17) — derived from the pinned
 // infoblox-go-client/v2 SDK's DtcPool struct (WAPI object type dtc:pool)
-// under tools/openapi/specs/infobloxopen/, corrected by ADR-IN-0004's
-// live-verification pass (2026-07-28): `auto_consolidated_monitors` is an
-// SDK-only field with no corresponding WAPI `_schema` entry and is
-// deliberately NOT cataloged here.
+// under tools/openapi/specs/infobloxopen/, corrected by a live CRUD
+// verification pass against a NIOS Grid Manager appliance (2026-07-28):
+// `auto_consolidated_monitors` is an SDK-only field with no corresponding
+// WAPI `_schema` entry and is deliberately NOT cataloged here.
 //
 // External-name strategy: server-assigned (the WAPI `_ref` returned by
 // CreateDtcPool) — name is mutable, so it cannot serve as the
@@ -388,11 +388,11 @@ func dtcServer() ResourceDescriptor {
 // Source: tools/openapi/inventory.md, "### DTCLBDN" section (fields
 // request=0, response=2, both=15) — derived from the pinned
 // infoblox-go-client/v2 SDK's DtcLbdn struct (WAPI object type dtc:lbdn)
-// under tools/openapi/specs/infobloxopen/, corrected by ADR-IN-0004's
-// live-verification pass (2026-07-28): `auto_consolidated_monitors` is an
-// SDK-only field with no corresponding WAPI `_schema` entry and is
-// deliberately NOT cataloged here (same finding as DTCPool's field of the
-// same name).
+// under tools/openapi/specs/infobloxopen/, corrected by a live CRUD
+// verification pass against a NIOS Grid Manager appliance (2026-07-28):
+// `auto_consolidated_monitors` is an SDK-only field with no corresponding
+// WAPI `_schema` entry and is deliberately NOT cataloged here (same
+// finding as DTCPool's field of the same name).
 //
 // External-name strategy: server-assigned (the WAPI `_ref` returned by
 // CreateDtcLbdn) — name is mutable, so it cannot serve as the
@@ -401,7 +401,7 @@ func dtcServer() ResourceDescriptor {
 // Immutable fields: none known. Every CreateDtcLbdn parameter is also
 // accepted by UpdateDtcLbdn.
 //
-// `authZones`: live-verified (ADR-IN-0004) to be an array of bare `_ref`
+// `authZones`: live-verified to be an array of bare `_ref`
 // strings, NOT an array of objects — `[{"_ref": "..."}]` is rejected by
 // WAPI with "Object reference expected in auth_zones". Modeled as
 // []string carrying a direct cross-resource Reference to ZoneAuth
@@ -463,7 +463,7 @@ func dtcLBDN() ResourceDescriptor {
 				JSONName:    "authZones",
 				GoType:      "[]string",
 				Scope:       FieldScopeBoth,
-				Description: "Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified (ADR-IN-0004): WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.",
+				Description: "Authoritative zones the LBDN's patterns are matched against, identified by each ZoneAuth's WAPI `_ref`. Live-verified: WAPI requires bare _ref strings, not objects. Linked zones must have a Grid primary configured.",
 				Reference: &ReferenceDescriptor{
 					TargetKind:  "ZoneAuth",
 					TargetSlug:  "zoneauth",

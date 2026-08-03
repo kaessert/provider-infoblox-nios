@@ -511,9 +511,9 @@ func TestClusterObserveNotFound(t *testing.T) {
 // TestObservePreCreateState verifies that Observe runs one identity
 // search (not a hard-coded no-op) when the external-name still equals
 // the CR's Kubernetes name — the pre-create state for a server-assigned
-// external-name strategy. Per ADR-IN-0006 §3 the pre-create guard no
-// longer short-circuits: it maps the annotation to "" and lets the
-// identity ladder search by uid before concluding ResourceExists:false.
+// external-name strategy. The pre-create guard does not short-circuit:
+// it maps the annotation to "" and lets the identity ladder search by
+// uid before concluding ResourceExists:false.
 func TestObservePreCreateState(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -536,7 +536,7 @@ func TestObservePreCreateState(t *testing.T) {
 	searchCalls := m.searchCalls
 	m.mu.Unlock()
 	if searchCalls == 0 {
-		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state (ADR-IN-0006 §3), got zero search calls")
+		t.Error("Observe: want the identity ladder to search by uid even in the pre-create state, got zero search calls")
 	}
 }
 
@@ -947,7 +947,7 @@ func TestClusterDeleteRecoversRotatedRefAndDeletes(t *testing.T) {
 // absent, identity stamp shares the loose fqdn/view), means the object
 // really is gone. This supersedes the pre-ladder natural-key fallback
 // (which searched by fqdn/view alone and could be fooled by such a
-// sibling) with the identity ladder, per ADR-IN-0006.
+// sibling) with the identity ladder.
 func TestClusterDeleteSucceedsWhenTrulyAbsent(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())

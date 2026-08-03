@@ -31,7 +31,7 @@ metadata:
       - field: comment
         value: "Updated by update-tester (namespaced)"
       - field: mac
-        skip: "mac is part of this resource's (networkView, network, ip, MAC) natural key; networkView and network stay literal by design (ADR-IN-0007 scope discipline) and ipv4addr is per-run tokenised, so patching mac to a shared literal across concurrent runs would needlessly narrow the isolation margin down to the ip component alone — comment/disable/useOptions/name already exercise the update phase for this resource"
+        skip: "mac is part of this resource's (networkView, network, ip, MAC) natural key; networkView and network stay literal on purpose so E2E runs share fixture context rather than multiplying Grid state, and ipv4addr is per-run tokenised, so patching mac to a shared literal across concurrent runs would needlessly narrow the isolation margin down to the ip component alone — comment/disable/useOptions/name already exercise the update phase for this resource"
       - field: name
         value: "updated-fixed-address-ns"
       - field: matchClient
@@ -41,9 +41,9 @@ metadata:
       - field: useOptions
         value: true
       - field: ipv4addr
-        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv6addr"
+        skip: "changing it changes the record's _ref, which NIOS derives from the field values themselves, so the object identity moves; mutually exclusive with ipv6addr"
       - field: ipv6addr
-        skip: "changing it changes the record's UNSTABLE _ref (ADR-IN-0004); mutually exclusive with ipv4addr"
+        skip: "changing it changes the record's _ref, which NIOS derives from the field values themselves, so the object identity moves; mutually exclusive with ipv4addr"
       - field: networkView
         skip: "only safely mutable prior to first apply per the field documentation; not exercised post-create"
       - field: network

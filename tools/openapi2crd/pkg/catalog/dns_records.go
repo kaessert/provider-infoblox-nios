@@ -892,20 +892,19 @@ func mxRecord() ResourceDescriptor {
 // Source: tools/openapi/inventory.md, "### NSRecord" section, corrected
 // against the pinned infoblox-go-client/v2 SDK's RecordNS struct
 // (tools/openapi/specs/infobloxopen/) and live-verified 2026-07-28 against a
-// real NIOS Grid Manager appliance (see
-// manifests/infobloxnios/decisions/ADR-IN-0004, authoritative over
-// inventory.md wherever they conflict).
+// real NIOS Grid Manager appliance. Live findings take precedence over
+// inventory.md wherever they conflict.
 //
 // RecordNS's actual field set (read directly from objects_generated.go)
 // does not include `creation_time` or `ms_ad_user_data` — inventory.md's
 // static field table listed both in error (most likely carried over from
 // the ARecord section); this catalog entry uses the real struct instead.
 // `creator` IS a real RecordNS field that the static inventory table
-// omitted entirely; ADR-IN-0004 confirms it live-verified read-only
-// (`supports=rs`) rather than the scope=both the ADR's correction note
-// implies the inventory would otherwise have guessed.
+// omitted entirely; live verification confirms it is read-only
+// (`supports=rs`) rather than the scope=both a naive reading of the
+// inventory correction would otherwise suggest.
 //
-// Immutable fields (live-verified, ADR-IN-0004):
+// Immutable fields (live-verified):
 //   - `name`: `supports=rws` (no `u`) — absent from UpdateNSRecord's
 //     mutable-field set at the data level even though the Go SDK method
 //     signature still accepts it as a parameter (the SDK issues a PUT that

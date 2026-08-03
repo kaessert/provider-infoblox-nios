@@ -5,8 +5,8 @@
 // accept `pools []*DtcPoolLink` entries whose `Pool` field is expected to
 // hold a pool *name* and `authZones []AuthZonesLink` entries shaped as
 // {Fqdn, DnsView} pairs — both wrappers resolve the real WAPI `_ref` via
-// an extra name/fqdn+view lookup HTTP round trip, and (live-verified,
-// ADR-IN-0004) silently drop any pool entry whose `Pool` value already
+// an extra name/fqdn+view lookup HTTP round trip, and (live-verified
+// against a real Grid) silently drop any pool entry whose `Pool` value already
 // looks like a `_ref` (matches `^dtc:pool:`) instead of resolving it. This
 // provider's DTCLBDN CRD stores pool and auth-zone references directly
 // (the user supplies an existing DTCPool/ZoneAuth object's `_ref`,
@@ -20,7 +20,7 @@
 // DeleteDtcLbdn convenience method directly.
 //
 // The WAPI `auto_consolidated_monitors` attribute does not exist on this
-// deployment's Grid Manager (live-verified, ADR-IN-0004) — this package
+// deployment's Grid Manager (live-verified) — this package
 // never sets it, and this CRD does not expose it as a field at all. The
 // SDK's ObjectManager.GetDtcLbdnByRef convenience method (via
 // NewEmptyDtcLbdn) unconditionally adds `auto_consolidated_monitors` to
@@ -33,7 +33,7 @@
 // `auto_consolidated_monitors`.
 //
 // The DTCLBDN `_ref` is unstable: renaming the LBDN (a mutable field)
-// changes its `_ref` (live-verified, ADR-IN-0004). Create and Update both
+// changes its `_ref` (live-verified against a real Grid). Create and Update both
 // read the `_ref` back from the WAPI response and refresh the
 // crossplane.io/external-name annotation whenever it differs from the
 // externalID used to issue the request.
@@ -276,7 +276,7 @@ func poolsEqual(a, b []poolLink) bool {
 // `_ref` strings into the SDK's []*ibclient.ZoneAuth wire type. The SDK's
 // DtcLbdn.MarshalJSON unwraps each entry back down to its bare Ref string
 // on the wire (WAPI requires `auth_zones` as an array of bare `_ref`
-// strings, not objects — live-verified, ADR-IN-0004).
+// strings, not objects — live-verified against a real Grid).
 func buildAuthZones(refs []string) []*ibclient.ZoneAuth {
 	if len(refs) == 0 {
 		return nil
@@ -775,7 +775,7 @@ func deleteDtcLbdn(objMgr ibclient.IBObjectManager, ref string) error {
 // dtcLbdnReturnFields lists every DtcLbdn field this package reads on
 // Observe, deliberately omitting `auto_consolidated_monitors`. That field
 // does not exist on this deployment's Grid Manager WAPI schema
-// (live-verified, ADR-IN-0004): the SDK's own read helper
+// (live-verified against a real Grid): the SDK's own read helper
 // (ibclient.ObjectManager.GetDtcLbdnByRef, via NewEmptyDtcLbdn)
 // unconditionally requests it, and the GET is rejected outright with a
 // 400 "Unknown argument/field" error — not a per-field omission, the

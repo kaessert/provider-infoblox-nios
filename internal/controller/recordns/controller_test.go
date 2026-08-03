@@ -697,7 +697,7 @@ func TestClusterObserveIsUpToDateIgnoresImmutableField(t *testing.T) {
 	cr := newClusterNSRecord("my-nsrecord", ref)
 	// Mutate the immutable name/view fields in spec — this must NOT
 	// affect ResourceUpToDate, since both are excluded from isUpToDate
-	// (WAPI rejects a PUT that changes either — ADR-IN-0004).
+	// (WAPI rejects a PUT that changes either — live-verified).
 	cr.Spec.ForProvider.Name = stringPtr("changed.example.com")
 	cr.Spec.ForProvider.View = stringPtr("changed-view")
 
@@ -846,7 +846,7 @@ func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 }
 
 // TestClusterUpdateRefChangesUpdatesExternalName pins the _ref-instability
-// handling (ADR-IN-0004): if UpdateNSRecord returns a different _ref than
+// handling (live-verified against a real Grid): if UpdateNSRecord returns a different _ref than
 // the one used to issue the request (NIOS mutated it), the external-name
 // annotation must be refreshed so the next reconcile targets the new ref.
 func TestClusterUpdateRefChangesUpdatesExternalName(t *testing.T) {

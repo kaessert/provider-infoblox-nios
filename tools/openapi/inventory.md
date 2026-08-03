@@ -1130,7 +1130,7 @@ disable is on the WAPI object but not exposed by CreateMXRecord/UpdateMXRecord.
 **Rationale:** WAPI assigns an opaque `_ref` on POST; no user-controlled key survives a rename.  
 **Delete behavior:** hard-delete (404 on subsequent GET) — inferred from RecordA behavior  
 **Update method:** UpdateNSRecord  
-**Live-verified:** yes (2026-07-28, see ADR-IN-0004)  
+**Live-verified:** yes (2026-07-28, corrected against a live NIOS Grid Manager appliance, WAPI v2.9.7)  
 **Notes:** Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord.  
 
 #### CRUD Methods
@@ -1146,7 +1146,7 @@ disable is on the WAPI object but not exposed by CreateMXRecord/UpdateMXRecord.
 #### Fields (request=0, response=7, both=5)
 
 Corrected against the RecordNS struct in the pinned SDK's
-`objects_generated.go` and live-verified per ADR-IN-0004: the field table
+`objects_generated.go` and live-verified against a NIOS Grid Manager appliance: the field table
 below drops `creation_time` and `ms_ad_user_data` (neither is a real
 RecordNS field — RecordNS has no creation-time tracking or MS AD user data,
 unlike ARecord) and adds `creator` (a real RecordNS field the original

@@ -8,10 +8,10 @@ import (
 
 // HandleReuseError is returned when a stored reference resolves to an
 // object whose identity extensible attribute holds a UID different from
-// the caller's. Per ADR-IN-0006 this is refused, not adopted: the object
-// the reference points at belongs to a different managed resource (or
-// was never one of ours), and mutating or deleting it would silently
-// destroy someone else's record. Match with errors.As, e.g.:
+// the caller's. This is refused, not adopted: the object the reference
+// points at belongs to a different managed resource (or was never one of
+// ours), and mutating or deleting it would silently destroy someone
+// else's record. Match with errors.As, e.g.:
 //
 //	var reuse *identity.HandleReuseError
 //	if errors.As(err, &reuse) { ... }
@@ -38,10 +38,9 @@ func (e *HandleReuseError) Error() string {
 }
 
 // AmbiguousMatchError is returned when an identity-EA search matches more
-// than one Grid object for the same UID. Per ADR-IN-0006 this is refused,
-// never resolved by taking the first result — silently picking one is
-// exactly the defect this package exists to close. Match with errors.As,
-// e.g.:
+// than one Grid object for the same UID. This is refused, never resolved
+// by taking the first result — silently picking one is exactly the
+// defect this package exists to close. Match with errors.As, e.g.:
 //
 //	var ambiguous *identity.AmbiguousMatchError
 //	if errors.As(err, &ambiguous) { ... }

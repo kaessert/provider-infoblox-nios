@@ -112,10 +112,11 @@ type namespacedExternal struct {
 	// against directly — it needs visibility into search match counts
 	// that objMgr's typed methods hide. See resolveAAAARecordIdentity.
 	conn ibclient.IBConnector
-	// prober checks the identity extensible-attribute-definition
-	// prerequisite (ADR-IN-0006 §4) before Create stamps identity onto a
-	// new object. nil defaults to identity.DefaultProber — see
-	// ensureIdentityPrerequisite.
+	// prober checks that the Grid's "Crossplane Internal ID" extensible
+	// attribute definition exists before Create stamps identity onto a
+	// new object — without the definition WAPI rejects the write with an
+	// opaque error, so the probe surfaces an actionable one instead. nil
+	// defaults to identity.DefaultProber — see ensureIdentityPrerequisite.
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key,
 	// resolved by Connect from the ProviderConfig's Grid host. See
@@ -124,7 +125,8 @@ type namespacedExternal struct {
 }
 
 // Observe resolves the AAAARecord through the shared UID-in-EA identity
-// ladder (ADR-IN-0006 §2/§3) and compares the result against the desired
+// ladder — steady-state resolve, adopt when the EA is missing, or a
+// rotation search by uid when the stored _ref 404s — and compares the
 // spec. See observeAAAARecord for the ladder itself.
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.AAAARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider

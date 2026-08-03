@@ -149,7 +149,7 @@
 #               P(any collision among k runs) ≈ 1 − exp(−k(k−1)/512):
 #                 k=2  → ~0.4%      k=5  → ~4%
 #                 k=10 → ~16%       k=20 → ~52%
-#               This is a real, documented bound (ADR-IN-0007), not one
+#               This is a real, documented bound — accepted, not one
 #               this script tries to eliminate.
 #
 # ── netV6 — IPv6 ADDRESSED objects (Network's ipv6network variant) ────────
@@ -229,8 +229,8 @@
 #               DNS view "Internal" — pre-existing Grid state, not created
 #               by test/setup.sh, and setup.sh deliberately stays a
 #               convergent (idempotent, non-mutating-per-run) prerequisite
-#               provisioner rather than creating a per-run reverse zone
-#               (ADR-IN-0007). A netPrefix (100.64.x.0/24) address has no
+#               provisioner rather than creating a per-run reverse zone.
+#               A netPrefix (100.64.x.0/24) address has no
 #               reverse zone at all, so record-ptr cannot use netPrefix.
 #
 #               Instead, a per-run HOST offset is derived within the

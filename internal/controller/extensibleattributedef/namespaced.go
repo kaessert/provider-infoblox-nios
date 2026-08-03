@@ -254,7 +254,7 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	// See clusterExternal.Update — renaming an ExtensibleAttributeDef
-	// changes its _ref (live-verified, ADR-IN-0004).
+	// changes its _ref (live-verified against a real Grid).
 	if newRef != "" && newRef != externalID {
 		if err := externalname.Refresh(ctx, e.kube, cr, newRef); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)

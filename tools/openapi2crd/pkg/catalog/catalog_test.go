@@ -166,7 +166,8 @@ func TestAllContainsNSRecord(t *testing.T) {
 // differs from inventory.md's stale request=0/response=8/both=5 count: the
 // inventory table lists creation_time/ms_ad_user_data (not real RecordNS
 // fields) and omits creator (a real field); see the nsRecord() doc comment
-// and ADR-IN-0004 for the correction.
+// for the correction, confirmed by live verification against a NIOS Grid
+// Manager appliance.
 func TestNSRecordFieldCounts(t *testing.T) {
 	rd, ok := FindResource("recordns")
 	if !ok {
@@ -214,7 +215,7 @@ func TestAliasRecordImmutableFields(t *testing.T) {
 }
 
 // TestNSRecordImmutableFields verifies the live-verified immutable fields
-// (ADR-IN-0004) carry Immutable=true: name and view. addresses must be
+// carry Immutable=true: name and view. addresses must be
 // Required but NOT Immutable.
 func TestNSRecordImmutableFields(t *testing.T) {
 	rd, ok := FindResource("recordns")
@@ -1040,7 +1041,7 @@ func TestFixedAddressNetworkViewReference(t *testing.T) {
 
 // TestFixedAddressDUIDResponseOnly verifies the duid field is response-only
 // (AtProvider) — it must never have a ForProvider representation, since it
-// does not exist on the IPv4 fixedaddress WAPI object (ADR-IN-0004).
+// does not exist on the IPv4 fixedaddress WAPI object (live-verified).
 func TestFixedAddressDUIDResponseOnly(t *testing.T) {
 	rd, ok := FindResource("fixedaddress")
 	if !ok {
@@ -1054,7 +1055,7 @@ func TestFixedAddressDUIDResponseOnly(t *testing.T) {
 		}
 		found = true
 		if f.Scope != FieldScopeResponse {
-			t.Errorf("DUID field Scope = %v, want FieldScopeResponse (IPv6-only, response-only per ADR-IN-0004)", f.Scope)
+			t.Errorf("DUID field Scope = %v, want FieldScopeResponse (IPv6-only, response-only per live verification)", f.Scope)
 		}
 	}
 	if !found {

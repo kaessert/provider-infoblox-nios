@@ -89,10 +89,11 @@ func isNotFound(err error) bool {
 	return convErr == nil && code == http.StatusNotFound
 }
 
-// Outcome classifies which row of the ADR-IN-0006 §2/§3 resolution
-// ladder Resolve took. Combined with the two typed refusal errors
-// (HandleReuseError, AmbiguousMatchError), every row of the ladder is
-// independently distinguishable by the caller.
+// Outcome classifies which row of the identity-resolution ladder
+// Resolve took (resolved, adopted, rotated, found-by-uid, or not-found).
+// Combined with the two typed refusal errors (HandleReuseError,
+// AmbiguousMatchError), every row of the ladder is independently
+// distinguishable by the caller.
 type Outcome int
 
 const (
@@ -142,12 +143,15 @@ func (o Outcome) String() string {
 	}
 }
 
-// Resolve implements the full ADR-IN-0006 §2 (and §3) identity resolution
-// ladder for a single NIOS object type T — a pointer to a generated SDK
-// struct such as *ibclient.RecordA. One generic implementation serves
-// every rotating-identifier resource in the catalog instead of ~22
-// bespoke natural-key fallbacks, each of which would have to reinvent
-// ownership verification.
+// Resolve implements the full identity resolution ladder for a single
+// NIOS object type T — a pointer to a generated SDK struct such as
+// *ibclient.RecordA. WAPI's only object handle (_ref) is a rendering of
+// the object's own mutable identity fields, so it rotates whenever those
+// fields change; Resolve verifies ownership through a UID stamped in an
+// extensible attribute instead of trusting the handle alone. One generic
+// implementation serves every rotating-identifier resource in the
+// catalog instead of ~22 bespoke natural-key fallbacks, each of which
+// would have to reinvent ownership verification.
 //
 // newEmpty must return a fresh, empty T on every call (the same value
 // the SDK's NewEmpty<Type> constructors return) — Resolve issues more
@@ -262,8 +266,8 @@ func resolveByRef[T ibclient.IBObject](conn ibclient.IBConnector, newEmpty func(
 	}
 }
 
-// searchByUID issues the identity-EA search (ADR-IN-0006 §3): every
-// object whose EAKey attribute equals uid. An empty result set is
+// searchByUID issues the identity-EA search: every object whose EAKey
+// attribute equals uid. An empty result set is
 // reported as zero matches, not an error — the SDK connector surfaces a
 // no-results search as a NotFoundError.
 func searchByUID[T ibclient.IBObject](conn ibclient.IBConnector, newEmpty func() T, uid string) ([]T, error) {
