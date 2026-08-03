@@ -422,17 +422,14 @@ func TestClusterCreateRefusesBlankUID(t *testing.T) {
 	}
 }
 
-// TestCreateNetworkViewGuardRejectsBlankButNotWhitespaceUID documents the
-// exact shape of createNetworkView's local uid guard: it checks strict
-// string equality against "", the same shape as the pilot ARecord
-// resource's validateARecordCreateInputs. Unlike identity.Resolve (which
-// trims whitespace before comparing on the Observe/Delete path), a
-// whitespace-only uid currently passes this Create-time guard and would
-// be stamped verbatim. A managed resource's metadata.uid is always a
-// Kubernetes-assigned UUID — never blank or whitespace-only in practice
-// — so this is recorded as a defense-in-depth gap (see the ticket
-// history) rather than exercised as a hard-error path here.
-func TestCreateNetworkViewGuardRejectsBlankButNotWhitespaceUID(t *testing.T) {
+// TestCreateNetworkViewGuardRejectsBlankUID documents the shape of
+// createNetworkView's own uid guard: it trims whitespace before
+// comparing against "", matching identity.Resolve's ladder and the
+// pilot ARecord resource's validateARecordCreateInputs. This test calls
+// createNetworkView directly, bypassing clusterExternal.Create's
+// equivalent guard, to prove the helper independently rejects a blank
+// uid before issuing any WAPI mutation.
+func TestCreateNetworkViewGuardRejectsBlankUID(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
