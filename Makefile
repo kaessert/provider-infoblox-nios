@@ -387,158 +387,185 @@ local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
 # uptest post-assert hook integration (which also runs update-tester as part
 # of the full `make e2e.<resource>` Create→Update→Import→Delete cycle) — use
 # these for a fast, standalone check against an already-deployed resource.
-UPDATE_TESTER := tools/update-tester/update-tester
-UPDATE_TESTER_SRC := $(wildcard tools/update-tester/*.go)
+#
+# The tool is consumed as a pinned module from tools/update-tester (a stub
+# module holding only go.mod/go.sum — no vendored source), so there is no
+# build step: `go -C` runs it directly from the module cache. Every manifest
+# argument is wrapped in $(abspath …) because `go -C tools/update-tester`
+# changes the child process's working directory, so a path that is correct
+# from the repo root would otherwise resolve against tools/update-tester/.
+UPDATE_TESTER := go -C tools/update-tester tool crossplane-update-tester
 
-$(UPDATE_TESTER): $(UPDATE_TESTER_SRC)
-	@if [ -z "$(UPDATE_TESTER_SRC)" ]; then \
-	  echo "tools/update-tester is not scaffolded yet for this provider" >&2; \
-	  exit 1; \
-	fi
-	cd tools/update-tester && go build -o update-tester .
+update-test.record-aaaa:
+	$(UPDATE_TESTER) converge $(abspath examples/record-aaaa/record-aaaa.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-aaaa/record-aaaa.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-aaaa/record-aaaa-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-aaaa/record-aaaa-namespaced.yaml)
 
-update-test.record-aaaa: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-aaaa/record-aaaa.yaml
-	$(UPDATE_TESTER) run examples/record-aaaa/record-aaaa.yaml
-	$(UPDATE_TESTER) converge examples/record-aaaa/record-aaaa-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-aaaa/record-aaaa-namespaced.yaml
+update-test.record-alias:
+	$(UPDATE_TESTER) converge $(abspath examples/record-alias/record-alias.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-alias/record-alias.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-alias/record-alias-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-alias/record-alias-namespaced.yaml)
 
-update-test.record-alias: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-alias/record-alias.yaml
-	$(UPDATE_TESTER) run examples/record-alias/record-alias.yaml
-	$(UPDATE_TESTER) converge examples/record-alias/record-alias-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-alias/record-alias-namespaced.yaml
+update-test.record-ptr:
+	$(UPDATE_TESTER) converge $(abspath examples/record-ptr/record-ptr.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ptr/record-ptr.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-ptr/record-ptr-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ptr/record-ptr-namespaced.yaml)
 
-update-test.record-ptr: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-ptr/record-ptr.yaml
-	$(UPDATE_TESTER) run examples/record-ptr/record-ptr.yaml
-	$(UPDATE_TESTER) converge examples/record-ptr/record-ptr-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-ptr/record-ptr-namespaced.yaml
+update-test.record-srv:
+	$(UPDATE_TESTER) converge $(abspath examples/record-srv/record-srv.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-srv/record-srv.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-srv/record-srv-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-srv/record-srv-namespaced.yaml)
 
-update-test.record-srv: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-srv/record-srv.yaml
-	$(UPDATE_TESTER) run examples/record-srv/record-srv.yaml
-	$(UPDATE_TESTER) converge examples/record-srv/record-srv-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-srv/record-srv-namespaced.yaml
+update-test.record-txt:
+	$(UPDATE_TESTER) converge $(abspath examples/record-txt/record-txt.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-txt/record-txt.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-txt/record-txt-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-txt/record-txt-namespaced.yaml)
 
-update-test.record-txt: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-txt/record-txt.yaml
-	$(UPDATE_TESTER) run examples/record-txt/record-txt.yaml
-	$(UPDATE_TESTER) converge examples/record-txt/record-txt-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-txt/record-txt-namespaced.yaml
+update-test.zone-delegated:
+	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
 
-update-test.zone-delegated: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/zone-delegated/zone-delegated.yaml
-	$(UPDATE_TESTER) run examples/zone-delegated/zone-delegated.yaml
-	$(UPDATE_TESTER) converge examples/zone-delegated/zone-delegated-namespaced.yaml
-	$(UPDATE_TESTER) run examples/zone-delegated/zone-delegated-namespaced.yaml
+update-test.zone-auth:
+	$(UPDATE_TESTER) converge $(abspath examples/zone-auth/zone-auth.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-auth/zone-auth.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/zone-auth/zone-auth-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-auth/zone-auth-namespaced.yaml)
 
-update-test.zone-auth: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/zone-auth/zone-auth.yaml
-	$(UPDATE_TESTER) run examples/zone-auth/zone-auth.yaml
-	$(UPDATE_TESTER) converge examples/zone-auth/zone-auth-namespaced.yaml
-	$(UPDATE_TESTER) run examples/zone-auth/zone-auth-namespaced.yaml
-
-update-test.ipv4-shared-network: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network.yaml
-	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network.yaml
-	$(UPDATE_TESTER) converge examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
-	$(UPDATE_TESTER) run examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+update-test.ipv4-shared-network:
+	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
 
 .PHONY: update-test.record-aaaa update-test.record-alias update-test.record-ns update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network update-test.dtc-server update-test.extensible-attribute-def
-update-test.record-ns: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-ns/record-ns.yaml
-	$(UPDATE_TESTER) run examples/record-ns/record-ns.yaml
-	$(UPDATE_TESTER) converge examples/record-ns/record-ns-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-ns/record-ns-namespaced.yaml
+update-test.record-ns:
+	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns-namespaced.yaml)
 
-update-test.dtc-server: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/dtc-server/dtc-server.yaml
-	$(UPDATE_TESTER) run examples/dtc-server/dtc-server.yaml
-	$(UPDATE_TESTER) converge examples/dtc-server/dtc-server-namespaced.yaml
-	$(UPDATE_TESTER) run examples/dtc-server/dtc-server-namespaced.yaml
+update-test.dtc-server:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
 
-update-test.extensible-attribute-def: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/extensible-attribute-def/extensible-attribute-def.yaml
-	$(UPDATE_TESTER) run examples/extensible-attribute-def/extensible-attribute-def.yaml
-	$(UPDATE_TESTER) converge examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
-	$(UPDATE_TESTER) run examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+update-test.extensible-attribute-def:
+	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
 
 
-update-test.network-view: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/network-view/network-view.yaml
-	$(UPDATE_TESTER) run examples/network-view/network-view.yaml
-	$(UPDATE_TESTER) converge examples/network-view/network-view-namespaced.yaml
-	$(UPDATE_TESTER) run examples/network-view/network-view-namespaced.yaml
+update-test.network-view:
+	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view-namespaced.yaml)
 
 .PHONY: update-test.network-view
-update-test.host-record: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/host-record/host-record.yaml
-	$(UPDATE_TESTER) run examples/host-record/host-record.yaml
-	$(UPDATE_TESTER) converge examples/host-record/host-record-namespaced.yaml
-	$(UPDATE_TESTER) run examples/host-record/host-record-namespaced.yaml
+update-test.host-record:
+	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record-namespaced.yaml)
 
-update-test.network: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/network/network.yaml
-	$(UPDATE_TESTER) run examples/network/network.yaml
-	$(UPDATE_TESTER) converge examples/network/network-namespaced.yaml
-	$(UPDATE_TESTER) run examples/network/network-namespaced.yaml
+update-test.network:
+	$(UPDATE_TESTER) converge $(abspath examples/network/network.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network/network.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network/network-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network/network-namespaced.yaml)
 
-update-test.range-template: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/range-template/range-template.yaml
-	$(UPDATE_TESTER) run examples/range-template/range-template.yaml
-	$(UPDATE_TESTER) converge examples/range-template/range-template-namespaced.yaml
-	$(UPDATE_TESTER) run examples/range-template/range-template-namespaced.yaml
+update-test.range-template:
+	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template-namespaced.yaml)
 
-update-test.network-container: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/network-container/network-container.yaml
-	$(UPDATE_TESTER) run examples/network-container/network-container.yaml
-	$(UPDATE_TESTER) converge examples/network-container/network-container-namespaced.yaml
-	$(UPDATE_TESTER) run examples/network-container/network-container-namespaced.yaml
+update-test.network-container:
+	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container-namespaced.yaml)
 
-update-test.fixed-address: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/fixed-address/fixed-address.yaml
-	$(UPDATE_TESTER) run examples/fixed-address/fixed-address.yaml
-	$(UPDATE_TESTER) converge examples/fixed-address/fixed-address-namespaced.yaml
-	$(UPDATE_TESTER) run examples/fixed-address/fixed-address-namespaced.yaml
+update-test.fixed-address:
+	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
 
-update-test.zone-forward: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/zone-forward/zone-forward.yaml
-	$(UPDATE_TESTER) run examples/zone-forward/zone-forward.yaml
-	$(UPDATE_TESTER) converge examples/zone-forward/zone-forward-namespaced.yaml
-	$(UPDATE_TESTER) run examples/zone-forward/zone-forward-namespaced.yaml
+update-test.zone-forward:
+	$(UPDATE_TESTER) converge $(abspath examples/zone-forward/zone-forward.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-forward/zone-forward.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/zone-forward/zone-forward-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-forward/zone-forward-namespaced.yaml)
 
-update-test.range: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/range/range.yaml
-	$(UPDATE_TESTER) run examples/range/range.yaml
-	$(UPDATE_TESTER) converge examples/range/range-namespaced.yaml
-	$(UPDATE_TESTER) run examples/range/range-namespaced.yaml
+update-test.range:
+	$(UPDATE_TESTER) converge $(abspath examples/range/range.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range/range.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/range/range-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range/range-namespaced.yaml)
 
 .PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated update-test.host-record update-test.network update-test.range-template update-test.network-container update-test.fixed-address update-test.zone-forward update-test.range
 
-update-test.dns-view: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/dns-view/dns-view.yaml
-	$(UPDATE_TESTER) run examples/dns-view/dns-view.yaml
-	$(UPDATE_TESTER) converge examples/dns-view/dns-view-namespaced.yaml
-	$(UPDATE_TESTER) run examples/dns-view/dns-view-namespaced.yaml
+update-test.dns-view:
+	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view-namespaced.yaml)
 
 .PHONY: update-test.dns-view
 
-update-test.dtc-pool: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/dtc-pool/dtc-pool.yaml
-	$(UPDATE_TESTER) run examples/dtc-pool/dtc-pool.yaml
-	$(UPDATE_TESTER) converge examples/dtc-pool/dtc-pool-namespaced.yaml
-	$(UPDATE_TESTER) run examples/dtc-pool/dtc-pool-namespaced.yaml
+update-test.dtc-pool:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
 
 .PHONY: update-test.dtc-pool
 
-update-test.dtc-lbdn: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/dtc-lbdn/dtc-lbdn.yaml
-	$(UPDATE_TESTER) run examples/dtc-lbdn/dtc-lbdn.yaml
-	$(UPDATE_TESTER) converge examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
-	$(UPDATE_TESTER) run examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
+update-test.dtc-lbdn:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
 
 .PHONY: update-test.dtc-lbdn
+
+# ====================================================================================
+# test.tools: unit tests for standalone tool modules and hook scripts
+#
+# Iterates every tools/*/go.mod directory and every test/hooks/*_test.sh,
+# running whichever exist. A tools/*/ module that declares only a `tool`
+# directive (e.g. tools/update-tester, a stub module with no Go files of its
+# own) has nothing to test — `go test ./...` exits non-zero in a
+# package-less module, so it is skipped via a `go list ./...` guard rather
+# than being allowed to fail the recipe.
+test.tools: ## Run unit tests for tools/*/ modules and test/hooks/*_test.sh
+	@rc=0; for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \;); do \
+		[ -n "$$(cd $$d && go list ./... 2>/dev/null)" ] || continue; \
+		$(INFO) go test $$d; \
+		(cd $$d && go test ./... -count=1) || rc=1; \
+	done; [ $$rc -eq 0 ] || $(FAIL)
+	@for s in test/hooks/*_test.sh; do \
+		[ -e "$$s" ] || continue; \
+		$(INFO) running $$s; \
+		bash "$$s" || exit 1; \
+	done
+	@$(OK) tool tests passed
+
+.PHONY: test.tools
+
+# Fold test.tools into the documented DoD gate so a broken tool-module test
+# blocks review the same way a broken provider test does.
+reviewable: test.tools
 
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration
@@ -678,23 +705,19 @@ help-special: crossplane.help
 
 .PHONY: crossplane.help help-special
 
-update-test.record-cname: $(UPDATE_TESTER) ## Update test for CNAMERecord (per-field convergence check)
-	@if [ -x $(UPDATE_TESTER) ]; then \
-	  $(UPDATE_TESTER) converge examples/record-cname/record-cname.yaml; \
-	  $(UPDATE_TESTER) run examples/record-cname/record-cname.yaml; \
-	  $(UPDATE_TESTER) converge examples/record-cname/record-cname-namespaced.yaml; \
-	  $(UPDATE_TESTER) run examples/record-cname/record-cname-namespaced.yaml; \
-	else \
-	  echo "update-test.record-cname: update-tester not available yet — no-op"; \
-	fi
+update-test.record-cname: ## Update test for CNAMERecord (per-field convergence check)
+	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname-namespaced.yaml)
 
 .PHONY: update-test.record-cname
 
-update-test.record-mx: $(UPDATE_TESTER)
-	$(UPDATE_TESTER) converge examples/record-mx/record-mx.yaml
-	$(UPDATE_TESTER) run examples/record-mx/record-mx.yaml
-	$(UPDATE_TESTER) converge examples/record-mx/record-mx-namespaced.yaml
-	$(UPDATE_TESTER) run examples/record-mx/record-mx-namespaced.yaml
+update-test.record-mx:
+	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx-namespaced.yaml)
 
 .PHONY: update-test.record-mx
 
@@ -718,11 +741,7 @@ update-test.record-mx: $(UPDATE_TESTER)
 # manifest filename convention (*-namespaced.yaml) against the resolved scope
 # so a future naming drift fails loudly instead of silently validating
 # against the wrong types file.
-update-test.validate: $(UPDATE_TESTER)
-	@if [ ! -x $(UPDATE_TESTER) ]; then \
-	  echo "update-test.validate: update-tester not available yet — no-op"; \
-	  exit 0; \
-	fi
+update-test.validate:
 	@fail=0; \
 	for f in $$(grep -rl 'crossplane.io/update-test' examples --include='*.yaml' | sort); do \
 	  av=$$(awk '/^apiVersion:/ {print $$2; exit}' "$$f"); \
@@ -753,7 +772,7 @@ update-test.validate: $(UPDATE_TESTER)
 	    continue; \
 	  fi; \
 	  echo "=== $$f ($$types) ==="; \
-	  $(UPDATE_TESTER) validate --types-file "$$types" "$$f" || fail=1; \
+	  $(UPDATE_TESTER) validate --types-file "$$PWD/$$types" "$$PWD/$$f" || fail=1; \
 	done; \
 	exit $$fail
 
