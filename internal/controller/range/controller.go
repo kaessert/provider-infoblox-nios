@@ -424,7 +424,7 @@ func observeFromRange(externalID string, rng *ibclient.Range) observedRange {
 // serverAssociation/msServer are not exposed by the CRD and are always
 // passed at their zero value.
 func createRange(objMgr ibclient.IBObjectManager, startAddr, endAddr, networkView, network, template, comment *string, extAttrs map[string]string, uid string) (*ibclient.Range, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

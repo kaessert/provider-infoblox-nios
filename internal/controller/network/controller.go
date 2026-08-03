@@ -467,7 +467,7 @@ func observeFromNetwork(externalID string, nw *ibclient.Network) observedNetwork
 // the object's extensible attributes in the same request that creates it
 // (identity.Stamp).
 func createNetwork(objMgr ibclient.IBObjectManager, networkView, cidr, comment *string, extAttrs map[string]string, uid string) (*ibclient.Network, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	c := strOrEmpty(cidr)
@@ -502,7 +502,7 @@ func createNetwork(objMgr ibclient.IBObjectManager, networkView, cidr, comment *
 // object's extensible attributes in the same request that creates it
 // (identity.Stamp).
 func createOrAllocateNetwork(objMgr ibclient.IBObjectManager, networkView, network, parentCidr, comment, object *string, allocatePrefixLen *uint, filterParams, extAttrs map[string]string, uid string) (*ibclient.Network, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	if strOrEmpty(parentCidr) != "" && len(filterParams) > 0 {

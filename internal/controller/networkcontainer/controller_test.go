@@ -613,6 +613,35 @@ func TestCreateNetworkContainerRefusesEmptyUID(t *testing.T) {
 	}
 }
 
+// TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests proves the
+// Create path rejects a whitespace-only uid before issuing any WAPI
+// call — createOrAllocateNetworkContainer's guard trims before
+// comparing, matching identity.Resolve's ladder (see
+// internal/clients/identity). Without the trim, a whitespace-only uid
+// would pass Create's guard and get stamped verbatim into the object's
+// extensible attributes, while Observe/Delete (which route through
+// identity.Resolve) would treat that same object as unowned.
+func TestClusterCreateWhitespaceUIDFailsWithZeroMutatingRequests(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	cr := newClusterNetworkContainer("my-container", "my-container")
+	cr.UID = "   "
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+
+	if _, err := e.Create(context.Background(), cr); err == nil {
+		t.Fatal("Create: want a hard error for a whitespace-only uid, got nil")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.containers) != 0 {
+		t.Errorf("Create: len(m.containers) = %d, want 0 — a whitespace-only uid must not create anything", len(m.containers))
+	}
+}
+
 // ── Update ───────────────────────────────────────────────────────────────
 
 func TestClusterUpdateReassertsIdentityStamp(t *testing.T) {

@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"strings"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -192,7 +193,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 // the CIDR format.
 func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.Network) (managed.ExternalCreation, error) {
 	uid := string(cr.GetUID())
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return managed.ExternalCreation{}, errors.New(errEmptyUID)
 	}
 	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {

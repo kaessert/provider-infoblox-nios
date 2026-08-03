@@ -687,7 +687,7 @@ func lateInitialize(networkView, comment **string, disable, useOptions **bool, e
 // follow-up call, so there is no window in which the object exists
 // without its identity stamp.
 func createIPv4SharedNetwork(objMgr ibclient.IBObjectManager, name *string, networks []string, networkView *string, comment *string, extAttrs map[string]string, disable, useOptions *bool, options []sharedNetworkDhcpOption, uid string) (*ibclient.SharedNetwork, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

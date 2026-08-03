@@ -431,7 +431,7 @@ func observeFromNetworkContainer(externalID string, nc *ibclient.NetworkContaine
 // uid into the object's extensible attributes in the same request that
 // creates it (identity.Stamp).
 func createNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	cidr := strOrEmpty(network)
@@ -464,7 +464,7 @@ func createNetworkContainer(objMgr ibclient.IBObjectManager, networkView, networ
 // object's extensible attributes in the same request that creates it
 // (identity.Stamp).
 func createOrAllocateNetworkContainer(objMgr ibclient.IBObjectManager, networkView, network, parentCidr, comment *string, allocatePrefixLen *uint, filterParams, extAttrs map[string]string, uid string) (*ibclient.NetworkContainer, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	if strOrEmpty(parentCidr) != "" && len(filterParams) > 0 {
