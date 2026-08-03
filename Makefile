@@ -6,7 +6,7 @@ PROJECT_REPO := github.com/crossplane-contrib/provider-infoblox-nios
 PLATFORMS ?= linux_amd64 linux_arm64
 
 # Source .env credentials for E2E tests if present (optional fallback).
-# Primary credential source: Hive nest secrets / CI secrets (env vars).
+# Primary credential source: environment variables / CI secrets.
 # .env format is KEY=VALUE (no `export` prefix) — valid GNU Make syntax.
 # Note: ROOT_DIR is not yet set (common.mk sets it), so we use CURDIR.
 ifneq (,$(wildcard $(CURDIR)/../.env))
@@ -278,7 +278,7 @@ e2e-preflight: ## Validate credentials before E2E
 	[ -z "$${INFOBLOX_PASS:-}" ] && MISSING="$$MISSING INFOBLOX_PASS"; \
 	if [ -n "$$MISSING" ]; then \
 	  echo "ERROR: E2E requires a real NIOS Grid Manager. Missing env var(s):$$MISSING" >&2; \
-	  echo "  Set them as env vars (Hive nest secrets) or in ../.env" >&2; \
+	  echo "  Set them as env vars or in ../.env" >&2; \
 	  exit 1; \
 	fi
 	@echo "e2e-preflight: credentials OK"
