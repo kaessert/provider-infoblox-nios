@@ -34,7 +34,7 @@ metadata:
     # rationale.
     crossplane.io/update-test: |
       - field: nameserver
-        skip: "part of this record's natural key (name, view, nameserver); name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component and must not be set to a shared literal value — doing so would converge every concurrent run onto the same natural key at Update time. Mutability is exercised structurally by every other DNS record's update-test via the shared _ref-rotation-on-update code path (see record-a.yaml's name skip and record-srv.yaml's priority field)"
+        skip: "immutable after creation — enforced by a CEL rule on the CRD (self == oldSelf); an apply that changes it is rejected at admission and never reaches the controller, so no update-test can run against it. The field is also part of this record's natural key (name, view, nameserver), which is why it carries the run token instead of a literal value: name/view are shared Grid context across every concurrent E2E run of this scope, so nameserver is the run's only isolating identity component"
       - field: msDelegationName
         skip: "MS delegation point name — only persisted on Microsoft/AD-integrated zones; NIOS silently drops it (HTTP 200, field absent from the response) on ordinary Grid-managed zones"
       - field: addresses
