@@ -634,10 +634,35 @@ func observeRefFor(crName, externalName string) string {
 	return externalName
 }
 
+// newZoneDelegatedForResolve constructs the empty ZoneDelegated the
+// identity ladder's GET-by-ref and search-by-UID calls populate their
+// response into.
+//
+// ibclient.NewEmptyZoneDelegated (the SDK's own constructor for exactly
+// this purpose) requests "comment", "disable", "locked", "ns_group",
+// "delegated_ttl", "extattrs", and "zone_format" as extra return fields
+// but omits "use_delegated_ttl" — confirmed against
+// ibclient.NewZoneDelegated, the sibling constructor Create/Update use,
+// which requests it correctly. use_delegated_ttl is not one of WAPI's
+// always-returned base fields, so any GET/search built from the SDK's
+// own constructor comes back with it silently absent. That absence,
+// not a comparison or update-assembly bug, is why AtProvider never
+// showed the field on any Observe after the first: every reconcile
+// re-resolves through this ladder, decoding UseDelegatedTtl as nil each
+// time regardless of what value Update actually wrote to the Grid, so
+// isUpToDate perpetually re-detects drift against a phantom "unset"
+// observation and Update fires again next cycle without the loop ever
+// being visible in status.
+func newZoneDelegatedForResolve() *ibclient.ZoneDelegated {
+	z := ibclient.NewEmptyZoneDelegated()
+	z.SetReturnFields(append(z.ReturnFields(), "use_delegated_ttl"))
+	return z
+}
+
 // resolveZoneDelegatedIdentity resolves the ZoneDelegated identified by
 // ref/uid through the shared UID-in-EA ladder.
 func resolveZoneDelegatedIdentity(ctx context.Context, conn ibclient.IBConnector, ref, uid string) (*ibclient.ZoneDelegated, identity.Outcome, error) {
-	return identity.Resolve[*ibclient.ZoneDelegated](ctx, conn, ibclient.NewEmptyZoneDelegated, ref, uid)
+	return identity.Resolve[*ibclient.ZoneDelegated](ctx, conn, newZoneDelegatedForResolve, ref, uid)
 }
 
 // observeResult bundles the shared parts of resolving and inspecting a
