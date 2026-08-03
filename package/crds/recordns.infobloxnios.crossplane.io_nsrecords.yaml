@@ -113,9 +113,10 @@ spec:
                       only one of those three components WAPI does not already reject
                       an update for. Changing it in place would rotate the handle
                       out from under the provider with no way to re-establish which
-                      live object the resource still refers to, so the provider requires
-                      delete-and-recreate instead of accepting an update it cannot
-                      safely track.'
+                      live object the resource still refers to, so an apply that changes
+                      it is rejected by the API server and the existing record is
+                      left unchanged. An operator who needs a different name server
+                      replaces the resource deliberately.'
                     type: string
                     x-kubernetes-validations:
                     - message: nameserver is immutable after creation
@@ -334,9 +335,10 @@ spec:
                       only one of those three components WAPI does not already reject
                       an update for. Changing it in place would rotate the handle
                       out from under the provider with no way to re-establish which
-                      live object the resource still refers to, so the provider requires
-                      delete-and-recreate instead of accepting an update it cannot
-                      safely track.'
+                      live object the resource still refers to, so an apply that changes
+                      it is rejected by the API server and the existing record is
+                      left unchanged. An operator who needs a different name server
+                      replaces the resource deliberately.'
                     type: string
                     x-kubernetes-validations:
                     - message: nameserver is immutable after creation

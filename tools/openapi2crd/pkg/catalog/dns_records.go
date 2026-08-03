@@ -955,7 +955,7 @@ func nsRecord() ResourceDescriptor {
 				Scope:       FieldScopeBoth,
 				Required:    true,
 				Immutable:   true,
-				Description: "FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable anyway: this object's server-assigned handle is derived from (view, name, nameserver), and it is the only one of those three components WAPI does not already reject an update for. Changing it in place would rotate the handle out from under the provider with no way to re-establish which live object the resource still refers to, so the provider requires delete-and-recreate instead of accepting an update it cannot safely track.",
+				Description: "FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable anyway: this object's server-assigned handle is derived from (view, name, nameserver), and it is the only one of those three components WAPI does not already reject an update for. Changing it in place would rotate the handle out from under the provider with no way to re-establish which live object the resource still refers to, so an apply that changes it is rejected by the API server and the existing record is left unchanged. An operator who needs a different name server replaces the resource deliberately.",
 			},
 			{
 				Name:        "View",
