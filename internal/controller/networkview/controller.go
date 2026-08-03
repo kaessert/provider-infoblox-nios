@@ -401,7 +401,7 @@ func observeFromNetworkView(externalID string, nv *ibclient.NetworkView) observe
 // call, so there is no window in which the object exists without its
 // identity stamp.
 func createNetworkView(objMgr ibclient.IBObjectManager, name, comment *string, extAttrs map[string]string, uid string) (*ibclient.NetworkView, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

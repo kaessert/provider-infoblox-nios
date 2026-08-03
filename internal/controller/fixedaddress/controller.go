@@ -866,7 +866,7 @@ func observeFromFixedAddress(externalID string, fa *ibclient.FixedAddress) obser
 // (identity.Stamp) — there is no follow-up call, so there is no window in
 // which the object exists without its identity stamp.
 func createFixedAddress(objMgr ibclient.IBObjectManager, f fixedAddressFields, uid string) (*ibclient.FixedAddress, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	isIPv6 := f.isIPv6()

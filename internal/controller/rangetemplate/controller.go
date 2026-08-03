@@ -703,7 +703,7 @@ const wapiCloudAPICompatible = true
 // identity stamp. cloud_api_compatible is always sent as true — see
 // wapiCloudAPICompatible's doc comment for why.
 func createRangeTemplate(objMgr ibclient.IBObjectManager, name *string, numberOfAddresses, offset *uint32, comment *string, extAttrs map[string]string, options []templateOption, useOptions *bool, serverAssociationType string, failoverAssociation *string, member *templateMember, msServer *string, uid string) (*ibclient.Rangetemplate, error) {
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return nil, errors.New(errEmptyUID)
 	}
 	ea := identity.Stamp(buildEA(extAttrs), uid)

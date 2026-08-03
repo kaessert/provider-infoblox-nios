@@ -2,6 +2,7 @@ package ipv4sharednetwork
 
 import (
 	"context"
+	"strings"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
@@ -201,7 +202,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 // name.
 func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.IPv4SharedNetwork) (managed.ExternalCreation, error) {
 	uid := string(cr.GetUID())
-	if uid == "" {
+	if strings.TrimSpace(uid) == "" {
 		return managed.ExternalCreation{}, errors.New(errEmptyUID)
 	}
 	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
