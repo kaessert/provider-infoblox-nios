@@ -223,6 +223,14 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.clients.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	rec, err := updateDtcPool(e.clients.conn, externalID, p.Name, p.LBPreferredMethod, p.LBAlternateMethod, p.Comment, serversFromNamespaced(p.Servers), p.Availability, p.Quorum, p.LBPreferredTopology, dynRatioFromNamespaced(p.LBDynamicRatioPreferred), p.LBAlternateTopology, dynRatioFromNamespaced(p.LBDynamicRatioAlternate), monitorsFromNamespaced(p.Monitors), p.Disable, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateDTCPool)

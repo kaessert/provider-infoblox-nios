@@ -92,6 +92,12 @@ const (
 	testUIDNamespaced = "test-uid-namespaced"
 )
 
+// errBodyEADefUnprivileged is the WAPI response body a Grid returns when
+// the configured credential lacks the superuser privilege required to
+// create the identity extensible attribute definition — used by the
+// prerequisite-probe refusal tests.
+const errBodyEADefUnprivileged = `{"Error":"AdmConAuthError: Not authorized"}`
+
 func stringPtr(s string) *string { return &s }
 func uint32Ptr(i uint32) *uint32 { return &i }
 func boolPtr(b bool) *bool       { return &b }
@@ -875,6 +881,98 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// unconditional Update guard: when the identity extensible attribute
+// definition is absent but the configured credential can create one, the
+// probe auto-creates it before the mutating PUT, and the update proceeds
+// normally — this is the exact path a pre-existing, unstamped object hits
+// on every reconcile (Observe resolves it as OutcomeAdopted, forcing
+// Update), so the auto-create must be reachable from here, not just from
+// Create.
+func TestClusterUpdatePrerequisiteAutoCreates(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	ref := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		View:       &view,
+		Comment:    stringPtr("old comment"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newClusterAliasRecord("my-alias", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	createCalls := m.eaDefCreateCalls
+	m.mu.Unlock()
+	if !defExists {
+		t.Error("Update: eaDefExists = false, want true — the prerequisite probe must auto-create the identity definition before the mutating call")
+	}
+	if createCalls != 1 {
+		t.Errorf("Update: eaDefCreateCalls = %d, want exactly 1", createCalls)
+	}
+}
+
+// TestClusterUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
+// §6's unconditional Update guard on the refusal side: when the identity
+// extensible attribute definition is absent and the configured credential
+// cannot create one, Update returns the typed PrerequisiteError (not a raw
+// wrapped WAPI 400) and issues no mutating call — the object is left
+// exactly as it was.
+func TestClusterUpdatePrerequisiteRefusesUncreatable(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = errBodyEADefUnprivileged
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	ref := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		View:       &view,
+		Comment:    stringPtr("old comment"),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newClusterAliasRecord("my-alias", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Update: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if defExists {
+		t.Error("Update: eaDefExists = true, want false — a refused create must not be treated as success")
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q — a refused prerequisite must issue no mutating call", got, ref)
+	}
+}
+
 func TestClusterUpdateDoesNotSendImmutableField(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewServer(m.handler())
@@ -928,6 +1026,10 @@ func TestClusterUpdateRefChangeUpdatesExternalName(t *testing.T) {
 	newRef := "record:alias/test2:new.example.com/default"
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
 	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.PathValue("ref"); got != oldRef {
 			t.Errorf("PUT: unexpected ref in request path: %q, want %q", got, oldRef)
@@ -1477,6 +1579,96 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.TargetName == nil || *stored.TargetName != "other-target.example.com" {
 		t.Errorf("Update: stored targetName = %v, want other-target.example.com", stored.TargetName)
+	}
+}
+
+// TestNamespacedUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// unconditional Update guard: when the identity extensible attribute
+// definition is absent but the configured credential can create one, the
+// probe auto-creates it before the mutating PUT, and the update proceeds
+// normally — this is the exact path a pre-existing, unstamped object hits
+// on every reconcile (Observe resolves it as OutcomeAdopted, forcing
+// Update), so the auto-create must be reachable from here, not just from
+// Create.
+func TestNamespacedUpdatePrerequisiteAutoCreates(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	ref := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		View:       &view,
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
+	cr.Spec.ForProvider.TargetName = stringPtr("other-target.example.com")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	createCalls := m.eaDefCreateCalls
+	m.mu.Unlock()
+	if !defExists {
+		t.Error("Update: eaDefExists = false, want true — the prerequisite probe must auto-create the identity definition before the mutating call")
+	}
+	if createCalls != 1 {
+		t.Errorf("Update: eaDefCreateCalls = %d, want exactly 1", createCalls)
+	}
+}
+
+// TestNamespacedUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
+// §6's unconditional Update guard on the refusal side: when the identity
+// extensible attribute definition is absent and the configured credential
+// cannot create one, Update returns the typed PrerequisiteError (not a raw
+// wrapped WAPI 400) and issues no mutating call — the object is left
+// exactly as it was.
+func TestNamespacedUpdatePrerequisiteRefusesUncreatable(t *testing.T) {
+	m := newMockWapiServer()
+	m.eaDefExists = false
+	m.eaDefCreateStatus = http.StatusForbidden
+	m.eaDefCreateBody = errBodyEADefUnprivileged
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	view := testDefault
+	ref := m.seed(&ibclient.RecordAlias{
+		Name:       stringPtr("alias.example.com"),
+		TargetName: stringPtr("target.example.com"),
+		TargetType: "A",
+		View:       &view,
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber()}
+	cr := newNamespacedAliasRecord(testDefault, "my-alias", ref, "ProviderConfig")
+	cr.Spec.ForProvider.TargetName = stringPtr("other-target.example.com")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Update: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if defExists {
+		t.Error("Update: eaDefExists = true, want false — a refused create must not be treated as success")
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q — a refused prerequisite must issue no mutating call", got, ref)
 	}
 }
 
@@ -2904,6 +3096,10 @@ func TestClusterUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) {
 	newRef := "record:alias/test2:new.example.com/default"
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
 	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.PathValue("ref"); got != oldRef {
 			t.Errorf("PUT: unexpected ref in request path: %q, want %q", got, oldRef)
@@ -2943,6 +3139,10 @@ func TestNamespacedUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) 
 	newRef := "record:alias/test2:new.example.com/default"
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
 	mux.HandleFunc("PUT /wapi/v"+wapiVersion+"/{ref...}", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.PathValue("ref"); got != oldRef {
 			t.Errorf("PUT: unexpected ref in request path: %q, want %q", got, oldRef)
@@ -2993,7 +3193,7 @@ func TestClusterObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T)
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConAuthError: Not authorized"}`
+	m.eaDefCreateBody = errBodyEADefUnprivileged
 	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -3141,7 +3341,7 @@ func TestClusterDeleteSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.T) 
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConAuthError: Not authorized"}`
+	m.eaDefCreateBody = errBodyEADefUnprivileged
 	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -3195,7 +3395,7 @@ func TestNamespacedObserveSurfacesPrerequisiteErrorFromIdentitySearch(t *testing
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConAuthError: Not authorized"}`
+	m.eaDefCreateBody = errBodyEADefUnprivileged
 	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
@@ -3249,7 +3449,7 @@ func TestNamespacedDeleteSurfacesPrerequisiteErrorFromIdentitySearch(t *testing.
 	m := newMockWapiServer()
 	m.eaDefExists = false
 	m.eaDefCreateStatus = http.StatusForbidden
-	m.eaDefCreateBody = `{"Error":"AdmConAuthError: Not authorized"}`
+	m.eaDefCreateBody = errBodyEADefUnprivileged
 	m.undefinedEASearch = true
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()

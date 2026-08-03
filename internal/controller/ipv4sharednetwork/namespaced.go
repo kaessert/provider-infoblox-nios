@@ -226,6 +226,14 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	sn, err := updateIPv4SharedNetwork(e.objMgr, externalID, p.Name, p.Networks, p.NetworkView, p.Comment, p.ExtAttrs, p.Disable, p.UseOptions, optionsFromNamespaced(p.Options), string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateIPv4SharedNet)

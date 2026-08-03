@@ -190,6 +190,14 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.DTCLBD
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.clients.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	rec, err := updateDtcLbdn(e.clients.conn, externalID, p.Name, p.LBMethod, p.Patterns, poolsFromCluster(p.Pools), p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateDTCLBDN)

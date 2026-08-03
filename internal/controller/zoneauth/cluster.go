@@ -301,9 +301,17 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ZoneAu
 // (immutable) are never sent — see buildZoneAuthForUpdate. Every call
 // re-asserts the identity stamp since a WAPI PUT carrying extattrs
 // replaces the whole map rather than merging it.
-func (e *clusterExternal) Update(_ context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalUpdate, error) {
+func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneAuth) (managed.ExternalUpdate, error) {
 	f := clusterFieldsFromSpec(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
+
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
 
 	if err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)

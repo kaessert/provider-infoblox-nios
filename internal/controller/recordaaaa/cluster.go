@@ -206,6 +206,14 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AAAARe
 	p := cr.Spec.ForProvider
 	externalID := meta.GetExternalName(cr)
 
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	rec, err := updateAAAARecord(e.objMgr, externalID, p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	if err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateAAAARecord)

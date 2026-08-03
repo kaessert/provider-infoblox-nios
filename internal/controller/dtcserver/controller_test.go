@@ -744,6 +744,86 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	}
 }
 
+// TestClusterUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// unconditional Update guard: when the identity extensible attribute
+// definition is absent but the configured credential can create one, the
+// probe auto-creates it before the mutating PUT, and the update proceeds
+// normally — this is the exact path a pre-existing, unstamped object hits
+// on every reconcile (Observe resolves it as OutcomeAdopted, forcing
+// Update), so the auto-create must be reachable from here, not just from
+// Create.
+func TestClusterUpdatePrerequisiteAutoCreates(t *testing.T) {
+	m := newMockDtcServerServer()
+	m.eaDefExists = false
+	m.eaDefCreatable = true
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name:    stringPtr("my-dtc-server"),
+		Host:    stringPtr("2.3.4.5"),
+		Comment: stringPtr("old comment"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber()}
+	cr := newClusterDTCServer("my-dtcserver", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if !defExists {
+		t.Error("Update: eaDefExists = false, want true — the prerequisite probe must auto-create the identity definition before the mutating call")
+	}
+}
+
+// TestClusterUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
+// §6's unconditional Update guard on the refusal side: when the identity
+// extensible attribute definition is absent and the configured credential
+// cannot create one, Update returns the typed PrerequisiteError (not a raw
+// wrapped WAPI 400) and issues no mutating call — the object is left
+// exactly as it was.
+func TestClusterUpdatePrerequisiteRefusesUncreatable(t *testing.T) {
+	m := newMockDtcServerServer()
+	m.eaDefExists = false
+	m.eaDefCreatable = false
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name:    stringPtr("my-dtc-server"),
+		Host:    stringPtr("2.3.4.5"),
+		Comment: stringPtr("old comment"),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber()}
+	cr := newClusterDTCServer("my-dtcserver", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("new comment")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Update: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if defExists {
+		t.Error("Update: eaDefExists = true, want false — a refused create must not be treated as success")
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q — a refused prerequisite must issue no mutating call", got, ref)
+	}
+}
+
 // TestUpdateSendsAllFields pins the PUT-echo-everything contract for
 // DTCServer: since there are no known immutable fields, Update must send
 // every mutable field on every request (not a partial patch).
@@ -1251,6 +1331,84 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	m.mu.Unlock()
 	if stored.Host == nil || *stored.Host != "2.3.4.6" {
 		t.Errorf("Update: stored host = %v, want 2.3.4.6", stored.Host)
+	}
+}
+
+// TestNamespacedUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// unconditional Update guard: when the identity extensible attribute
+// definition is absent but the configured credential can create one, the
+// probe auto-creates it before the mutating PUT, and the update proceeds
+// normally — this is the exact path a pre-existing, unstamped object hits
+// on every reconcile (Observe resolves it as OutcomeAdopted, forcing
+// Update), so the auto-create must be reachable from here, not just from
+// Create.
+func TestNamespacedUpdatePrerequisiteAutoCreates(t *testing.T) {
+	m := newMockDtcServerServer()
+	m.eaDefExists = false
+	m.eaDefCreatable = true
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name: stringPtr("my-dtc-server"),
+		Host: stringPtr("2.3.4.5"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber()}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Host = stringPtr("2.3.4.6")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if !defExists {
+		t.Error("Update: eaDefExists = false, want true — the prerequisite probe must auto-create the identity definition before the mutating call")
+	}
+}
+
+// TestNamespacedUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
+// §6's unconditional Update guard on the refusal side: when the identity
+// extensible attribute definition is absent and the configured credential
+// cannot create one, Update returns the typed PrerequisiteError (not a raw
+// wrapped WAPI 400) and issues no mutating call — the object is left
+// exactly as it was.
+func TestNamespacedUpdatePrerequisiteRefusesUncreatable(t *testing.T) {
+	m := newMockDtcServerServer()
+	m.eaDefExists = false
+	m.eaDefCreatable = false
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name: stringPtr("my-dtc-server"),
+		Host: stringPtr("2.3.4.5"),
+	})
+
+	e := &namespacedExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber()}
+	cr := newNamespacedDTCServer(nsDefault, "my-dtcserver", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Host = stringPtr("2.3.4.6")
+
+	_, err := e.Update(context.Background(), cr)
+	if err == nil {
+		t.Fatal("Update: expected an error when the identity extensible attribute definition is absent and uncreatable, got nil")
+	}
+	var prereq *identity.PrerequisiteError
+	if !cperrors.As(err, &prereq) {
+		t.Fatalf("Update: error = %v (%T), want it to wrap a *identity.PrerequisiteError", err, err)
+	}
+
+	m.mu.Lock()
+	defExists := m.eaDefExists
+	m.mu.Unlock()
+	if defExists {
+		t.Error("Update: eaDefExists = true, want false — a refused create must not be treated as success")
+	}
+	if got := meta.GetExternalName(cr); got != ref {
+		t.Errorf("Update: external-name = %q, want unchanged %q — a refused prerequisite must issue no mutating call", got, ref)
 	}
 }
 

@@ -325,9 +325,17 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 // (immutable) are never sent — see buildZoneAuthForUpdate. Every call
 // re-asserts the identity stamp since a WAPI PUT carrying extattrs
 // replaces the whole map rather than merging it.
-func (e *namespacedExternal) Update(_ context.Context, cr *namespacedv1alpha1.ZoneAuth) (managed.ExternalUpdate, error) {
+func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.ZoneAuth) (managed.ExternalUpdate, error) {
 	f := namespacedFieldsFromSpec(&cr.Spec.ForProvider)
 	externalID := meta.GetExternalName(cr)
+
+	// ADR-IN-0006 §6: every mutating PUT re-asserts the identity
+	// stamp, so Update depends on the definition existing exactly like
+	// Create — unlike the search paths (Observe/Delete), which only
+	// need it reactively when a search actually fails.
+	if err := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
 
 	if err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)
