@@ -283,7 +283,29 @@ e2e-preflight: ## Validate credentials before E2E
 	fi
 	@echo "e2e-preflight: credentials OK"
 
-e2e: e2e-preflight
+# e2e-preflight must gate the chain, not trail it. build/makelib/uptest.mk
+# declares `e2e: build controlplane.down controlplane.up ... uptest`, and a
+# second `e2e:` rule here only APPENDS to that prerequisite list — GNU Make
+# does not order prerequisites merged from separate rules for the same
+# target, and `e2e` itself has no recipe of its own, so a prerequisite
+# attached directly to `e2e` runs LAST, not first (proved empirically: the
+# preflight lines appeared after the final test summary in a real run).
+# `build` is the first prerequisite in uptest.mk's chain and DOES have a
+# recipe (see build/makelib/common.mk), so attaching the guard here forces
+# it to run — and to be able to abort the whole chain — before any image
+# build or kind cluster is created. Do not move this back onto `e2e`.
+#
+# The prerequisite is conditional on the top-level goal actually being an
+# E2E run. `make build` is the documented way to build this provider's
+# binary (README "Developing" section, contributor workflow) and must
+# succeed with no NIOS Grid Manager credentials present — it is not itself
+# an E2E entry point. MAKECMDGOALS is fixed at parse time and `build` runs
+# as a prerequisite inside the SAME make invocation as `e2e`/`e2e.<resource>`
+# (uptest.mk lists it directly; it is not a recursive sub-make), so the
+# filter below correctly sees the real top-level goal the user asked for.
+# `e2e.%` covers every per-resource target alongside the bare `e2e`
+# aggregate and `e2e-full`.
+build: $(if $(filter e2e e2e.% e2e-full,$(MAKECMDGOALS)),e2e-preflight,)
 
 # Per-resource E2E targets
 e2e.record-a: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_A)
