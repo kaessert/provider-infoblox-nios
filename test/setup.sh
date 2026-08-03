@@ -47,9 +47,9 @@
 #     the ZoneAuth managed resource so this prerequisite zone is not
 #     coupled to any single resource's CRUD lifecycle), guarded by a GET
 #     so re-running setup.sh is a no-op once the zone exists. The ZoneAuth
-#     example manifests deliberately target a different fqdn
-#     (zoneauth-example.com) so their own Create calls never collide with
-#     this pre-provisioned example.com/default zone.
+#     example manifests deliberately target a different, per-run fqdn
+#     (zoneauth-${data.runToken}.com) so their own Create calls never
+#     collide with this pre-provisioned example.com/default zone.
 #   - Member Network objects (network view "default") for the CIDRs
 #     referenced by the IPv4SharedNetwork example manifests
 #     (203.0.113.0/25, 203.0.113.128/25) — WAPI validates shared-network

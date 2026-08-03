@@ -13,9 +13,19 @@
 # for the DNS record examples. ${data.runToken} is injected by uptest from
 # the --data-source file (see test/e2e/gen-datasource.sh) so concurrent E2E
 # runs never request the same (fqdn, view) WAPI identity — the parent zone
-# itself stays shared and untokenised. Left literal ("${data.runToken}") if
-# no datasource is supplied, which WAPI rejects outright as an invalid DNS
-# label — exactly the pre-isolation behavior this guards against.
+# itself stays shared and untokenised. If left literal ("${data.runToken}")
+# because no datasource was supplied, WAPI does NOT reject it:
+# "forward-${data.runToken}.example.com" is a legal zone fqdn, so NIOS
+# accepts it (HTTP 201) and an unwired run silently creates the same zone
+# every time — behaviorally identical to the pre-isolation constant.
+# Concurrent unwired runs then collide with an
+# "IBDataConflictError: IB.Data.Conflict:Duplicate object ... of type
+# zone exists in the database" response. The safeguard is NOT backend
+# name validation — it's that datasource generation is on the default
+# path through `make e2e`: the e2e-datasource target is a prerequisite
+# of the uptest target and UPTEST_DATASOURCE_PATH is `?=` defaulted from
+# KIND_CLUSTER_NAME, so a normal `make e2e.<resource>` invocation always
+# resolves the token.
 #
 # forwardTo[].address is left literal: the tokenised fqdn above already
 # makes each run's zone unique, so the forwarding targets need no per-run
