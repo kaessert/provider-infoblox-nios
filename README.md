@@ -1915,9 +1915,11 @@ need to be re-created.
 ### DNSView integer field type unification
 
 `DNSView` (both cluster-scoped and namespace-scoped) modeled seventeen
-numeric fields as 64-bit integers even though the backing API field is
-32-bit unsigned. Those fields now use the same `int32` CRD schema format
-already used everywhere else in the provider:
+numeric fields as 64-bit integers even though the SDK's wire type for all
+of them is `*uint32` (or a `uint32`-valued nested field), confirmed against
+`infoblox-go-client/v2@v2.12.1-0.20260609042856-6a8baf2b625b`. Those fields
+now use the same `int32` CRD schema format already used everywhere else in
+the provider:
 
 - `spec.forProvider`/`status.atProvider`: `blacklistRedirectTtl`, `lameTtl`,
   `maxCacheTtl`, `maxNcacheTtl`, `nxdomainRedirectTtl`, `notifyDelay`,
@@ -1926,13 +1928,40 @@ already used everywhere else in the provider:
 - `scavengingSettings.scavengingSchedule`: `every`, `minutesPastHour`,
   `hourOfDay`, `year`, `month`, `dayOfMonth`
 
-The five `*Ttl` fields keep their existing `minimum: 0` / `maximum:
-2147483647` bounds. `scavengingSchedule.recurringTime` is unchanged — it
+Only five of the seventeen fields carry explicit `minimum: 0` / `maximum:
+2147483647` CRD markers: `blacklistRedirectTtl`, `lameTtl`, `maxCacheTtl`,
+`maxNcacheTtl`, `nxdomainRedirectTtl`. Those markers were added one day
+before this type conversion, in the same change that added the equivalent
+TTL bounds described above — both changes landed after the last build
+published before 2026-07-30. If you are upgrading from a build published
+before 2026-07-30, these five fields were never range-checked by the CRD,
+and a negative or otherwise out-of-range value could have been persisted.
+The remaining twelve fields (`notifyDelay`, the two
+`rpzDropIpRuleMinPrefixLength*` fields, all of `responseRateLimiting`, and
+all of `scavengingSchedule` except `recurringTime`) carry no `minimum`/
+`maximum` markers at all, before or after this change — only the `int32`
+format applies. `scavengingSchedule.recurringTime` is unchanged — it
 carries a Unix epoch timestamp, not a plain counter, and stays `int64`.
 
-No existing value is out of range for any of the converted fields — the
-backing API has always rejected out-of-range input for these fields, this
-is a schema-shape change only, not a behavior change.
+Check your existing `DNSView` resources for out-of-range values on the five
+bounded fields before upgrading:
+
+```bash
+for grp in dnsview.infobloxnios.crossplane.io dnsview.infobloxnios.m.crossplane.io; do
+  kubectl get "dnsviews.${grp}" -A -o json 2>/dev/null | jq -r '
+    .items[] | . as $item | $item.spec.forProvider as $p |
+    ["blacklistRedirectTtl","lameTtl","maxCacheTtl","maxNcacheTtl","nxdomainRedirectTtl"][] as $f |
+    select($p[$f] != null and ($p[$f] < 0 or $p[$f] > 2147483647)) |
+    "\($item.kind) \($item.metadata.namespace // "-")/\($item.metadata.name): \($f)=\($p[$f])"'
+done
+```
+
+Any resource this reports must have the offending field corrected to the
+`0`-`2147483647` range before you reapply the CRDs, or the update will be
+rejected by admission. The other twelve fields have no CRD-enforced bound
+and are not covered by this check; their practical values (rate-limit
+counters, schedule components) are far below the `int32` ceiling, but this
+is an observation about typical usage, not a guarantee enforced anywhere.
 
 **Action required:** reapply the `DNSView` CRDs after upgrading the
 provider (`kubectl apply -f package/crds/`, or let your package manager do
@@ -1942,21 +1971,53 @@ need to be re-created.
 ### SRVRecord integer field type unification
 
 `SRVRecord` (both cluster-scoped and namespace-scoped) modeled five
-numeric fields as 64-bit integers even though the backing API field is
-32-bit unsigned. Those fields now use the same `int32` CRD schema format
-already used everywhere else in the provider:
+numeric fields as 64-bit integers even though the SDK's wire type for all
+of them is `uint32`, confirmed against the SDK types backing this resource
+(`RecordSRV.Priority`/`.Weight`/`.Port`, `Awsrte53recordinfo.Weight`,
+`MsserverAduserData.ActiveUsersCount`). Those fields now use the same
+`int32` CRD schema format already used everywhere else in the provider:
 
 - `spec.forProvider`/`status.atProvider`: `priority`, `weight`, `port`
 - `status.atProvider.awsRte53RecordInfo`: `weight`
 - `status.atProvider.msAdUserData`: `activeUsersCount`
 
-`status.atProvider.creationTime` and `status.atProvider.lastQueried` are
-unchanged — they carry Unix epoch timestamps, not plain counters, and stay
-`int64`.
+None of these five fields carry explicit `minimum`/`maximum` CRD markers —
+only the `int32` format applies, the same as before this change (the
+conversion changed the declared width from 64-bit to 32-bit; it did not add
+or remove a bound). `status.atProvider.creationTime` and
+`status.atProvider.lastQueried` are unchanged — they carry Unix epoch
+timestamps, not plain counters, and stay `int64`.
 
-No existing value is out of range for any of the converted fields — the
-backing API has always rejected out-of-range input for these fields, this
-is a schema-shape change only, not a behavior change.
+`priority`, `weight`, and `port` are DNS SRV record fields and are
+conventionally in the 0–65535 range (RFC 2782), far below the `int32`
+ceiling, and `activeUsersCount`/the nested `weight` are response-only
+counters from NIOS. No mechanism in this provider enforces those
+conventional ranges, so this is an observation about typical usage, not a
+guarantee. If any existing `SRVRecord` was created with an unusually large
+or negative value for one of the three `spec.forProvider` fields, check it
+before upgrading:
+
+```bash
+for grp in recordsrv.infobloxnios.crossplane.io recordsrv.infobloxnios.m.crossplane.io; do
+  kubectl get "srvrecords.${grp}" -A -o json 2>/dev/null | jq -r '
+    .items[] | . as $item | $item.spec.forProvider as $p |
+    ["priority","weight","port"][] as $f |
+    select($p[$f] != null and ($p[$f] < 0 or $p[$f] > 2147483647)) |
+    "\($item.kind) \($item.metadata.namespace // "-")/\($item.metadata.name): \($f)=\($p[$f])"'
+done
+```
+
+`priority`, `weight`, and `port` carry no `minimum`/`maximum` CRD markers,
+so a negative value on any of them is admitted — only values outside the
+`int32`-representable range (`-2147483648` to `2147483647`) are rejected
+by admission. The Go type backing these fields is `*uint32`, so a negative
+value that gets past admission fails to decode the next time the
+controller reads the object, producing a client-side unmarshal error
+instead of a clean admission rejection. Any resource this reports must
+have the offending field corrected to the `0`-`2147483647` range before
+you reapply the CRDs. `status.atProvider.awsRte53RecordInfo.weight` and
+`status.atProvider.msAdUserData.activeUsersCount` are provider-written and
+not operator-correctable; they are not covered by this check.
 
 **Action required:** reapply the `SRVRecord` CRDs after upgrading the
 provider (`kubectl apply -f package/crds/`, or let your package manager do
