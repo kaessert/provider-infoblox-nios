@@ -457,6 +457,11 @@ func validatePTRRecordCreateInputs(ipv4Addr, ipv6Addr, cidr *string, uid string)
 	return nil
 }
 
+// defaultNetworkView is the NIOS Grid's built-in network view name, used
+// when a next-available-IP create call is issued without an explicit
+// network view.
+const defaultNetworkView = "default"
+
 // createPTRRecord issues the WAPI create call, stamping the owning
 // managed resource's uid into the object's extensible attributes in the
 // same request that creates it (identity.Stamp). When cidr is set, the
@@ -464,10 +469,10 @@ func validatePTRRecordCreateInputs(ipv4Addr, ipv6Addr, cidr *string, uid string)
 // the given network view (func:nextavailableip) instead of using a
 // caller-supplied static address — cidr and ipv4Addr/ipv6Addr are
 // mutually exclusive, enforced above before the SDK call is issued.
-// CreatePTRRecord already defaults an empty network view to "default"
-// internally; this wrapper applies the same default explicitly for
-// consistency with createARecord (whose SDK counterpart does not
-// self-default).
+// CreatePTRRecord already defaults an empty network view to
+// defaultNetworkView internally; this wrapper applies the same default
+// explicitly for consistency with createARecord (whose SDK counterpart
+// does not self-default).
 func createPTRRecord(objMgr ibclient.IBObjectManager, ptrdname, name, ipv4Addr, ipv6Addr, view, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string, uid string) (*ibclient.RecordPTR, error) {
 	if err := validatePTRRecordCreateInputs(ipv4Addr, ipv6Addr, cidr, uid); err != nil {
 		return nil, err
@@ -481,7 +486,7 @@ func createPTRRecord(objMgr ibclient.IBObjectManager, ptrdname, name, ipv4Addr, 
 
 	netView := strOrEmpty(networkView)
 	if cidrVal != "" && netView == "" {
-		netView = "default"
+		netView = defaultNetworkView
 	}
 
 	ea := identity.Stamp(buildEA(extAttrs), uid)

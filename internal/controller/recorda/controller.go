@@ -471,6 +471,11 @@ func validateARecordCreateInputs(ipv4Addr, cidr *string, uid string) error {
 	return nil
 }
 
+// defaultNetworkView is the NIOS Grid's built-in network view name, used
+// when a next-available-IP create call is issued without an explicit
+// network view.
+const defaultNetworkView = "default"
+
 // createARecord issues the WAPI create call, stamping the owning managed
 // resource's uid into the object's extensible attributes in the same
 // request that creates it (identity.Stamp) — there is no follow-up call,
@@ -481,7 +486,7 @@ func validateARecordCreateInputs(ipv4Addr, cidr *string, uid string) error {
 // address — cidr and ipv4Addr are mutually exclusive, enforced below
 // before the SDK call is issued. CreateARecord (unlike
 // CreateAAAARecord/CreatePTRRecord) does not default an empty network
-// view to "default" itself, so this wrapper applies that default
+// view to defaultNetworkView itself, so this wrapper applies that default
 // explicitly for consistent behavior across all three next-available-IP
 // record types.
 func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, comment *string, ttl *uint32, useTTL *bool, extAttrs map[string]string, cidr, networkView *string, uid string) (*ibclient.RecordA, error) {
@@ -492,7 +497,7 @@ func createARecord(objMgr ibclient.IBObjectManager, name, view, ipv4Addr, commen
 	cidrVal := strOrEmpty(cidr)
 	netView := strOrEmpty(networkView)
 	if cidrVal != "" && netView == "" {
-		netView = "default"
+		netView = defaultNetworkView
 	}
 
 	ea := identity.Stamp(buildEA(extAttrs), uid)
