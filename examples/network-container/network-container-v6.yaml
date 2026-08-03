@@ -13,11 +13,20 @@
 # guard already proven for Network (examples/network/network-v6.yaml).
 #
 # CIDR: uses the IPv6 documentation range reserved by RFC 3849
-# (2001:db8::/32), never expected to appear in a real NIOS Grid config. The
-# sub-block below is distinct from network-container-v6-namespaced.yaml's
-# AND from network-v6.yaml/network-v6-namespaced.yaml's blocks
-# (2001:db8:e2e6:1::/64, 2001:db8:e2e6:2::/64) so all four examples can be
-# applied to the same Grid at once without colliding on the same
+# (2001:db8::/32), never expected to appear in a real NIOS Grid config.
+#
+# ${data.netV6ContainerCluster}: injected by uptest from the --data-source
+# file (see test/e2e/gen-datasource.sh) so concurrent E2E runs against the
+# shared NIOS Grid never request the same (networkView, network) WAPI
+# identity — NetworkContainer has no name field at all, its identity IS
+# the CIDR. Left literal ("${data.netV6ContainerCluster}") if no
+# datasource is supplied, which is exactly the pre-isolation behavior this
+# guards against. The generated block reuses the same per-run BLOCK_INDEX
+# byte as netV6NetworkCluster/Namespaced and netV6ContainerNamespaced, at
+# a fixed, distinct fourth hextet (3), so all four dual-object-type IPv6
+# examples (network-v6, network-v6-namespaced,
+# network-container-v6-namespaced, and this one) can be applied to the
+# same Grid at once, in the same run, without colliding on the same
 # (network_view, network) WAPI identity.
 #
 # The assertion that makes this example meaningful: the post-assert hook
@@ -58,7 +67,7 @@ metadata:
 spec:
   forProvider:
     networkView: default
-    network: 2001:db8:e2e6:3::/64
+    network: ${data.netV6ContainerCluster}
     comment: Managed by Crossplane (IPv6)
   providerConfigRef:
     name: default

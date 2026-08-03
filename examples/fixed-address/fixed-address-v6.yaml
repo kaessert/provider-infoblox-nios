@@ -17,19 +17,32 @@
 # PREREQUISITE: like the IPv4 sibling, WAPI's AllocateIP call unconditionally
 # requires a parent Network object covering the address (see
 # fixed-address.yaml's ipv4addr field doc) — for an IPv6 address this means a
-# real "ipv6network" object covering 2001:db8:e2e6:5::/64 must already exist
-# on the Grid before this example's Create can succeed. This example does
-# NOT provision that network itself (mirroring how fixed-address.yaml relies
-# on test/setup.sh's prior creation of 10.0.0.0/24 rather than inventing a
-# Network resource inline). test/setup.sh creates the ipv6network directly
-# via a GET-guarded WAPI POST, decoupled from any managed resource's CRUD
-# lifecycle, before every E2E run.
+# real "ipv6network" object covering ${data.netV6FixedAddrParent} must
+# already exist on the Grid before this example's Create can succeed. This
+# example does NOT provision that network itself (mirroring how
+# fixed-address.yaml relies on network-prereq.yaml's Network object rather
+# than inventing one inline). network-prereq-v6.yaml provisions the
+# per-run parent ipv6network as a Makefile prerequisite-bundled manifest —
+# listed ahead of this one in UPTEST_MANIFESTS_FIXED_ADDRESS_V6, so uptest
+# creates it first. ONE parent network covers BOTH this example and
+# fixed-address-v6-namespaced.yaml: AllocateIP's parent-network
+# requirement is scoped to (network_view, network), not to a Kubernetes
+# API scope, so a single per-run ipv6network safely covers both scopes'
+# host addresses (see network-prereq-v6.yaml and
+# test/e2e/gen-datasource.sh's netV6FixedAddrParent derivation).
 #
 # CIDR: uses the IPv6 documentation range reserved by RFC 3849
-# (2001:db8::/32), distinct from every other IPv6 example's sub-block
-# (network-v6: ::1/::2, network-container-v6: ::3, network-container-v6
-# namespaced: ::4) so it can be applied to the same Grid without colliding
-# on a pre-existing (network_view, network) identity.
+# (2001:db8::/32). ${data.netV6FixedAddrHostCluster}: injected by uptest
+# from the --data-source file (see test/e2e/gen-datasource.sh), a per-run
+# host offset inside the shared ${data.netV6FixedAddrParent} parent block
+# — distinct from every other IPv6 example's sub-block (network-v6: ::1/
+# ::2, network-container-v6: ::3, network-container-v6 namespaced: ::4)
+# and from this example's own namespaced sibling's host offset (::51 vs.
+# this example's ::50), so it can be applied to the same Grid without
+# colliding on a pre-existing (network_view, ip) identity.
+# Left literal ("${data.netV6FixedAddrHostCluster}") if no datasource is
+# supplied, which is exactly the pre-isolation behavior this guards
+# against.
 #
 # DUID: for an IPv6 fixed address, the `mac` field carries the DHCP Unique
 # Identifier (DUID) instead of a MAC address — AllocateIP rejects an empty
@@ -42,9 +55,19 @@
 # create-time value here (`...44:55`), this example's update-test target
 # (`...44:77`), and the namespaced sibling's create-time value (`...44:66`)
 # and update-test target (`...44:99`) are all four distinct so no two
-# FixedAddress objects sharing the 2001:db8:e2e6:5::/64 network ever
-# collide on the same DUID (WAPI rejects a duplicate DUID within one
-# network with IB.Data.Conflict).
+# FixedAddress objects sharing the ${data.netV6FixedAddrParent} network
+# ever collide on the same DUID (WAPI rejects a duplicate DUID within one
+# network with IB.Data.Conflict). These four MAC/DUID literals are
+# deliberately NOT per-run tokenised: WAPI's uniqueness constraint is
+# scoped to one network, and this example's own (network_view, network,
+# ip, MAC) natural key already differs from every OTHER run's the moment
+# ${data.netV6FixedAddrHostCluster}'s address differs, because every run
+# draws its OWN parent ipv6network from a distinct per-run BLOCK_INDEX —
+# concurrent runs never share the same network at all, so a DUID literal
+# repeated across runs can never collide with WAPI's per-network
+# uniqueness rule. The only place these four literals must stay distinct
+# is within a single run, between this example and its namespaced sibling
+# sharing the same parent — which they already do.
 #
 # The assertion that makes this example meaningful: the post-assert hook
 # (crossplane.io/expect-external-name-prefix below) checks that the
@@ -113,7 +136,7 @@ metadata:
         skip: "list field of DHCP option structs, not a scalar update-test target; also subject to the same read-path gap as the other DHCP-relay fields"
 spec:
   forProvider:
-    ipv6addr: 2001:db8:e2e6:5::50
+    ipv6addr: ${data.netV6FixedAddrHostCluster}
     mac: "00:01:00:01:29:c4:d5:e6:00:11:22:33:44:55"
     networkView: default
     comment: Managed by Crossplane (IPv6)

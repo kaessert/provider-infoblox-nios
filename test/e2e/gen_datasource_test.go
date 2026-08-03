@@ -100,6 +100,11 @@ const (
 	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
 	keyNetV6NetworkCluster          = "netV6NetworkCluster"
 	keyNetV6NetworkNamespaced       = "netV6NetworkNamespaced"
+	keyNetV6ContainerCluster        = "netV6ContainerCluster"
+	keyNetV6ContainerNamespaced     = "netV6ContainerNamespaced"
+	keyNetV6FixedAddrParent         = "netV6FixedAddrParent"
+	keyNetV6FixedAddrHostCluster    = "netV6FixedAddrHostCluster"
+	keyNetV6FixedAddrHostNamespaced = "netV6FixedAddrHostNamespaced"
 )
 
 // requiredKeys is every key gen-datasource.sh's sub-allocation map
@@ -131,6 +136,11 @@ var requiredKeys = []string{
 	keyNetPtrHostNamespaced,
 	keyNetV6NetworkCluster,
 	keyNetV6NetworkNamespaced,
+	keyNetV6ContainerCluster,
+	keyNetV6ContainerNamespaced,
+	keyNetV6FixedAddrParent,
+	keyNetV6FixedAddrHostCluster,
+	keyNetV6FixedAddrHostNamespaced,
 }
 
 func TestGenDatasourceEmitsAllKeys(t *testing.T) {
@@ -514,6 +524,153 @@ func TestGenDatasourceV6NetworkDisjoint(t *testing.T) {
 		}
 		if zeroSubnet.Contains(namespaced.IP) {
 			t.Errorf("seed %q: netV6NetworkNamespaced=%s lands in the 2001:db8::/64 zero subnet record-aaaa's examples already occupy", seed, namespaced)
+		}
+	}
+}
+
+// TestGenDatasourceV6ContainerFixedAddrFormat asserts
+// netV6ContainerCluster, netV6ContainerNamespaced, and
+// netV6FixedAddrParent are all valid /64 CIDRs carved from the RFC 3849
+// IPv6 documentation prefix (2001:db8::/32), and
+// netV6FixedAddrHostCluster/Namespaced are valid IPv6 addresses within it
+// — the same shape assertions TestGenDatasourceV6NetworkFormat makes for
+// Network's own IPv6 keys, extended to the NetworkContainer and
+// FixedAddress dual-object-type gates.
+func TestGenDatasourceV6ContainerFixedAddrFormat(t *testing.T) {
+	values := runGenDatasource(t, "TestGenDatasourceV6ContainerFixedAddrFormat-seed")
+	_, docPrefix, err := net.ParseCIDR("2001:db8::/32")
+	if err != nil {
+		t.Fatalf("net.ParseCIDR(2001:db8::/32): %v", err)
+	}
+
+	for _, key := range []string{keyNetV6ContainerCluster, keyNetV6ContainerNamespaced, keyNetV6FixedAddrParent} {
+		ip, ipNet, err := net.ParseCIDR(values[key])
+		if err != nil {
+			t.Fatalf("%s=%q is not a valid CIDR: %v", key, values[key], err)
+		}
+		ones, bits := ipNet.Mask.Size()
+		if ones != 64 || bits != 128 {
+			t.Errorf("%s=%q is not a /64: mask is /%d (bits=%d)", key, values[key], ones, bits)
+		}
+		if !docPrefix.Contains(ip) {
+			t.Errorf("%s=%q is not carved from 2001:db8::/32", key, values[key])
+		}
+	}
+
+	for _, key := range []string{keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced} {
+		ip := net.ParseIP(values[key])
+		if ip == nil {
+			t.Fatalf("%s=%q is not a valid IP", key, values[key])
+		}
+		if !docPrefix.Contains(ip) {
+			t.Errorf("%s=%q is not carved from 2001:db8::/32", key, values[key])
+		}
+	}
+}
+
+// TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex asserts
+// netV6ContainerCluster, netV6ContainerNamespaced, netV6FixedAddrParent,
+// and the two netV6FixedAddrHost* keys all carry the SAME BLOCK_INDEX
+// byte (rendered as 2-digit lowercase hex) in their third hextet as
+// netPrefix and netV6NetworkCluster/Namespaced — the whole point of
+// reusing netV6Hex instead of drawing a fresh hash byte per resource.
+func TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex(t *testing.T) {
+	values := runGenDatasource(t, "TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex-seed")
+	blockIndex := blockIndexFromDatasource(t, values)
+	wantHex := fmt.Sprintf("%02x", blockIndex)
+
+	thirdHextet := func(key string) string {
+		t.Helper()
+		ip := net.ParseIP(values[key])
+		if ip == nil {
+			// Try as a CIDR — netV6ContainerCluster/Namespaced and
+			// netV6FixedAddrParent are CIDRs, not bare IPs.
+			var err error
+			ip, _, err = net.ParseCIDR(values[key])
+			if err != nil {
+				t.Fatalf("%s=%q is neither a valid IP nor CIDR: %v", key, values[key], err)
+			}
+		}
+		parts := strings.Split(ip.String(), ":")
+		if len(parts) < 3 {
+			t.Fatalf("%s=%q did not parse into enough hextets: %v", key, values[key], parts)
+		}
+		return parts[2]
+	}
+
+	for _, key := range []string{
+		keyNetV6ContainerCluster, keyNetV6ContainerNamespaced,
+		keyNetV6FixedAddrParent,
+		keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced,
+	} {
+		if got := thirdHextet(key); got != wantHex {
+			t.Errorf("%s=%q has third hextet %q, want %q (netPrefix's BLOCK_INDEX in hex)", key, values[key], got, wantHex)
+		}
+	}
+}
+
+// TestGenDatasourceV6SubBlocksAreDisjoint is the IPv6 analogue of
+// TestGenDatasourceSubBlocksAreDisjoint: every /64 the script hands out
+// (Network cluster/namespaced, NetworkContainer cluster/namespaced,
+// FixedAddress's shared parent) must be mutually disjoint, the
+// FixedAddress host offsets must nest inside their own shared parent
+// (the one deliberate overlap), and none of the fourth hextets (1-5) may
+// ever be 0 — the zero subnet record-aaaa's payload addresses occupy.
+func TestGenDatasourceV6SubBlocksAreDisjoint(t *testing.T) {
+	values := runGenDatasource(t, "TestGenDatasourceV6SubBlocksAreDisjoint-seed")
+
+	blockKeys := []string{
+		keyNetV6NetworkCluster, keyNetV6NetworkNamespaced,
+		keyNetV6ContainerCluster, keyNetV6ContainerNamespaced,
+		keyNetV6FixedAddrParent,
+	}
+	blocks := make(map[string]*net.IPNet, len(blockKeys))
+	for _, key := range blockKeys {
+		_, ipNet, err := net.ParseCIDR(values[key])
+		if err != nil {
+			t.Fatalf("%s=%q invalid: %v", key, values[key], err)
+		}
+		blocks[key] = ipNet
+	}
+
+	for i, ki := range blockKeys {
+		for j := i + 1; j < len(blockKeys); j++ {
+			kj := blockKeys[j]
+			bi, bj := blocks[ki], blocks[kj]
+			if bi.String() == bj.String() {
+				t.Errorf("%s and %s must never be equal: both are %s", ki, kj, bi)
+				continue
+			}
+			if bi.Contains(bj.IP) || bj.Contains(bi.IP) {
+				t.Errorf("%s=%s and %s=%s overlap — sub-allocation map is broken", ki, bi, kj, bj)
+			}
+		}
+	}
+
+	// The fixed-address host offsets are deliberately nested inside the
+	// shared parent block, not disjoint from it.
+	for _, hostKey := range []string{keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced} {
+		host := net.ParseIP(values[hostKey])
+		if host == nil {
+			t.Fatalf("%s=%q is not a valid IP", hostKey, values[hostKey])
+		}
+		if !blocks[keyNetV6FixedAddrParent].Contains(host) {
+			t.Errorf("%s=%s is not inside %s=%s", hostKey, host, keyNetV6FixedAddrParent, blocks[keyNetV6FixedAddrParent])
+		}
+	}
+	hostCluster := net.ParseIP(values[keyNetV6FixedAddrHostCluster])
+	hostNamespaced := net.ParseIP(values[keyNetV6FixedAddrHostNamespaced])
+	if hostCluster != nil && hostNamespaced != nil && hostCluster.Equal(hostNamespaced) {
+		t.Errorf("netV6FixedAddrHostCluster and netV6FixedAddrHostNamespaced must never be equal: both are %s", hostCluster)
+	}
+
+	_, zeroSubnet, err := net.ParseCIDR("2001:db8::/64")
+	if err != nil {
+		t.Fatalf("net.ParseCIDR(2001:db8::/64): %v", err)
+	}
+	for _, key := range blockKeys {
+		if zeroSubnet.Contains(blocks[key].IP) {
+			t.Errorf("%s=%s lands in the 2001:db8::/64 zero subnet record-aaaa's examples already occupy", key, blocks[key])
 		}
 	}
 }
