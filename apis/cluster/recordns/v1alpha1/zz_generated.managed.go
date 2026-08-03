@@ -6,54 +6,54 @@
 
 package v1alpha1
 
-import xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 // GetCondition of this NSRecord.
-func (mg *NSRecord) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (mg *NSRecord) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
 // GetDeletionPolicy of this NSRecord.
-func (mg *NSRecord) GetDeletionPolicy() xpv1.DeletionPolicy {
+func (mg *NSRecord) GetDeletionPolicy() xpv2.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
 // GetManagementPolicies of this NSRecord.
-func (mg *NSRecord) GetManagementPolicies() xpv1.ManagementPolicies {
+func (mg *NSRecord) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
 // GetProviderConfigReference of this NSRecord.
-func (mg *NSRecord) GetProviderConfigReference() *xpv1.Reference {
+func (mg *NSRecord) GetProviderConfigReference() *xpv2.Reference {
 	return mg.Spec.ProviderConfigReference
 }
 
 // GetWriteConnectionSecretToReference of this NSRecord.
-func (mg *NSRecord) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+func (mg *NSRecord) GetWriteConnectionSecretToReference() *xpv2.SecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
 // SetConditions of this NSRecord.
-func (mg *NSRecord) SetConditions(c ...xpv1.Condition) {
+func (mg *NSRecord) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
 // SetDeletionPolicy of this NSRecord.
-func (mg *NSRecord) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+func (mg *NSRecord) SetDeletionPolicy(r xpv2.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
 // SetManagementPolicies of this NSRecord.
-func (mg *NSRecord) SetManagementPolicies(r xpv1.ManagementPolicies) {
+func (mg *NSRecord) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
 // SetProviderConfigReference of this NSRecord.
-func (mg *NSRecord) SetProviderConfigReference(r *xpv1.Reference) {
+func (mg *NSRecord) SetProviderConfigReference(r *xpv2.Reference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
 // SetWriteConnectionSecretToReference of this NSRecord.
-func (mg *NSRecord) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+func (mg *NSRecord) SetWriteConnectionSecretToReference(r *xpv2.SecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }

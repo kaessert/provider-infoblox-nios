@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -21,9 +21,9 @@ type RangeParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR of the parent network the range belongs to.
 	Network *string `json:"network,omitempty"`
 	// Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so it has no AtProvider mirror.
@@ -67,7 +67,7 @@ type RangeObservation struct {
 
 // RangeSpec defines the desired state of Range.
 type RangeSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this Range.
 	// +kubebuilder:validation:Required
@@ -76,7 +76,7 @@ type RangeSpec struct {
 
 // RangeStatus defines the observed state of Range.
 type RangeStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

@@ -6,44 +6,44 @@
 
 package v1alpha1
 
-import xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 // GetCondition of this NetworkContainer.
-func (mg *NetworkContainer) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (mg *NetworkContainer) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
 // GetManagementPolicies of this NetworkContainer.
-func (mg *NetworkContainer) GetManagementPolicies() xpv1.ManagementPolicies {
+func (mg *NetworkContainer) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
 // GetProviderConfigReference of this NetworkContainer.
-func (mg *NetworkContainer) GetProviderConfigReference() *xpv1.ProviderConfigReference {
+func (mg *NetworkContainer) GetProviderConfigReference() *xpv2.ProviderConfigReference {
 	return mg.Spec.ProviderConfigReference
 }
 
 // GetWriteConnectionSecretToReference of this NetworkContainer.
-func (mg *NetworkContainer) GetWriteConnectionSecretToReference() *xpv1.LocalSecretReference {
+func (mg *NetworkContainer) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
 // SetConditions of this NetworkContainer.
-func (mg *NetworkContainer) SetConditions(c ...xpv1.Condition) {
+func (mg *NetworkContainer) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
 // SetManagementPolicies of this NetworkContainer.
-func (mg *NetworkContainer) SetManagementPolicies(r xpv1.ManagementPolicies) {
+func (mg *NetworkContainer) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
 // SetProviderConfigReference of this NetworkContainer.
-func (mg *NetworkContainer) SetProviderConfigReference(r *xpv1.ProviderConfigReference) {
+func (mg *NetworkContainer) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
 // SetWriteConnectionSecretToReference of this NetworkContainer.
-func (mg *NetworkContainer) SetWriteConnectionSecretToReference(r *xpv1.LocalSecretReference) {
+func (mg *NetworkContainer) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }

@@ -20,11 +20,12 @@
 // field list even though the compiled scope packages don't reference it
 // directly.
 //
-// Dual-scope spec embedding: cluster variants embed xpv1.ResourceSpec,
-// namespaced variants embed xpv2.ManagedResourceSpec; both embed
-// xpv1.ResourceStatus for status. CRD categories are
-// {crossplane,managed,infobloxnios}. Immutable fields get a CEL
-// `self == oldSelf` XValidation rule. JSON struct tags never carry
+// Dual-scope spec embedding: cluster variants embed
+// xpv2.ClusterManagedResourceSpec, namespaced variants embed
+// xpv2.ManagedResourceSpec; both embed xpv2.ManagedResourceStatus for
+// status (xpv2 is github.com/crossplane/crossplane/apis/v2/core/v2). CRD
+// categories are {crossplane,managed,infobloxnios}. Immutable fields get a
+// CEL `self == oldSelf` XValidation rule. JSON struct tags never carry
 // omitempty on slice/map fields.
 //
 // Filenames: per this provider's Phase 3 plan, generated type files use the
@@ -122,7 +123,7 @@ type ReferenceData struct {
 	RefFieldOmitEmpty bool
 	// SelectorFieldName is the Go field name of the selector field.
 	SelectorFieldName string
-	// SelectorGoType is "*xpv1.Reference"-style selector type.
+	// SelectorGoType is "*xpv2.Reference"-style selector type.
 	SelectorGoType string
 	// SelectorFieldJSONName is the camelCase JSON name for SelectorFieldName.
 	SelectorFieldJSONName string
@@ -170,13 +171,14 @@ type FieldSetData struct {
 	// ParameterValidations are resource-level (cross-field) CEL
 	// XValidation rules rendered on the {{.Kind}}Parameters struct.
 	ParameterValidations []catalog.ValidationRule
-	// NeedsXPV1Import is true if any field (top-level or nested,
-	// ForProvider or AtProvider) has a Go type that references the xpv1
+	// NeedsXPV2Import is true if any field (top-level or nested,
+	// ForProvider or AtProvider) has a Go type that references the xpv2
 	// package directly (implied by any cross-resource Reference). The
-	// standalone common reference copy only imports xpv1 when this is
+	// standalone common reference copy only imports xpv2 when this is
 	// true — every scope's self-contained types file already imports
-	// xpv1 unconditionally for xpv1.ResourceSpec/ResourceStatus.
-	NeedsXPV1Import bool
+	// xpv2 unconditionally for xpv2.ClusterManagedResourceSpec/
+	// ManagedResourceSpec/ManagedResourceStatus.
+	NeedsXPV2Import bool
 }
 
 // ScopeData is the template input for a scope-specific (cluster/namespaced)
@@ -209,11 +211,11 @@ func isOmitEmpty(goType string, required bool) bool {
 	return !required
 }
 
-// usesXPV1 reports whether a Go type string references the xpv1 package
-// directly (e.g. "xpv1.Reference"). Used to decide whether the standalone
-// common reference copy needs to import xpv1.
-func usesXPV1(goType string) bool {
-	return strings.Contains(goType, "xpv1.")
+// usesXPV2 reports whether a Go type string references the xpv2 package
+// directly (e.g. "xpv2.Reference"). Used to decide whether the standalone
+// common reference copy needs to import xpv2.
+func usesXPV2(goType string) bool {
+	return strings.Contains(goType, "xpv2.")
 }
 
 // lowerFirst lowercases the first rune of s, leaving the rest untouched.
@@ -257,9 +259,9 @@ func buildReferenceData(ref *catalog.ReferenceDescriptor, goFieldName, goType st
 		}
 	}
 
-	refType, selectorType := "xpv1.Reference", "xpv1.Selector"
+	refType, selectorType := "xpv2.Reference", "xpv2.Selector"
 	if !isCluster {
-		refType, selectorType = "xpv1.NamespacedReference", "xpv1.NamespacedSelector"
+		refType, selectorType = "xpv2.NamespacedReference", "xpv2.NamespacedSelector"
 	}
 
 	refFieldName := goFieldName + "Ref"
@@ -361,7 +363,7 @@ func buildAtProviderFieldData(f catalog.FieldDef) FieldData {
 func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetData {
 	var forProvider, atProvider []FieldData
 	hasReferences := false
-	needsXPV1 := false
+	needsXPV2 := false
 
 	for _, f := range rd.Fields {
 		switch f.Scope {
@@ -378,8 +380,8 @@ func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetDa
 		if f.Reference != nil {
 			hasReferences = true
 		}
-		if usesXPV1(f.GoType) {
-			needsXPV1 = true
+		if usesXPV2(f.GoType) {
+			needsXPV2 = true
 		}
 	}
 
@@ -403,8 +405,8 @@ func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetDa
 			if f.Reference != nil {
 				hasReferences = true
 			}
-			if usesXPV1(f.GoType) {
-				needsXPV1 = true
+			if usesXPV2(f.GoType) {
+				needsXPV2 = true
 			}
 		}
 		nestedTypes = append(nestedTypes, NestedTypeData{
@@ -423,7 +425,7 @@ func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetDa
 		NestedTypes:          nestedTypes,
 		HasReferences:        hasReferences,
 		ParameterValidations: rd.ParameterValidations,
-		NeedsXPV1Import:      needsXPV1 || hasReferences,
+		NeedsXPV2Import:      needsXPV2 || hasReferences,
 	}
 }
 
@@ -583,10 +585,10 @@ const commonReferenceTemplate = `// Code generated by openapi2crd. DO NOT EDIT.
 // types rather than importing this package — see the openapi2crd/pkg/
 // generator package doc comment for the rationale.
 package {{.PackageName}}
-{{- if .NeedsXPV1Import}}
+{{- if .NeedsXPV2Import}}
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 {{- end}}
 ` + fieldSetTemplate
@@ -599,17 +601,14 @@ const scopeTypesTemplate = `// Code generated by openapi2crd. DO NOT EDIT.
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-{{- if not .IsCluster}}
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
-{{- end}}
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 ` + fieldSetTemplate + `
 // {{.Kind}}Spec defines the desired state of {{.Kind}}.
 type {{.Kind}}Spec struct {
 {{- if .IsCluster}}
-	xpv1.ResourceSpec {{inlineTag}}
+	xpv2.ClusterManagedResourceSpec {{inlineTag}}
 {{- else}}
 	xpv2.ManagedResourceSpec {{inlineTag}}
 {{- end}}
@@ -621,7 +620,7 @@ type {{.Kind}}Spec struct {
 
 // {{.Kind}}Status defines the observed state of {{.Kind}}.
 type {{.Kind}}Status struct {
-	xpv1.ResourceStatus {{inlineTag}}
+	xpv2.ManagedResourceStatus {{inlineTag}}
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

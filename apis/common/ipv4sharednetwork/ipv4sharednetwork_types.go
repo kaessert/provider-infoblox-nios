@@ -9,7 +9,7 @@
 package ipv4sharednetwork
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // IPv4SharedNetworkDhcpOption is a DHCP option associated with an IPv4SharedNetwork, mirroring the SDK's Dhcpoption struct.
@@ -37,9 +37,9 @@ type IPv4SharedNetworkParameters struct {
 	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.network")
 	Networks []string `json:"networks"`
 	// +optional
-	NetworksRefs []xpv1.Reference `json:"networksRefs"`
+	NetworksRefs []xpv2.Reference `json:"networksRefs"`
 	// +optional
-	NetworksSelector *xpv1.Selector `json:"networksSelector,omitempty"`
+	NetworksSelector *xpv2.Selector `json:"networksSelector,omitempty"`
 	// Network view the shared network belongs to. Present in both the Create and Update ObjectManager wrapper signatures, but live WAPI _schema probing found supports=rws (no u) for this field — the WAPI schema rejects changing it after creation even though the wrapper accepts the parameter on update calls.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"`

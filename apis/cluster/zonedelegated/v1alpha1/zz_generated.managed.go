@@ -6,54 +6,54 @@
 
 package v1alpha1
 
-import xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
 // GetCondition of this ZoneDelegated.
-func (mg *ZoneDelegated) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (mg *ZoneDelegated) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
 // GetDeletionPolicy of this ZoneDelegated.
-func (mg *ZoneDelegated) GetDeletionPolicy() xpv1.DeletionPolicy {
+func (mg *ZoneDelegated) GetDeletionPolicy() xpv2.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
 // GetManagementPolicies of this ZoneDelegated.
-func (mg *ZoneDelegated) GetManagementPolicies() xpv1.ManagementPolicies {
+func (mg *ZoneDelegated) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
 // GetProviderConfigReference of this ZoneDelegated.
-func (mg *ZoneDelegated) GetProviderConfigReference() *xpv1.Reference {
+func (mg *ZoneDelegated) GetProviderConfigReference() *xpv2.Reference {
 	return mg.Spec.ProviderConfigReference
 }
 
 // GetWriteConnectionSecretToReference of this ZoneDelegated.
-func (mg *ZoneDelegated) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+func (mg *ZoneDelegated) GetWriteConnectionSecretToReference() *xpv2.SecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
 // SetConditions of this ZoneDelegated.
-func (mg *ZoneDelegated) SetConditions(c ...xpv1.Condition) {
+func (mg *ZoneDelegated) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
 // SetDeletionPolicy of this ZoneDelegated.
-func (mg *ZoneDelegated) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+func (mg *ZoneDelegated) SetDeletionPolicy(r xpv2.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
 // SetManagementPolicies of this ZoneDelegated.
-func (mg *ZoneDelegated) SetManagementPolicies(r xpv1.ManagementPolicies) {
+func (mg *ZoneDelegated) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
 // SetProviderConfigReference of this ZoneDelegated.
-func (mg *ZoneDelegated) SetProviderConfigReference(r *xpv1.Reference) {
+func (mg *ZoneDelegated) SetProviderConfigReference(r *xpv2.Reference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
 // SetWriteConnectionSecretToReference of this ZoneDelegated.
-func (mg *ZoneDelegated) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+func (mg *ZoneDelegated) SetWriteConnectionSecretToReference(r *xpv2.SecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }

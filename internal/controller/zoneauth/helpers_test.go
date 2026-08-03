@@ -11,7 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,42 +30,42 @@ func TestExtractCredentials(t *testing.T) {
 
 	cases := map[string]struct {
 		reason    string
-		source    xpv1.CredentialsSource
-		secretRef *xpv1.SecretKeySelector
+		source    xpv2.CredentialsSource
+		secretRef *xpv2.SecretKeySelector
 		objects   []runtime.Object
 		wantErr   bool
 	}{
 		"Success": {
 			reason: "A Secret carrying all three keys resolves cleanly.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "creds", Namespace: ns},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "creds", Namespace: ns},
 			},
 			objects: []runtime.Object{credentialsSecret(ns, "creds", "grid.example.com", "admin", "s3cr3t")},
 		},
 		"UnsupportedSource": {
 			reason:  "Only CredentialsSourceSecret is supported.",
-			source:  xpv1.CredentialsSourceNone,
+			source:  xpv2.CredentialsSourceNone,
 			wantErr: true,
 		},
 		"NilSecretRef": {
 			reason:  "A Secret source with no secretRef is rejected.",
-			source:  xpv1.CredentialsSourceSecret,
+			source:  xpv2.CredentialsSourceSecret,
 			wantErr: true,
 		},
 		"SecretNotFound": {
 			reason: "A secretRef pointing at a Secret that doesn't exist surfaces the Get error.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "missing", Namespace: ns},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "missing", Namespace: ns},
 			},
 			wantErr: true,
 		},
 		"MissingHostKey": {
 			reason: "A Secret missing the host key is rejected.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "partial", Namespace: ns},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "partial", Namespace: ns},
 			},
 			objects: []runtime.Object{&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: ns},
@@ -78,9 +78,9 @@ func TestExtractCredentials(t *testing.T) {
 		},
 		"MissingUsernameKey": {
 			reason: "A Secret missing the username key is rejected.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "partial", Namespace: ns},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "partial", Namespace: ns},
 			},
 			objects: []runtime.Object{&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: ns},
@@ -93,9 +93,9 @@ func TestExtractCredentials(t *testing.T) {
 		},
 		"MissingPasswordKey": {
 			reason: "A Secret missing the password key is rejected.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "partial", Namespace: ns},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "partial", Namespace: ns},
 			},
 			objects: []runtime.Object{&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: ns},
@@ -108,9 +108,9 @@ func TestExtractCredentials(t *testing.T) {
 		},
 		"FallbackNamespaceUsed": {
 			reason: "A secretRef with no namespace falls back to the caller-supplied namespace.",
-			source: xpv1.CredentialsSourceSecret,
-			secretRef: &xpv1.SecretKeySelector{
-				SecretReference: xpv1.SecretReference{Name: "creds"},
+			source: xpv2.CredentialsSourceSecret,
+			secretRef: &xpv2.SecretKeySelector{
+				SecretReference: xpv2.SecretReference{Name: "creds"},
 			},
 			objects: []runtime.Object{credentialsSecret(ns, "creds", "grid.example.com", "admin", "s3cr3t")},
 		},

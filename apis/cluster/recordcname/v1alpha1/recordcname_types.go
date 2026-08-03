@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -19,9 +19,9 @@ type CNAMERecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1.ARecord
 	Canonical *string `json:"canonical"`
 	// +optional
-	CanonicalRef *xpv1.Reference `json:"canonicalRef,omitempty"`
+	CanonicalRef *xpv2.Reference `json:"canonicalRef,omitempty"`
 	// +optional
-	CanonicalSelector *xpv1.Selector `json:"canonicalSelector,omitempty"`
+	CanonicalSelector *xpv2.Selector `json:"canonicalSelector,omitempty"`
 	// Comment for the record; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"`
 	// Time-to-live in seconds. Zero means the record is not cached. Must be non-negative (0-2147483647); to inherit the zone/grid default, set useTtl to false rather than passing a negative sentinel value.
@@ -76,7 +76,7 @@ type CNAMERecordObservation struct {
 
 // CNAMERecordSpec defines the desired state of CNAMERecord.
 type CNAMERecordSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this CNAMERecord.
 	// +kubebuilder:validation:Required
@@ -85,7 +85,7 @@ type CNAMERecordSpec struct {
 
 // CNAMERecordStatus defines the observed state of CNAMERecord.
 type CNAMERecordStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

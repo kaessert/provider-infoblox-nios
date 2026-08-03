@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,8 +41,8 @@ func TestExtractCredentialsSuccess(t *testing.T) {
 	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	creds, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: testNamespace},
+	creds, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
 		t.Fatalf("ExtractCredentials: unexpected error: %v", err)
@@ -62,8 +62,8 @@ func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	secret.Data["ssl_verify"] = []byte("false")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	creds, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "primary", Namespace: testNamespace},
+	creds, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
 		t.Fatalf("ExtractCredentials: unexpected error: %v", err)
@@ -76,8 +76,8 @@ func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 func TestExtractCredentialsMissingSecret(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 
-	_, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "does-not-exist", Namespace: testNamespace},
+	_, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "does-not-exist", Namespace: testNamespace},
 	}, "")
 	if err == nil {
 		t.Fatal("expected an error for a missing readEndpoint credentials Secret, got nil")
@@ -92,8 +92,8 @@ func TestExtractCredentialsMissingKeys(t *testing.T) {
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	_, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, &xpv1.SecretKeySelector{
-		SecretReference: xpv1.SecretReference{Name: "incomplete", Namespace: testNamespace},
+	_, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "incomplete", Namespace: testNamespace},
 	}, "")
 	if err == nil {
 		t.Fatal("expected an error for a credentials Secret missing required keys, got nil")
@@ -102,14 +102,14 @@ func TestExtractCredentialsMissingKeys(t *testing.T) {
 
 func TestExtractCredentialsNoSecretRef(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	if _, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceSecret, nil, ""); err == nil {
+	if _, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, nil, ""); err == nil {
 		t.Fatal("expected an error when secretRef is nil, got nil")
 	}
 }
 
 func TestExtractCredentialsUnsupportedSource(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	if _, err := ExtractCredentials(context.Background(), kube, xpv1.CredentialsSourceInjectedIdentity, nil, ""); err == nil {
+	if _, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceInjectedIdentity, nil, ""); err == nil {
 		t.Fatal("expected an error for an unsupported credentials source, got nil")
 	}
 }

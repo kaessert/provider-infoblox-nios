@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,9 +49,9 @@ type HostRecordParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// DNS view in which the record resides. Mutable — changing it moves the record between DNS views and changes the _ref.
 	View *string `json:"view,omitempty"`
 	// List of alias FQDNs for the host.
@@ -148,7 +148,7 @@ type HostRecordObservation struct {
 
 // HostRecordSpec defines the desired state of HostRecord.
 type HostRecordSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this HostRecord.
 	// +kubebuilder:validation:Required
@@ -157,7 +157,7 @@ type HostRecordSpec struct {
 
 // HostRecordStatus defines the observed state of HostRecord.
 type HostRecordStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

@@ -5,7 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -34,9 +34,9 @@ type IPv4SharedNetworkParameters struct {
 	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.network")
 	Networks []string `json:"networks"`
 	// +optional
-	NetworksRefs []xpv1.Reference `json:"networksRefs"`
+	NetworksRefs []xpv2.Reference `json:"networksRefs"`
 	// +optional
-	NetworksSelector *xpv1.Selector `json:"networksSelector,omitempty"`
+	NetworksSelector *xpv2.Selector `json:"networksSelector,omitempty"`
 	// Network view the shared network belongs to. Present in both the Create and Update ObjectManager wrapper signatures, but live WAPI _schema probing found supports=rws (no u) for this field — the WAPI schema rejects changing it after creation even though the wrapper accepts the parameter on update calls.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
 	NetworkView *string `json:"networkView,omitempty"`
@@ -104,7 +104,7 @@ type IPv4SharedNetworkObservation struct {
 
 // IPv4SharedNetworkSpec defines the desired state of IPv4SharedNetwork.
 type IPv4SharedNetworkSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
+	xpv2.ClusterManagedResourceSpec `json:",inline"`
 
 	// ForProvider holds the user-supplied parameters for this IPv4SharedNetwork.
 	// +kubebuilder:validation:Required
@@ -113,7 +113,7 @@ type IPv4SharedNetworkSpec struct {
 
 // IPv4SharedNetworkStatus defines the observed state of IPv4SharedNetwork.
 type IPv4SharedNetworkStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

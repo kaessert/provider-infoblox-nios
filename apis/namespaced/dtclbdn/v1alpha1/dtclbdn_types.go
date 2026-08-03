@@ -5,8 +5,7 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
-	xpv2 "github.com/crossplane/crossplane-runtime/v2/apis/common/v2"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -16,9 +15,9 @@ type DTCLBDNPoolLink struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcpool/v1alpha1.DTCPool
 	Pool *string `json:"pool,omitempty"`
 	// +optional
-	PoolRef *xpv1.NamespacedReference `json:"poolRef,omitempty"`
+	PoolRef *xpv2.NamespacedReference `json:"poolRef,omitempty"`
 	// +optional
-	PoolSelector *xpv1.NamespacedSelector `json:"poolSelector,omitempty"`
+	PoolSelector *xpv2.NamespacedSelector `json:"poolSelector,omitempty"`
 	// The match priority weight of the pool within the LBDN.
 	Ratio *uint32 `json:"ratio,omitempty"`
 }
@@ -53,9 +52,9 @@ type DTCLBDNParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1.ZoneAuth
 	AuthZones []string `json:"authZones"`
 	// +optional
-	AuthZonesRefs []xpv1.NamespacedReference `json:"authZonesRefs"`
+	AuthZonesRefs []xpv2.NamespacedReference `json:"authZonesRefs"`
 	// +optional
-	AuthZonesSelector *xpv1.NamespacedSelector `json:"authZonesSelector,omitempty"`
+	AuthZonesSelector *xpv2.NamespacedSelector `json:"authZonesSelector,omitempty"`
 	// Resource record types the LBDN answers with.
 	// +optional
 	// +kubebuilder:validation:items:Enum=A;AAAA;CNAME;NAPTR;SRV
@@ -143,7 +142,7 @@ type DTCLBDNSpec struct {
 
 // DTCLBDNStatus defines the observed state of DTCLBDN.
 type DTCLBDNStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
+	xpv2.ManagedResourceStatus `json:",inline"`
 
 	// AtProvider holds the observed values from the Infoblox NIOS WAPI.
 	// +optional

@@ -9,7 +9,7 @@
 package dtcpool
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // DTCPoolServerLink identifies one DTCServer member of a DTCPool along with its load-balancing weight (mirrors the SDK's DtcServerLink struct).
@@ -18,9 +18,9 @@ type DTCPoolServerLink struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1.DTCServer
 	Server *string `json:"server,omitempty"`
 	// +optional
-	ServerRef *xpv1.Reference `json:"serverRef,omitempty"`
+	ServerRef *xpv2.Reference `json:"serverRef,omitempty"`
 	// +optional
-	ServerSelector *xpv1.Selector `json:"serverSelector,omitempty"`
+	ServerSelector *xpv2.Selector `json:"serverSelector,omitempty"`
 	// The load-balancing weight of the server within the pool.
 	Ratio *uint32 `json:"ratio,omitempty"`
 }

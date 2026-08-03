@@ -9,7 +9,7 @@
 package networkcontainer
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // NetworkContainerParameters are the configurable fields of a NetworkContainer.
@@ -21,9 +21,9 @@ type NetworkContainerParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView"`
 	// +optional
-	NetworkViewRef *xpv1.Reference `json:"networkViewRef,omitempty"`
+	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`
 	// +optional
-	NetworkViewSelector *xpv1.Selector `json:"networkViewSelector,omitempty"`
+	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR of the container network, e.g. "10.0.0.0/16". Immutable — absent from UpdateNetworkContainer. Optional at the type level: one of network, parentCidr, or filterParams is required (enforced by a struct-level validation rule); when parentCidr or filterParams is used instead, the controller late-initializes this field from the allocated CIDR once creation succeeds.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="network is immutable after creation"
 	Network *string `json:"network,omitempty"`

@@ -9,7 +9,7 @@
 package dtclbdn
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/v2/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 )
 
 // DTCLBDNPoolLink identifies one DTCPool member of a DTCLBDN along with its match priority ratio (mirrors the SDK's DtcPoolLink struct).
@@ -18,9 +18,9 @@ type DTCLBDNPoolLink struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcpool/v1alpha1.DTCPool
 	Pool *string `json:"pool,omitempty"`
 	// +optional
-	PoolRef *xpv1.Reference `json:"poolRef,omitempty"`
+	PoolRef *xpv2.Reference `json:"poolRef,omitempty"`
 	// +optional
-	PoolSelector *xpv1.Selector `json:"poolSelector,omitempty"`
+	PoolSelector *xpv2.Selector `json:"poolSelector,omitempty"`
 	// The match priority weight of the pool within the LBDN.
 	Ratio *uint32 `json:"ratio,omitempty"`
 }
@@ -55,9 +55,9 @@ type DTCLBDNParameters struct {
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1.ZoneAuth
 	AuthZones []string `json:"authZones"`
 	// +optional
-	AuthZonesRefs []xpv1.Reference `json:"authZonesRefs"`
+	AuthZonesRefs []xpv2.Reference `json:"authZonesRefs"`
 	// +optional
-	AuthZonesSelector *xpv1.Selector `json:"authZonesSelector,omitempty"`
+	AuthZonesSelector *xpv2.Selector `json:"authZonesSelector,omitempty"`
 	// Resource record types the LBDN answers with.
 	// +optional
 	// +kubebuilder:validation:items:Enum=A;AAAA;CNAME;NAPTR;SRV
