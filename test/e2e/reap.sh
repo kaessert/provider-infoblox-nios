@@ -271,6 +271,7 @@ Usage:
   test/e2e/reap.sh --token=<runToken> [--net-prefix=<CIDR>] [--apply]
   test/e2e/reap.sh --net-prefix=<CIDR> [--apply]
   test/e2e/reap.sh --literal-sweep [--apply]
+  test/e2e/reap.sh --net-prefix=<CIDR> --print-scope
 
   --token=TOKEN        10-char lowercase hex runToken (gen-datasource.sh
                         format). Reaps NAMED objects whose identity field
@@ -285,6 +286,13 @@ Usage:
                         live in examples/ today.
   --apply               Actually delete. Without it, every match is only
                         listed (dry-run is the default).
+  --print-scope         Print the IPv6 object-type/field/regex triples this
+                        run's --net-prefix would sweep, one per line, then
+                        exit 0 without contacting the Grid. Requires no
+                        INFOBLOX_HOST/USER/PASS — this is a pure derivation
+                        from --net-prefix, useful for a test asserting the
+                        sweep's coverage never drifts from what
+                        gen-datasource.sh actually emits.
   --wapi-version=VER    Defaults to $INFOBLOX_WAPI_VERSION or v2.13.1,
                         matching test/setup.sh.
 
@@ -300,6 +308,7 @@ TOKEN=""
 NET_PREFIX=""
 LITERAL_SWEEP=""
 APPLY=""
+PRINT_SCOPE=""
 WAPI_VERSION="${INFOBLOX_WAPI_VERSION:-v2.13.1}"
 
 for arg in "$@"; do
@@ -308,6 +317,7 @@ for arg in "$@"; do
     --net-prefix=*) NET_PREFIX="${arg#--net-prefix=}" ;;
     --literal-sweep) LITERAL_SWEEP="1" ;;
     --apply) APPLY="1" ;;
+    --print-scope) PRINT_SCOPE="1" ;;
     --wapi-version=*) WAPI_VERSION="${arg#--wapi-version=}" ;;
     -h|--help) usage 0 ;;
     *)
@@ -316,11 +326,6 @@ for arg in "$@"; do
       ;;
   esac
 done
-
-if [ -z "${INFOBLOX_HOST:-}" ] || [ -z "${INFOBLOX_USER:-}" ] || [ -z "${INFOBLOX_PASS:-}" ]; then
-  echo "ERROR: INFOBLOX_HOST, INFOBLOX_USER, and INFOBLOX_PASS must all be set." >&2
-  exit 1
-fi
 
 if [ -n "${LITERAL_SWEEP}" ] && { [ -n "${TOKEN}" ] || [ -n "${NET_PREFIX}" ]; }; then
   echo "ERROR: --literal-sweep is mutually exclusive with --token/--net-prefix — routine and historical cleanup are never combined into one query." >&2
@@ -372,6 +377,42 @@ if [ -n "${NET_PREFIX}" ]; then
   # 0-255, whether or not a caller ever submits the padded spelling.
   NET_V6_HEX="$(printf '%x' "${BLOCK_INDEX}")"
   PREFIX_V6_REGEX="^2001:db8:0?${NET_V6_HEX}:"
+fi
+
+# IPv6 counterparts of the ADDRESSED rows in NAMED_AND_ADDRESSED_TYPES
+# (defined below, in the routine-mode section). Kept in a separate table
+# because they are matched against PREFIX_V6_REGEX, not PREFIX_REGEX — the
+# two are different derived values, both sourced from the single
+# --net-prefix flag above (no separate --net-prefix-v6 flag exists or is
+# needed). Declared here, ahead of routine_reap()'s use of it, so
+# --print-scope (below) can also read it without depending on anything
+# defined later in the script. Each line: object-type|addr-field|addr-return-field.
+IPV6_ADDRESSED_TYPES="
+ipv6network|network|
+ipv6networkcontainer|network|
+ipv6fixedaddress|ipv6addr|
+"
+
+# --print-scope is a pure derivation from --net-prefix: it prints exactly
+# the object-type/field/regex triples routine_reap()'s IPv6 pass (below)
+# would query, then exits before this script ever touches the network or
+# requires credentials. This is deliberately placed before the
+# INFOBLOX_HOST/USER/PASS check below — a caller (e.g. a Go test asserting
+# gen-datasource.sh's netV6 keys are all covered) has no reason to hold
+# Grid credentials just to inspect what a run's scope would be.
+if [ -n "${PRINT_SCOPE}" ]; then
+  otype=""
+  addr_field=""
+  while IFS='|' read -r otype addr_field _; do
+    [ -z "${otype}" ] && continue
+    echo "${otype} ${addr_field} ${PREFIX_V6_REGEX}"
+  done <<<"${IPV6_ADDRESSED_TYPES}"
+  exit 0
+fi
+
+if [ -z "${INFOBLOX_HOST:-}" ] || [ -z "${INFOBLOX_USER:-}" ] || [ -z "${INFOBLOX_PASS:-}" ]; then
+  echo "ERROR: INFOBLOX_HOST, INFOBLOX_USER, and INFOBLOX_PASS must all be set." >&2
+  exit 1
 fi
 
 WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
@@ -531,17 +572,11 @@ range||start_addr|
 fixedaddress||ipv4addr|
 "
 
-# IPv6 counterparts of the ADDRESSED rows above. Kept in a separate table
-# (rather than folded into NAMED_AND_ADDRESSED_TYPES) because they are
-# matched against PREFIX_V6_REGEX, not PREFIX_REGEX — the two are different
-# derived values, both sourced from the single --net-prefix flag (see its
-# validation block above; no separate --net-prefix-v6 flag exists or is
-# needed). Each line: object-type|addr-field|addr-return-field.
-IPV6_ADDRESSED_TYPES="
-ipv6network|network|
-ipv6networkcontainer|network|
-ipv6fixedaddress|ipv6addr|
-"
+# IPV6_ADDRESSED_TYPES (the IPv6 counterparts of the ADDRESSED rows above)
+# is declared earlier in this script, alongside PREFIX_V6_REGEX, so
+# --print-scope can read it without depending on anything defined below —
+# see the comment there for why it is a separate table from
+# NAMED_AND_ADDRESSED_TYPES.
 
 routine_reap() {
   local otype token_field addr_field addr_return_field
