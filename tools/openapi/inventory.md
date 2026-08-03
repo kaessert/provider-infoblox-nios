@@ -1131,7 +1131,7 @@ disable is on the WAPI object but not exposed by CreateMXRecord/UpdateMXRecord.
 **Delete behavior:** hard-delete (404 on subsequent GET) — inferred from RecordA behavior  
 **Update method:** UpdateNSRecord  
 **Live-verified:** yes (2026-07-28, corrected against a live NIOS Grid Manager appliance, WAPI v2.9.7)  
-**Notes:** Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord.  
+**Notes:** Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord. `nameserver` is provider-imposed immutable (not a WAPI restriction): it is a component of this object's server-assigned handle, and NSRecord has no extattrs field to carry a stable identity stamp instead.  
 
 #### CRUD Methods
 
@@ -1162,7 +1162,7 @@ static scan omitted).
 | `view` | `string` | both | yes | yes | — | DNS view in which the record resides, e.g. "external". Fixed at creation — WAPI ties the record's _ref to (view, zone, name). Live-verified hard immutable (`supports=rws`, no `u`). |
 | `zone` | `string` | response | no | yes | — | Zone in which the record resides, e.g. "zone.com". Derived from name/view; immutable. |
 | `name` | `string` | both | yes | **yes** | — | Name of the NS record in FQDN format (the delegated zone/subdomain). Live-verified immutable (`supports=rws`, no `u`) — corrects the original "mutable" classification. |
-| `nameserver` | `*string` | both | yes | no | — | FQDN of the authoritative server for the redirected zone. |
+| `nameserver` | `*string` | both | yes | **yes** | — | FQDN of the authoritative server for the redirected zone. Provider-imposed immutable (not a WAPI restriction — WAPI accepts an in-place update): this object's server-assigned handle is derived from (view, name, nameserver), and nameserver is the one component of that handle WAPI does not already reject an update for. NSRecord has no extattrs field to carry a stable identity stamp instead, so freezing this field makes the natural key the full, immutable identity of the handle. |
 | `addresses` | `[]*ZoneNameServer` | both | **yes** | no | — | Glue address records for the name server. Live-verified REQUIRED on create (`field for create missing: addresses`) — corrects the original "optional" classification. |
 | `ms_delegation_name` | `*string` | both | no | no | — | MS delegation point name. |
 | `policy` | `string` | response | no | no | — | Host name policy for the record. |

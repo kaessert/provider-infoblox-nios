@@ -904,7 +904,7 @@ func mxRecord() ResourceDescriptor {
 // (`supports=rs`) rather than the scope=both a naive reading of the
 // inventory correction would otherwise suggest.
 //
-// Immutable fields (live-verified):
+// Immutable fields (live-verified, except where noted):
 //   - `name`: `supports=rws` (no `u`) — absent from UpdateNSRecord's
 //     mutable-field set at the data level even though the Go SDK method
 //     signature still accepts it as a parameter (the SDK issues a PUT that
@@ -914,6 +914,16 @@ func mxRecord() ResourceDescriptor {
 //   - `zone`: derived from name+view, not a CreateNSRecord parameter, so it
 //     has no ForProvider representation and no CEL rule is emitted (see
 //     FieldDef.Immutable doc) — AtProvider-only.
+//   - `nameserver`: NOT a WAPI restriction — live probing shows WAPI accepts
+//     an in-place update of this field. It is marked immutable by the
+//     provider because WAPI's schema for this object type has no extattrs
+//     field, so there is no way to stamp a stable identity marker on it as
+//     is done for other record types; its server-assigned handle is the
+//     only identity available, and `nameserver` is the one component of
+//     that handle WAPI does not already refuse to change. Freezing it turns
+//     the natural key (view, name, nameserver) into the full, immutable
+//     identity of the handle, closing the one ownership-verification gap
+//     left in the provider.
 //
 // `addresses` is REQUIRED on create per live WAPI probing
 // (`field for create missing: addresses`), correcting inventory.md's
@@ -944,7 +954,8 @@ func nsRecord() ResourceDescriptor {
 				GoType:      goTypeString,
 				Scope:       FieldScopeBoth,
 				Required:    true,
-				Description: "FQDN of the authoritative server for the redirected zone.",
+				Immutable:   true,
+				Description: "FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable anyway: this object's server-assigned handle is derived from (view, name, nameserver), and it is the only one of those three components WAPI does not already reject an update for. Changing it in place would rotate the handle out from under the provider with no way to re-establish which live object the resource still refers to, so the provider requires delete-and-recreate instead of accepting an update it cannot safely track.",
 			},
 			{
 				Name:        "View",

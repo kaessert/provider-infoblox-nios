@@ -106,9 +106,20 @@ spec:
                     - message: name is immutable after creation
                       rule: self == oldSelf
                   nameserver:
-                    description: FQDN of the authoritative server for the redirected
-                      zone.
+                    description: 'FQDN of the authoritative server for the redirected
+                      zone. WAPI allows this field to be updated in place, but the
+                      provider marks it immutable anyway: this object''s server-assigned
+                      handle is derived from (view, name, nameserver), and it is the
+                      only one of those three components WAPI does not already reject
+                      an update for. Changing it in place would rotate the handle
+                      out from under the provider with no way to re-establish which
+                      live object the resource still refers to, so the provider requires
+                      delete-and-recreate instead of accepting an update it cannot
+                      safely track.'
                     type: string
+                    x-kubernetes-validations:
+                    - message: nameserver is immutable after creation
+                      rule: self == oldSelf
                   view:
                     description: DNS view in which the record resides, e.g. "external".
                       Fixed at creation — WAPI ties the record's _ref to (view, zone,
@@ -312,10 +323,24 @@ spec:
                       `u`) — WAPI rejects a PUT that changes this field even though
                       the Go SDK's UpdateNSRecord signature still accepts a name parameter.
                     type: string
+                    x-kubernetes-validations:
+                    - message: name is immutable after creation
+                      rule: self == oldSelf
                   nameserver:
-                    description: FQDN of the authoritative server for the redirected
-                      zone.
+                    description: 'FQDN of the authoritative server for the redirected
+                      zone. WAPI allows this field to be updated in place, but the
+                      provider marks it immutable anyway: this object''s server-assigned
+                      handle is derived from (view, name, nameserver), and it is the
+                      only one of those three components WAPI does not already reject
+                      an update for. Changing it in place would rotate the handle
+                      out from under the provider with no way to re-establish which
+                      live object the resource still refers to, so the provider requires
+                      delete-and-recreate instead of accepting an update it cannot
+                      safely track.'
                     type: string
+                    x-kubernetes-validations:
+                    - message: nameserver is immutable after creation
+                      rule: self == oldSelf
                   policy:
                     description: Host name policy for the record.
                     type: string
@@ -331,11 +356,17 @@ spec:
                       the Go SDK already drops view from UpdateNSRecord's request
                       body.
                     type: string
+                    x-kubernetes-validations:
+                    - message: view is immutable after creation
+                      rule: self == oldSelf
                   zone:
                     description: Zone in which the record resides, e.g. "zone.com".
                       Derived from name/view by WAPI — not a CreateNSRecord parameter,
                       so it has no ForProvider counterpart.
                     type: string
+                    x-kubernetes-validations:
+                    - message: zone is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

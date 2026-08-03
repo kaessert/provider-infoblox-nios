@@ -205,7 +205,7 @@ func mxRecord() model.Resource {
 func nsRecord() model.Resource {
 	fields := append(commonRecordFields(),
 		f("name", "string", model.FieldScopeBoth, true, false, "Name of the NS record in FQDN format (the delegated zone/subdomain)."),
-		f("nameserver", "*string", model.FieldScopeBoth, true, false, "FQDN of the authoritative server for the redirected zone."),
+		f("nameserver", "*string", model.FieldScopeBoth, true, true, "FQDN of the authoritative server for the redirected zone. WAPI allows this field to be updated in place, but the provider marks it immutable: this object's server-assigned handle is derived from (view, name, nameserver), it is the only one of those three components WAPI does not already reject an update for, and NSRecord has no extattrs field available to carry a stable identity stamp instead. Freezing it makes the natural key the full, provably-stable identity of the handle."),
 		f("addresses", "[]*ZoneNameServer", model.FieldScopeBoth, false, false, "Glue address records for the name server."),
 		f("ms_delegation_name", "*string", model.FieldScopeBoth, false, false, "MS delegation point name."),
 		f("policy", "string", model.FieldScopeResponse, false, false, "Host name policy for the record."),
@@ -232,10 +232,10 @@ func nsRecord() model.Resource {
 		ExternalNameRationale:  "WAPI assigns an opaque `_ref` on POST; no user-controlled key survives a rename.",
 		ExternalNameSourcePath: "_ref",
 		Fields:                 fields,
-		ImmutableFields:        []string{"zone"},
-		MutableFields:          []string{"name", "nameserver", "addresses", "ms_delegation_name", "view"},
+		ImmutableFields:        []string{"zone", "nameserver"},
+		MutableFields:          []string{"name", "addresses", "ms_delegation_name", "view"},
 		DeleteBehavior:         "hard-delete (404 on subsequent GET) — inferred from RecordA behavior",
-		Notes:                  "Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord.",
+		Notes:                  "Delegation NS record (not a zone's own apex NS set). UpdateNSRecord retains `dnsView` — same view-mutability caveat as MXRecord. `nameserver` is provider-imposed immutable (not a WAPI restriction): it is a component of this object's server-assigned handle, and NSRecord has no extattrs field to carry a stable identity stamp instead.",
 	}
 }
 
