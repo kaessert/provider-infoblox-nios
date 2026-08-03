@@ -732,59 +732,6 @@ spec:
     name: default
 ```
 
-**Namespace-scoped** (`zonedelegated.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: zonedelegated.infobloxnios.m.crossplane.io/v1alpha1
-kind: ZoneDelegated
-metadata:
-  name: example-zonedelegated-ns
-  namespace: default
-spec:
-  forProvider:
-    fqdn: delegated-ns.example.com
-    delegateTo:
-      - name: ns1.delegate.com
-        address: 10.0.1.1
-      - name: ns2.delegate.com
-        address: 10.0.1.2
-    view: default
-  providerConfigRef:
-    kind: ClusterProviderConfig
-    name: default
-```
-
-External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
-Crossplane stores this in the `crossplane.io/external-name` annotation — do
-not set it manually.
-
-The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
-underlying SDK's update call has no parameters for them, and WAPI
-additionally rejects moving an existing zone between views at the data
-level.
-
-### CNAMERecord
-
-Manage Infoblox NIOS DNS "CNAME" records (WAPI object type `record:cname`).
-
-**Cluster-scoped** (`recordcname.infobloxnios.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
-kind: CNAMERecord
-metadata:
-  name: example-cnamerecord
-spec:
-  forProvider:
-    name: alias.example.com
-    canonical: www.example.com
-    view: default
-    comment: Managed by Crossplane
-  providerConfigRef:
-    name: default
-```
-
 **Namespace-scoped** (`recordcname.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
