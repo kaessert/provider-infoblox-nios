@@ -592,10 +592,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestObjectManager builds an identity.ManagerAndConnector pointed at
@@ -998,8 +1009,8 @@ func TestClusterCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errCreateAAAARecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateAAAARecord)
 	}
 	if got := meta.GetExternalName(cr); got != "" {
 		t.Errorf("Create: external-name = %q, want unset after failed create", got)
@@ -1265,8 +1276,8 @@ func TestClusterUpdateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Update: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Update: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errUpdateAAAARecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateAAAARecord)
 	}
 }
 
@@ -1490,7 +1501,7 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 // ── cluster: Disconnect ──────────────────────────────────────────────────
 
 func TestClusterDisconnectIsNoop(t *testing.T) {
-	e := &clusterExternal{kube: &recordingKubeClient{}}
+	e := &clusterExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}
@@ -1736,8 +1747,8 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errCreateAAAARecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateAAAARecord)
 	}
 	if got := meta.GetExternalName(cr); got != "" {
 		t.Errorf("Create: external-name = %q, want unset after failed create", got)
@@ -1872,8 +1883,8 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Update: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Update: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errUpdateAAAARecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateAAAARecord)
 	}
 }
 
@@ -2144,7 +2155,7 @@ func TestNamespacedConnectUnsupportedKind(t *testing.T) {
 }
 
 func TestNamespacedDisconnectIsNoop(t *testing.T) {
-	e := &namespacedExternal{kube: &recordingKubeClient{}}
+	e := &namespacedExternal{kube: &recordingKubeClient{}, prober: identity.NewProber(), endpoint: t.Name()}
 	if err := e.Disconnect(context.Background()); err != nil {
 		t.Errorf("Disconnect: unexpected error: %v", err)
 	}

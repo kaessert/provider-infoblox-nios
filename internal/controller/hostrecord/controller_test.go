@@ -565,10 +565,21 @@ func readAll(rc interface{ Read([]byte) (int, error) }) ([]byte, error) {
 // fixedStatusHandler always responds with the given HTTP status — used to
 // exercise the generic (non-404) error classification paths.
 func fixedStatusHandler(status int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	// The identity-prerequisite probe (see ensureIdentityPrerequisite) issues
+	// its own separate request. Serving it a positive verdict here keeps a
+	// "boom" mock scoped to the operation it exists to exercise (Create,
+	// Update, or a search), instead of the probe itself absorbing the
+	// injected failure and masking the assertion under test.
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`{"Error":"boom"}`))
 	})
+	return mux
 }
 
 // newTestClient builds a hostRecordClient pointed at the given
@@ -591,8 +602,14 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	// prober is set to a fresh instance (not nil) so tests never share
 	// identity.DefaultProber's process-wide TTL cache across httptest
 	// servers — otherwise one test's cached verdict would leak into
-	// another's assertions about the prerequisite probe.
+	// another's assertions about the prerequisite probe. endpoint is
+	// likewise set to a value unique to this test/subtest (rather than
+	// left empty, which would fall back to the shared
+	// unresolvedProbeEndpoint cache key) so no two tests can ever
+	// collide on the same cache row even if a future change reused a
+	// Prober across calls within one test.
 	hc.prober = identity.NewProber()
+	hc.endpoint = t.Name()
 	return hc
 }
 
@@ -872,8 +889,8 @@ func TestClusterCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
 	}
 }
 
@@ -1072,8 +1089,8 @@ func TestClusterUpdateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Update: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Update: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errUpdateHostRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateHostRecord)
 	}
 }
 
@@ -1601,8 +1618,8 @@ func TestNamespacedCreateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Create: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errCreateHostRecord) {
+		t.Errorf("Create: error = %q, want it to contain %q (wrapped, not swallowed)", got, errCreateHostRecord)
 	}
 }
 
@@ -1735,8 +1752,8 @@ func TestNamespacedUpdateServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Update: expected error for 500, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "identity extensible attribute definition prerequisite") {
-		t.Errorf("Update: error = %q, want it to contain the prerequisite-probe context (wrapped, not swallowed)", got)
+	if got := err.Error(); !strings.Contains(got, errUpdateHostRecord) {
+		t.Errorf("Update: error = %q, want it to contain %q (wrapped, not swallowed)", got, errUpdateHostRecord)
 	}
 }
 
