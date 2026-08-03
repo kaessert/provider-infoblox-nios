@@ -1885,13 +1885,13 @@ and `status.atProvider.ttl`) changed its CRD schema format from `int64` to
 `int32`. This aligns `ttl` with every other DNS record type in the provider,
 all of which already used the 32-bit form.
 
-The `minimum: 0` / `maximum: 2147483647` bounds on `ttl` were introduced in
-the same change as this type conversion. If you are upgrading from a build
-published before 2026-07-30, your existing `ttl` values were never
-range-checked and the field had no lower bound at all — a negative or
-otherwise out-of-range value could have been persisted, and such a resource
-will fail CRD validation once you apply the new schema. Check your existing
-resources before upgrading:
+Neither the `minimum: 0` / `maximum: 2147483647` bounds nor this type
+conversion are present in builds published before 2026-07-30. If you are
+upgrading from one, your existing `ttl` values were never range-checked and
+the field had no lower bound at all — a negative or otherwise out-of-range
+value could have been persisted, and such a resource will fail CRD
+validation once you apply the new schema. Check your existing resources
+before upgrading:
 
 ```bash
 for res in arecords.recorda aaaarecords.recordaaaa cnamerecords.recordcname mxrecords.recordmx srvrecords.recordsrv; do
