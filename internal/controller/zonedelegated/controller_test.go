@@ -1759,6 +1759,72 @@ func TestExtAttrsEqualTreatsNilAndEmptyAsEqual(t *testing.T) {
 	}
 }
 
+// TestNewZoneDelegatedForResolveIncludesUseDelegatedTTL guards the fix for
+// useDelegatedTtl never propagating into AtProvider. The SDK's own
+// ibclient.NewEmptyZoneDelegated omits "use_delegated_ttl" from the extra
+// return fields it requests (unlike its sibling ibclient.NewZoneDelegated,
+// used by Create/Update, which requests it correctly) — so any GET/search
+// built from the SDK's unmodified constructor never receives the field
+// back from WAPI, regardless of what value was last written. This test
+// fails if the identity ladder's constructor ever regresses to the bare
+// SDK constructor.
+func TestNewZoneDelegatedForResolveIncludesUseDelegatedTTL(t *testing.T) {
+	vendorFields := ibclient.NewEmptyZoneDelegated().ReturnFields()
+	if containsField(vendorFields, "use_delegated_ttl") {
+		t.Log("ibclient.NewEmptyZoneDelegated now requests use_delegated_ttl upstream; newZoneDelegatedForResolve's extra append is now redundant but still correct")
+	}
+
+	got := newZoneDelegatedForResolve().ReturnFields()
+	if !containsField(got, "use_delegated_ttl") {
+		t.Fatalf("newZoneDelegatedForResolve().ReturnFields() = %v, want it to include \"use_delegated_ttl\"", got)
+	}
+}
+
+func containsField(fields []string, want string) bool {
+	for _, f := range fields {
+		if f == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestResolveIdentityRequestsUseDelegatedTTLReturnField is the full-stack
+// regression check: it captures the actual HTTP GET the identity ladder's
+// search-by-UID path issues and asserts "use_delegated_ttl" is present in
+// the "_return_fields" query parameter. Before the fix, this parameter
+// never carried the field, so every Observe (and Delete) resolved the
+// object with UseDelegatedTtl permanently nil — AtProvider never mirrored
+// the Grid's real value no matter what Update had just written, and
+// isUpToDate perpetually re-detected drift against that phantom "unset"
+// observation.
+func TestResolveIdentityRequestsUseDelegatedTTLReturnField(t *testing.T) {
+	var gotReturnFields string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/extensibleattributedef", func(w http.ResponseWriter, _ *http.Request) {
+		name := identity.EAKey
+		writeJSON(w, http.StatusOK, []ibclient.EADefinition{{Name: &name}})
+	})
+	mux.HandleFunc("GET /wapi/v"+wapiVersion+"/zone_delegated", func(w http.ResponseWriter, r *http.Request) {
+		gotReturnFields = r.URL.Query().Get("_return_fields")
+		writeJSON(w, http.StatusOK, []ibclient.ZoneDelegated{})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mc := newTestClients(t, srv)
+	_, outcome, err := resolveZoneDelegatedIdentity(context.Background(), mc.Connector, "", "test-uid")
+	if err != nil {
+		t.Fatalf("resolveZoneDelegatedIdentity: unexpected error: %v", err)
+	}
+	if outcome != identity.OutcomeNotFound {
+		t.Fatalf("resolveZoneDelegatedIdentity: outcome = %v, want OutcomeNotFound (empty search result)", outcome)
+	}
+	if !strings.Contains(gotReturnFields, "use_delegated_ttl") {
+		t.Fatalf(`identity ladder search request _return_fields = %q, want it to contain "use_delegated_ttl" — WAPI omits the field from GET/search responses when it is not explicitly requested, so Observe would never mirror it into AtProvider`, gotReturnFields)
+	}
+}
+
 func TestIsNotFoundClassifiesTypedError(t *testing.T) {
 	err := ibclient.NewNotFoundError("boom")
 	if !isNotFound(err) {
