@@ -384,7 +384,7 @@ func TestClusterCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterNetworkView("my-view", "my-view")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -410,7 +410,7 @@ func TestClusterCreateRefusesBlankUID(t *testing.T) {
 
 	cr := newClusterNetworkView("my-view", "my-view")
 	cr.UID = ""
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
 		t.Fatal("Create: expected an error for a blank uid")
@@ -452,7 +452,7 @@ func TestNamespacedCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newNamespacedNetworkView("ns", "my-view", "my-view", "ProviderConfig")
-	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -488,7 +488,7 @@ func TestClusterUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) {
 
 	cr := newClusterNetworkView("my-view", oldRef)
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed-view")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -521,7 +521,7 @@ func TestNamespacedUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) 
 
 	cr := newNamespacedNetworkView("ns", "my-view", oldRef, "ProviderConfig")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed-view")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {

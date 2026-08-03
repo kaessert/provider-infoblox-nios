@@ -442,7 +442,7 @@ func TestClusterCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterNetwork("my-network", "my-network")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -468,7 +468,7 @@ func TestClusterCreateRefusesBlankUID(t *testing.T) {
 
 	cr := newClusterNetwork("my-network", "my-network")
 	cr.UID = ""
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
 		t.Fatal("Create: expected an error for a blank uid")
@@ -518,7 +518,7 @@ func TestNamespacedCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newNamespacedNetwork("ns", "my-network", "my-network", "ProviderConfig")
-	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)

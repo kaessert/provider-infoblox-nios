@@ -338,7 +338,7 @@ func TestClusterCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newClusterSharedNetwork("my-net", "my-net")
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -364,7 +364,7 @@ func TestClusterCreateRefusesBlankUID(t *testing.T) {
 
 	cr := newClusterSharedNetwork("my-net", "my-net")
 	cr.UID = ""
-	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err == nil {
 		t.Fatal("Create: expected an error for a blank uid")
@@ -383,7 +383,7 @@ func TestNamespacedCreateSendsIdentityEAInSingleRequest(t *testing.T) {
 	mc := newTestClient(t, srv)
 
 	cr := newNamespacedSharedNetwork("ns", "my-net", "my-net", "ProviderConfig")
-	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 
 	if _, err := e.Create(context.Background(), cr); err != nil {
 		t.Fatalf("Create: unexpected error: %v", err)
@@ -415,7 +415,7 @@ func TestClusterUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) {
 
 	cr := newClusterSharedNetwork("my-net", oldRef)
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed-shared-network")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
@@ -448,7 +448,7 @@ func TestNamespacedUpdateRefreshedExternalNamePersistsAcrossReGet(t *testing.T) 
 
 	cr := newNamespacedSharedNetwork("ns", "my-net", oldRef, "ProviderConfig")
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(cr).Build()
-	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector}
+	e := &namespacedExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
 	cr.Spec.ForProvider.Name = stringPtr("renamed-shared-network")
 
 	if _, err := e.Update(context.Background(), cr); err != nil {
