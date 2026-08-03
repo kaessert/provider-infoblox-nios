@@ -208,11 +208,7 @@
 #               care whether the K8s object that requested the address was
 #               cluster- or namespace-scoped — so a single per-run
 #               ipv6network can safely cover both the cluster and
-#               namespaced FixedAddress examples, exactly as the
-#               pre-isolation static 2001:db8:e2e6:5::/64 literal
-#               (formerly provisioned once by test/setup.sh) did before
-#               this mechanism replaced it with a per-run
-#               network-prereq-v6.yaml manifest. The two host addresses
+#               namespaced FixedAddress examples. The two host addresses
 #               (::50, ::51) stay distinct fixed offsets inside that one
 #               block so the two scopes never collide with each other
 #               within one run. Every one of hextets 3/4/5 is nonzero, so
