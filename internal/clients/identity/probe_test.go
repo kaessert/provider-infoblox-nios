@@ -34,16 +34,28 @@ type fakeProbeConnector struct {
 
 	searchCalls int32
 	createCalls int32
+
+	// created is the object handed to CreateObject on the most recent
+	// call, so tests can inspect exactly what the probe asked the Grid
+	// to create.
+	created ibclient.IBObject
 }
 
-func (f *fakeProbeConnector) CreateObject(_ ibclient.IBObject) (string, error) {
+func (f *fakeProbeConnector) CreateObject(obj ibclient.IBObject) (string, error) {
 	atomic.AddInt32(&f.createCalls, 1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.created = obj
 	if f.createErr != nil {
 		return "", f.createErr
 	}
 	return "extensibleattributedef/abc123:Crossplane%20Internal%20ID", nil
+}
+
+func (f *fakeProbeConnector) lastCreated() ibclient.IBObject {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created
 }
 
 func (f *fakeProbeConnector) DeleteObject(_ string) (string, error) { return "", nil }
@@ -474,5 +486,75 @@ func TestDefaultProberIsUsable(t *testing.T) {
 	conn := &fakeProbeConnector{existing: []ibclient.EADefinition{{}}}
 	if err := DefaultProber.Ensure(context.Background(), conn, "default-prober-test-endpoint"); err != nil {
 		t.Fatalf("DefaultProber.Ensure returned error: %v", err)
+	}
+}
+
+// ── created definition carries Name, Type, Flags and Comment ─────────────
+
+func TestCreateDefinitionSetsNameTypeFlagsAndComment(t *testing.T) {
+	p, _ := newTestProber(DefaultProbeTTL)
+	conn := &fakeProbeConnector{}
+
+	if err := p.Ensure(context.Background(), conn, "grid-a"); err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+
+	def, ok := conn.lastCreated().(*ibclient.EADefinition)
+	if !ok {
+		t.Fatalf("object passed to CreateObject is %T, want *ibclient.EADefinition", conn.lastCreated())
+	}
+	if def.Name == nil || *def.Name != EAKey {
+		t.Fatalf("Name = %v, want %q", def.Name, EAKey)
+	}
+	if def.Type != eaDefType {
+		t.Fatalf("Type = %q, want %q", def.Type, eaDefType)
+	}
+	if def.Flags == nil || *def.Flags != eaDefFlags {
+		t.Fatalf("Flags = %v, want %q", def.Flags, eaDefFlags)
+	}
+	if def.Comment == nil || *def.Comment != eaDefComment {
+		t.Fatalf("Comment = %v, want %q", def.Comment, eaDefComment)
+	}
+}
+
+// ── the approved comment text is exact and within the SDK's 256-char limit ─
+//
+// This test pins the literal constant value so a silent reword — even a
+// single punctuation change — fails the build, and separately guards the
+// SDK's documented 256-character limit on EADefinition.Comment.
+
+func TestEaDefCommentTextAndLength(t *testing.T) {
+	const want = "Identity attribute for crossplane-provider-infobloxnios. Do not delete or rename — managed resources are resolved through this attribute, and removing it breaks reads and writes for every managed object on this Grid."
+
+	if eaDefComment != want {
+		t.Fatalf("eaDefComment has drifted from the human-approved text:\ngot:  %s\nwant: %s", eaDefComment, want)
+	}
+	if n := len([]rune(eaDefComment)); n > 256 {
+		t.Fatalf("eaDefComment is %d characters, want at most 256 (the SDK's documented limit on EADefinition.Comment)", n)
+	}
+}
+
+// ── a comment-less pre-existing definition is still "present" ────────────
+//
+// A definition created before eaDefComment existed (or created directly by
+// a Grid admin) has no comment. It must still be reported present and must
+// never trigger a create attempt — proving definitionExists matches on
+// name only and this change causes zero churn on Grids provisioned before
+// it landed.
+
+func TestEnsureDefinitionPresentWithoutCommentCausesNoChurn(t *testing.T) {
+	p, _ := newTestProber(DefaultProbeTTL)
+	name := EAKey
+	typ := eaDefType
+	flags := eaDefFlags
+	conn := &fakeProbeConnector{existing: []ibclient.EADefinition{
+		{Name: &name, Type: typ, Flags: &flags, Comment: nil},
+	}}
+
+	if err := p.Ensure(context.Background(), conn, "grid-a"); err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if conn.numCreateCalls() != 0 {
+		t.Fatalf("createCalls = %d, want 0 — a comment-less pre-existing definition must be treated as present, never (re)created", conn.numCreateCalls())
 	}
 }

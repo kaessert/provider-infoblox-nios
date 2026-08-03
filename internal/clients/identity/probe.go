@@ -53,6 +53,15 @@ const (
 	eaDefFlags = "CR"
 )
 
+// eaDefComment is the exact, human-approved text set on the identity EA
+// definition's Comment field when the provider creates it itself. It is
+// customer-visible in Grid Manager, so it must be copied verbatim —
+// do not reword, shorten, or add to it. It is also echoed verbatim in
+// the README's manual-creation POST body, so the manual and automatic
+// paths always produce an identical definition. Comment is capped at
+// 256 characters by the SDK; this string is well under that limit.
+const eaDefComment = "Identity attribute for crossplane-provider-infobloxnios. Do not delete or rename — managed resources are resolved through this attribute, and removing it breaks reads and writes for every managed object on this Grid."
+
 // wapiVersionForRemediation is the WAPI version quoted in
 // PrerequisiteError's remediation text — the exact command an operator
 // with superuser access should run. It intentionally matches the
@@ -275,6 +284,16 @@ func (p *Prober) now() time.Time {
 // unique Grid-wide, so a name search resolves it unambiguously — unlike
 // every other identity operation in this package, no UID or ambiguity
 // handling is needed here.
+//
+// Matching is deliberately NAME ONLY — the Comment field is never part
+// of the presence check. A definition an admin (or an earlier build of
+// this provider, before eaDefComment existed) created without a comment
+// must still be reported present, so this provider never mutates or
+// "upgrades" an object it does not own. Requiring the comment here would
+// make every pre-existing, comment-less definition look absent, driving
+// a create attempt that conflicts with the real object on every single
+// probe — churn and log noise with no benefit. Do not add a comment
+// check to this function.
 func definitionExists(conn ibclient.IBConnector) (bool, error) {
 	name := EAKey
 	var res []ibclient.EADefinition
@@ -296,10 +315,12 @@ func createDefinition(conn ibclient.IBConnector) error {
 	name := EAKey
 	typ := eaDefType
 	flags := eaDefFlags
+	comment := eaDefComment
 	obj := ibclient.NewEADefinition(ibclient.EADefinition{
-		Name:  &name,
-		Type:  typ,
-		Flags: &flags,
+		Name:    &name,
+		Type:    typ,
+		Flags:   &flags,
+		Comment: &comment,
 	})
 	_, err := conn.CreateObject(obj)
 	return err

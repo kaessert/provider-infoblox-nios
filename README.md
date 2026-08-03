@@ -83,7 +83,7 @@ credential:
 
 ```
 POST /wapi/v2.12/extensibleattributedef
-{"name":"Crossplane Internal ID","type":"STRING","flags":"CR"}
+{"name":"Crossplane Internal ID","type":"STRING","flags":"CR","comment":"Identity attribute for crossplane-provider-infobloxnios. Do not delete or rename — managed resources are resolved through this attribute, and removing it breaks reads and writes for every managed object on this Grid."}
 ```
 
 Managing extensible attribute definitions is a superuser-only Grid operation —
