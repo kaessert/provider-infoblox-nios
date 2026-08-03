@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -209,14 +210,6 @@ func TestGenDatasourceUsageError(t *testing.T) {
 // easy to misdiagnose as a script bug. This test names the actual cause
 // directly so the fix is obvious: chmod +x and `git update-index
 // --chmod=+x`.
-//
-// This package (test/e2e) is outside GO_SUBDIRS, so `make test` /
-// `make reviewable` does not compile or run it — this guard only fires when
-// `go test ./test/e2e/...` is run explicitly (as the E2E flow's own
-// pre-flight steps do). A Makefile-side check that runs unconditionally
-// during `make reviewable` would be the more durable option, but the
-// Makefile is scaffolder-owned; this test is the guard available within the
-// tester's file charter.
 func TestGenDatasourceScriptIsExecutable(t *testing.T) {
 	info, err := os.Stat(scriptPath(t))
 	if err != nil {
@@ -224,6 +217,20 @@ func TestGenDatasourceScriptIsExecutable(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("gen-datasource.sh is not executable (mode %s) — run: chmod +x test/e2e/gen-datasource.sh && git update-index --chmod=+x test/e2e/gen-datasource.sh", info.Mode())
+	}
+}
+
+// TestReapScriptIsExecutable is TestGenDatasourceScriptIsExecutable's
+// counterpart for reap.sh — every test in this file that shells out to it
+// (TestReapScopeCoversDatasourceV6Keys) fails just as opaquely if the
+// exec bit is lost.
+func TestReapScriptIsExecutable(t *testing.T) {
+	info, err := os.Stat(reapScriptPath(t))
+	if err != nil {
+		t.Fatalf("stat reap.sh: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("reap.sh is not executable (mode %s) — run: chmod +x test/e2e/reap.sh && git update-index --chmod=+x test/e2e/reap.sh", info.Mode())
 	}
 }
 
@@ -467,12 +474,14 @@ func TestGenDatasourceV6NetworkFormat(t *testing.T) {
 
 // TestGenDatasourceV6NetworkSharesBlockIndex asserts the IPv6 network
 // keys are derived from the SAME BLOCK_INDEX byte as netPrefix (rendered
-// as 2-digit lowercase hex in the third hextet) — the whole point of
+// as UNPADDED lowercase hex in the third hextet — WAPI stores IPv6
+// addresses in RFC 5952 canonical form, which strips a hextet's leading
+// zero, so ip.String() below never has one either) — the whole point of
 // reusing the draw instead of hashing a second byte.
 func TestGenDatasourceV6NetworkSharesBlockIndex(t *testing.T) {
 	values := runGenDatasource(t, "TestGenDatasourceV6NetworkSharesBlockIndex-seed")
 	blockIndex := blockIndexFromDatasource(t, values)
-	wantHex := fmt.Sprintf("%02x", blockIndex)
+	wantHex := fmt.Sprintf("%x", blockIndex)
 
 	for _, key := range []string{keyNetV6NetworkCluster, keyNetV6NetworkNamespaced} {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -571,13 +580,14 @@ func TestGenDatasourceV6ContainerFixedAddrFormat(t *testing.T) {
 // TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex asserts
 // netV6ContainerCluster, netV6ContainerNamespaced, netV6FixedAddrParent,
 // and the two netV6FixedAddrHost* keys all carry the SAME BLOCK_INDEX
-// byte (rendered as 2-digit lowercase hex) in their third hextet as
-// netPrefix and netV6NetworkCluster/Namespaced — the whole point of
-// reusing netV6Hex instead of drawing a fresh hash byte per resource.
+// byte (rendered as UNPADDED lowercase hex, matching WAPI's RFC 5952
+// canonical storage form) in their third hextet as netPrefix and
+// netV6NetworkCluster/Namespaced — the whole point of reusing netV6Hex
+// instead of drawing a fresh hash byte per resource.
 func TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex(t *testing.T) {
 	values := runGenDatasource(t, "TestGenDatasourceV6ContainerFixedAddrSharesBlockIndex-seed")
 	blockIndex := blockIndexFromDatasource(t, values)
-	wantHex := fmt.Sprintf("%02x", blockIndex)
+	wantHex := fmt.Sprintf("%x", blockIndex)
 
 	thirdHextet := func(key string) string {
 		t.Helper()
@@ -811,5 +821,240 @@ func TestGenDatasourceBlockIndexRange(t *testing.T) {
 		if err != nil || n < 0 || n > 255 {
 			t.Errorf("seed %q: third octet %q not a valid byte", seed, parts[2])
 		}
+	}
+}
+
+// reapScriptPath resolves reap.sh relative to this test file, the same
+// way scriptPath resolves gen-datasource.sh.
+func reapScriptPath(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd(): %v", err)
+	}
+	return filepath.Join(wd, "reap.sh")
+}
+
+// reapScopeEntry is one line of `reap.sh --print-scope` output: the WAPI
+// object type, the field it searches, and the compiled regex it matches
+// against that field's canonical value.
+type reapScopeEntry struct {
+	otype string
+	field string
+	regex *regexp.Regexp
+}
+
+// envWithoutInfobloxCreds strips INFOBLOX_HOST/USER/PASS from the current
+// environment, so reapPrintScope actually proves --print-scope needs none
+// rather than merely happening to run in an environment that lacks them.
+func envWithoutInfobloxCreds(t *testing.T) []string {
+	t.Helper()
+	var filtered []string
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "INFOBLOX_HOST="),
+			strings.HasPrefix(kv, "INFOBLOX_USER="),
+			strings.HasPrefix(kv, "INFOBLOX_PASS="):
+			continue
+		default:
+			filtered = append(filtered, kv)
+		}
+	}
+	return filtered
+}
+
+// reapPrintScope invokes `reap.sh --net-prefix=<netPrefix> --print-scope`
+// with no INFOBLOX_* credentials in its environment and parses the
+// object-type/field/regex triples it reports.
+func reapPrintScope(t *testing.T, netPrefix string) []reapScopeEntry {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), reapScriptPath(t), "--net-prefix="+netPrefix, "--print-scope")
+	cmd.Env = envWithoutInfobloxCreds(t)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("reap.sh --net-prefix=%s --print-scope failed: %v\noutput:\n%s", netPrefix, err, output)
+	}
+	trimmed := strings.TrimRight(string(output), "\n")
+	if trimmed == "" {
+		return nil
+	}
+	var entries []reapScopeEntry
+	for _, line := range strings.Split(trimmed, "\n") {
+		fields := strings.SplitN(line, " ", 3)
+		if len(fields) != 3 {
+			t.Fatalf("reap.sh --print-scope emitted an unparseable line: %q", line)
+		}
+		re, err := regexp.Compile(fields[2])
+		if err != nil {
+			t.Fatalf("reap.sh --print-scope emitted an invalid regex %q: %v", fields[2], err)
+		}
+		entries = append(entries, reapScopeEntry{otype: fields[0], field: fields[1], regex: re})
+	}
+	return entries
+}
+
+// canonicalIPv6String renders value (a bare IPv6 address or a CIDR) in the
+// same canonical, zero-compressed form WAPI stores it in (RFC 5952) — the
+// form reap.sh's PREFIX_V6_REGEX is built to match and reapPrintScope's
+// regexes are matched against below.
+func canonicalIPv6String(t *testing.T, value string) string {
+	t.Helper()
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	ip, _, err := net.ParseCIDR(value)
+	if err != nil {
+		t.Fatalf("%q is neither a valid IPv6 address nor CIDR", value)
+	}
+	return ip.String()
+}
+
+// netV6KeyExpectedOType maps each netV6* key gen-datasource.sh emits to the
+// WAPI object type reap.sh's IPv6 sweep must cover it as. Matching the
+// regex alone is not sufficient: reap.sh's PREFIX_V6_REGEX is the exact
+// same regex string for every IPv6 object-type row in IPV6_ADDRESSED_TYPES,
+// so ANY single scope entry vacuously "covers" every other type's address
+// too — a sweep narrowed to one object type (dropping the other two
+// entirely) still passes a check that only compares regexes. Requiring the
+// otype to match as well is what makes object-type coverage drift visible.
+var netV6KeyExpectedOType = map[string]string{
+	keyNetV6NetworkCluster:          "ipv6network",
+	keyNetV6NetworkNamespaced:       "ipv6network",
+	keyNetV6ContainerCluster:        "ipv6networkcontainer",
+	keyNetV6ContainerNamespaced:     "ipv6networkcontainer",
+	keyNetV6FixedAddrParent:         "ipv6network",
+	keyNetV6FixedAddrHostCluster:    "ipv6fixedaddress",
+	keyNetV6FixedAddrHostNamespaced: "ipv6fixedaddress",
+}
+
+// netV6KeyExpectedField maps each netV6* key to the WAPI field the scope
+// entry for its object type must search. ipv6network and
+// ipv6networkcontainer objects are keyed on their "network" field;
+// ipv6fixedaddress objects are keyed on "ipv6addr". An entry with the
+// right otype but the wrong field would still never find the object it
+// claims to cover.
+var netV6KeyExpectedField = map[string]string{
+	keyNetV6NetworkCluster:          "network",
+	keyNetV6NetworkNamespaced:       "network",
+	keyNetV6ContainerCluster:        "network",
+	keyNetV6ContainerNamespaced:     "network",
+	keyNetV6FixedAddrParent:         "network",
+	keyNetV6FixedAddrHostCluster:    "ipv6addr",
+	keyNetV6FixedAddrHostNamespaced: "ipv6addr",
+}
+
+// knownV6Keys is the floor list of netV6* keys gen-datasource.sh is known
+// to emit today. datasourceV6Keys derives the actual set fresh on every
+// run so a newly ADDED key is picked up automatically with no test edit
+// required; this floor guards the opposite failure — the datasource
+// silently emitting FEWER netV6* keys than it should, which would let the
+// per-key loop below iterate a shrunken (or empty) set and pass vacuously.
+var knownV6Keys = []string{
+	keyNetV6NetworkCluster, keyNetV6NetworkNamespaced,
+	keyNetV6ContainerCluster, keyNetV6ContainerNamespaced,
+	keyNetV6FixedAddrParent,
+	keyNetV6FixedAddrHostCluster, keyNetV6FixedAddrHostNamespaced,
+}
+
+// datasourceV6Keys returns every key gen-datasource.sh actually emitted
+// whose name starts with "netV6", derived from the datasource output
+// itself rather than a hand-maintained list. This is what lets
+// TestReapScopeCoversDatasourceV6Keys catch a new IPv6 sub-allocation
+// added to gen-datasource.sh with no corresponding reap.sh sweep entry: the
+// key shows up here automatically and then fails the otype lookup below.
+// Sorted for a deterministic iteration order and deterministic failure
+// messages (map iteration order is randomized).
+func datasourceV6Keys(values map[string]string) []string {
+	var keys []string
+	for key := range values {
+		if strings.HasPrefix(key, "netV6") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestReapScopeCoversDatasourceV6Keys is the drift guard between
+// gen-datasource.sh's netV6* keys and reap.sh's IPv6 sweep scope. The two
+// evolved independently more than once, and each time they silently fell
+// out of sync in one of two ways: gen-datasource.sh started emitting an
+// address shape reap.sh's regex no longer matched, or reap.sh's sweep
+// stopped covering one of the three IPv6 WAPI object types
+// (ipv6network / ipv6networkcontainer / ipv6fixedaddress) while its regex
+// kept matching addresses of the type it still did cover — a coverage gap
+// invisible to any check that only compares regexes, because
+// PREFIX_V6_REGEX is identical across all three rows in
+// IPV6_ADDRESSED_TYPES. A dry run with nothing to reap prints the exact
+// same "Nothing to reap" in both failure modes — the gap is silent by
+// construction. This test closes both gaps mechanically: for every
+// netV6* key gen-datasource.sh actually emits (derived fresh each run, not
+// a hardcoded list — a floor guards against the set shrinking to nothing),
+// at least one `reap.sh --print-scope` entry for that SAME run's
+// --net-prefix must have the object type and field that key's WAPI object
+// is actually created as/on, and its regex must match the key's CANONICAL
+// (WAPI-stored) rendering. A scope entry that matches only on regex, or
+// only on otype, does not count.
+func TestReapScopeCoversDatasourceV6Keys(t *testing.T) {
+	// Seeds below were chosen by running gen-datasource.sh and reading the
+	// BLOCK_INDEX each one derives, not guessed — an unverified guess is
+	// exactly how earlier rounds of this mechanism ended up never
+	// exercising the low band at all. BLOCK_INDEX 5 (seed "...-seed-f")
+	// is the round-2 regression case: WAPI's RFC 5952 canonical storage
+	// strips a hextet's leading zero, so a reap regex built from the
+	// zero-padded spelling can never match a low-index run's actual
+	// object. The other seeds cover the high band where padded and
+	// canonical already agree, so a regression that only breaks the low
+	// band can't hide behind them.
+	seeds := []string{
+		"TestReapScopeCoversDatasourceV6Keys-seed-a", // BLOCK_INDEX 32
+		"TestReapScopeCoversDatasourceV6Keys-seed-b", // BLOCK_INDEX 91
+		"TestReapScopeCoversDatasourceV6Keys-seed-c", // BLOCK_INDEX 153
+		"TestReapScopeCoversDatasourceV6Keys-seed-f", // BLOCK_INDEX 5 (< 16)
+	}
+
+	sawLowBlockIndex := false
+	for _, seed := range seeds {
+		values := runGenDatasource(t, seed)
+		blockIndex := blockIndexFromDatasource(t, values)
+		if blockIndex < 16 {
+			sawLowBlockIndex = true
+		}
+		scope := reapPrintScope(t, values[keyNetPrefix])
+		if len(scope) == 0 {
+			t.Fatalf("seed %q: reap.sh --print-scope reported an empty scope for --net-prefix=%s", seed, values[keyNetPrefix])
+		}
+
+		v6Keys := datasourceV6Keys(values)
+		if len(v6Keys) < len(knownV6Keys) {
+			t.Fatalf("seed %q: gen-datasource.sh emitted only %d netV6* keys %v, expected at least the %d known keys %v — the datasource's IPv6 sub-allocation may have regressed",
+				seed, len(v6Keys), v6Keys, len(knownV6Keys), knownV6Keys)
+		}
+
+		for _, key := range v6Keys {
+			wantOType, ok := netV6KeyExpectedOType[key]
+			if !ok {
+				t.Errorf("seed %q: netV6* key %q has no entry in netV6KeyExpectedOType — a new IPv6 sub-allocation was added to gen-datasource.sh without declaring which WAPI object type reap.sh's sweep must cover it as",
+					seed, key)
+				continue
+			}
+			wantField := netV6KeyExpectedField[key]
+			canonical := canonicalIPv6String(t, values[key])
+			matched := false
+			for _, entry := range scope {
+				if entry.otype == wantOType && entry.field == wantField && entry.regex.MatchString(canonical) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Errorf("seed %q (BLOCK_INDEX=%d, netPrefix=%s): %s=%q (canonical %q) is not covered by any reap.sh --print-scope entry with otype=%q field=%q: %v",
+					seed, blockIndex, values[keyNetPrefix], key, values[key], canonical, wantOType, wantField, scope)
+			}
+		}
+	}
+
+	if !sawLowBlockIndex {
+		t.Fatalf("none of the seeds %v produced a BLOCK_INDEX < 16 — this test needs at least one low-index run to guard the RFC 5952 leading-zero regression; re-derive a low-index seed with gen-datasource.sh and update the list", seeds)
 	}
 }
