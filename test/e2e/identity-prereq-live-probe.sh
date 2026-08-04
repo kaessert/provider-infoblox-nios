@@ -337,12 +337,22 @@ wait_synced() {
   # that just satisfied `want`. Live-verified to actually happen: the
   # status matched "False" one poll, then a second, independent read of
   # the message moments later came back empty.
-  local res="$1" name="$2" scope="$3" want="$4" timeout="${5:-90}" ns_args=() json got
+  #
+  # When want="False", a status/message pair is only accepted once the
+  # message is non-empty. Live-verified this matters even reading status
+  # and message from one snapshot: a Synced=False condition was observed
+  # transiently with no message at all before settling, a few polls
+  # later, into the real ReconcileError text — status and message can
+  # each update within the window this loop polls at, and every
+  # Synced=False this provider sets always carries a reason in the
+  # message, so an empty one is a transient in-flight write, not the
+  # steady state a caller is waiting for.
+  local res="$1" name="$2" scope="$3" want="$4" timeout="${5:-90}" ns_args=() json got msg
   [ "${scope}" = "namespaced" ] && ns_args=(-n default)
   LAST_SYNCED_MESSAGE=""
   for _ in $(seq 1 "$((timeout / 3))"); do
     json="$(${KUBECTL} "${ns_args[@]}" get "${res}/${name}" -o json 2>/dev/null || true)"
-    got="$(printf '%s' "${json}" | python3 -c '
+    read -r got msg < <(printf '%s' "${json}" | python3 -c '
 import json,sys
 try:
     d = json.load(sys.stdin)
@@ -350,10 +360,12 @@ except Exception:
     sys.exit(0)
 for c in d.get("status", {}).get("conditions", []):
     if c.get("type") == "Synced":
-        print(c.get("status", ""))
+        # NUL-separated on one line so a multi-line message cannot be
+        # mistaken for a second record by the caller.
+        sys.stdout.write(c.get("status", "") + "\x00" + c.get("message", "").replace("\n", " "))
         break
-' 2>/dev/null || true)"
-    if [ "${got}" = "${want}" ]; then
+' 2>/dev/null | tr '\0' '\t' || true)
+    if [ "${got}" = "${want}" ] && { [ "${want}" != "False" ] || [ -n "${msg}" ]; }; then
       LAST_SYNCED_MESSAGE="$(printf '%s' "${json}" | python3 -c '
 import json,sys
 try:
