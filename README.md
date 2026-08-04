@@ -620,6 +620,7 @@ spec:
     ipv4Addrs:
       - ipv4Addr: 10.0.0.100
     view: default
+    configureForDns: true
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
@@ -639,6 +640,7 @@ spec:
     ipv4Addrs:
       - ipv4Addr: 10.0.0.101
     view: default
+    configureForDns: true
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
@@ -652,6 +654,12 @@ not set it manually.
 The `networkView` field is immutable after creation (the underlying SDK's
 update call has no `networkView` parameter). The `view` field is mutable,
 but changing it moves the record between DNS views and changes the `_ref`.
+`configureForDns` defaults to `false` when omitted, and WAPI rejects the
+create with "At least one host address must belong to an existing network
+if DNS is not configured for this host" unless the address already belongs
+to a pre-existing IPAM `Network` — set it to `true` (as above) when
+registering the host under a DNS zone rather than pairing it with a
+pre-provisioned `Network`.
 
 Apply the full set of example manifests:
 
@@ -730,6 +738,14 @@ kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
 
 Manage Infoblox NIOS authoritative DNS zones (WAPI object type `zone_auth`).
 
+`gridPrimary` is optional at create — WAPI accepts an authoritative zone with
+an empty `gridPrimary` list. But a zone with no primary name server does not
+serve DNS, and NIOS will not return or persist the SOA timer fields
+(`soaDefaultTtl`, `soaExpire`, `soaNegativeTtl`, `soaRefresh`, `soaRetry`,
+`useGridZoneTimer`) for it — a PUT that sets them is silently accepted and
+never reflected back. That is why both examples below set a `gridPrimary`.
+Substitute your own Grid member's hostname for `gridmaster.example.com`.
+
 **Cluster-scoped** (`zoneauth.infobloxnios.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -740,6 +756,8 @@ metadata:
 spec:
   forProvider:
     fqdn: example.com
+    gridPrimary:
+      - name: gridmaster.example.com
   providerConfigRef:
     name: default
 ```
@@ -756,6 +774,8 @@ spec:
   forProvider:
     fqdn: example-ns.com
     comment: Managed by Crossplane (namespaced)
+    gridPrimary:
+      - name: gridmaster.example.com
   providerConfigRef:
     kind: ClusterProviderConfig
     name: default
@@ -1674,7 +1694,7 @@ metadata:
 spec:
   forProvider:
     ipv4addr: 10.0.0.50
-    mac: "00:00:00:00:00:00"
+    mac: "00:00:00:00:0a:01"
     networkView: default
     comment: Managed by Crossplane
   providerConfigRef:
@@ -1692,7 +1712,7 @@ metadata:
 spec:
   forProvider:
     ipv4addr: 10.0.0.51
-    mac: "00:00:00:00:00:00"
+    mac: "00:00:00:00:0a:02"
     networkView: default
     comment: Managed by Crossplane (namespaced)
   providerConfigRef:
