@@ -122,7 +122,18 @@ WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
 RUN_TOKEN="$(date -u +%Y%m%d%H%M%S)"
 SCRATCH_KEY="Crossplane Internal ID E2E ${RUN_TOKEN}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-identity-prereq-probe-${RUN_TOKEN}}"
-export KUBECONFIG="${KUBECONFIG:-${ROOT_DIR}/identity-prereq-probe.kubeconfig}"
+# Per-run kubeconfig path, keyed on RUN_TOKEN. Two runs started from the
+# same checkout must never share this file: `make controlplane.up` writes
+# its own cluster's context into whatever path KUBECONFIG names, so a
+# checkout-wide default lets a second run started mid-first-run repoint
+# the first run's kubectl at the second run's cluster. An externally
+# supplied KUBECONFIG (how an automated caller isolates this script from
+# concurrent invocations) is honoured unchanged — KUBECONFIG_WAS_DEFAULTED
+# records which case we are in so cleanup() only ever removes a file this
+# run created.
+KUBECONFIG_WAS_DEFAULTED=0
+[ -n "${KUBECONFIG:-}" ] || KUBECONFIG_WAS_DEFAULTED=1
+export KUBECONFIG="${KUBECONFIG:-${ROOT_DIR}/identity-prereq-probe-${RUN_TOKEN}.kubeconfig}"
 # REMEDIATION_SUBSTR is the operator-facing text every PrerequisiteError
 # carries (identity/probe.go's PrerequisiteError.Error()), regardless of
 # which of the four call sites returned it — used below together with the
@@ -275,6 +286,11 @@ cleanup() {
     log "cleanup: removing the scratch build worktree..."
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
     rm -f "${SCRATCH_WORKTREE}.lock"
+  fi
+
+  if [ "${KUBECONFIG_WAS_DEFAULTED}" -eq 1 ]; then
+    log "cleanup: removing the per-run kubeconfig ${KUBECONFIG}..."
+    rm -f "${KUBECONFIG}"
   fi
 
   if [ "${status}" -eq 0 ] && [ "${grid_clean}" -eq 1 ]; then
