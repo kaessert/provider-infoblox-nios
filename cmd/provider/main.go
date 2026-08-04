@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	authv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -52,6 +53,17 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/apis"
 	infobloxnios "github.com/crossplane-contrib/provider-infoblox-nios/internal/controller"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/version"
+)
+
+const (
+	// safeStartPrecheckTimeout bounds the total time spent retrying the
+	// canWatchCRD RBAC precheck. crossplane-rbac-manager has been observed
+	// to resolve a fresh provider revision's ClusterRole within a couple of
+	// seconds of the provider pod starting, so 30s is ample headroom.
+	safeStartPrecheckTimeout = 30 * time.Second
+	// safeStartPrecheckInterval is the backoff between retries of a denied
+	// SelfSubjectAccessReview during the SafeStart precheck.
+	safeStartPrecheckInterval = 2 * time.Second
 )
 
 func main() {
@@ -160,7 +172,7 @@ func main() {
 	// get/list/watch on CustomResourceDefinitions) when the provider's service
 	// account actually has that RBAC. Control planes that don't grant CRD-level
 	// RBAC to providers would otherwise crash-loop trying to watch CRDs.
-	precheckCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	precheckCtx, cancel := context.WithTimeout(context.Background(), safeStartPrecheckTimeout)
 	defer cancel()
 	canSafeStart, err := canWatchCRD(precheckCtx, mgr)
 	kingpin.FatalIfError(err, "SafeStart precheck failed")
@@ -186,13 +198,47 @@ func main() {
 // canWatchCRD performs a SelfSubjectAccessReview to determine whether the
 // provider's service account has get/list/watch permissions on
 // CustomResourceDefinitions. Without these permissions the CRD gate
-// controller cannot start, so callers should fall back to the non-gated
-// Setup path.
+// controller cannot function, so callers should fall back to the non-gated
+// Setup path instead of crash-looping.
+//
+// crossplane-rbac-manager creates this provider revision's ClusterRole
+// asynchronously after the provider pod's ServiceAccount and
+// ClusterRoleBinding already exist, so a denial on the very first check does
+// not prove RBAC was never granted — it may only mean the role has not
+// propagated to the API server's authorizer yet. The check is retried with a
+// short backoff until every verb is allowed or the context deadline is
+// reached, so a fresh pod does not permanently disable SafeStart purely
+// because it raced the RBAC manager at startup.
 func canWatchCRD(ctx context.Context, mgr ctrl.Manager) (bool, error) {
 	if err := authv1.AddToScheme(mgr.GetScheme()); err != nil {
-		return false, errors.Wrap(err, "cannot add authorization/v1 to scheme")
+		return false, err
 	}
 
+	var allowed bool
+	pollErr := wait.PollUntilContextCancel(ctx, safeStartPrecheckInterval, true, func(pollCtx context.Context) (bool, error) {
+		ok, err := hasCRDWatchPermissions(pollCtx, mgr)
+		if err != nil {
+			return false, err
+		}
+		allowed = ok
+		// A denial keeps polling until the context deadline is reached;
+		// permission being granted stops the poll immediately.
+		return ok, nil
+	})
+	if pollErr != nil && !wait.Interrupted(pollErr) {
+		return false, pollErr
+	}
+	// wait.Interrupted means the context deadline was reached without every
+	// verb being allowed - that is a denial, not an error. allowed already
+	// reflects the last observed result (false, since the poll condition
+	// only returns true on success).
+	return allowed, nil
+}
+
+// hasCRDWatchPermissions performs a single round of SelfSubjectAccessReview
+// checks for get/list/watch on CustomResourceDefinitions, returning true
+// only if every verb is allowed.
+func hasCRDWatchPermissions(ctx context.Context, mgr ctrl.Manager) (bool, error) {
 	verbs := []string{"get", "list", "watch"}
 	for _, verb := range verbs {
 		sar := &authv1.SelfSubjectAccessReview{
@@ -211,6 +257,5 @@ func canWatchCRD(ctx context.Context, mgr ctrl.Manager) (bool, error) {
 			return false, nil
 		}
 	}
-
 	return true, nil
 }
