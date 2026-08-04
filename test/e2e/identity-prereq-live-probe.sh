@@ -119,7 +119,15 @@ cd "${ROOT_DIR}"
 KUBECTL="${KUBECTL:-kubectl}"
 WAPI_VERSION="${INFOBLOX_WAPI_VERSION:-v2.12}"
 WAPI_BASE="https://${INFOBLOX_HOST}/wapi/${WAPI_VERSION}"
-RUN_TOKEN="$(date -u +%Y%m%d%H%M%S)"
+# $$ (this shell's PID) makes the token unique per process, not merely per
+# second — two probes launched from the same checkout inside the same
+# second would otherwise mint an identical token and collide on every
+# RUN_TOKEN-keyed artifact below (kubeconfig path, KIND_CLUSTER_NAME,
+# SCRATCH_KEY, and every object name). Every use site is either a
+# substring/exact match (the record:a sweep, the EA definition name) or a
+# Kubernetes/kind name (DNS-1123 label / label value), and digits plus a
+# single "-" separator are valid in all of them.
+RUN_TOKEN="$(date -u +%Y%m%d%H%M%S)-$$"
 SCRATCH_KEY="Crossplane Internal ID E2E ${RUN_TOKEN}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-identity-prereq-probe-${RUN_TOKEN}}"
 # Per-run kubeconfig path, keyed on RUN_TOKEN. Two runs started from the
@@ -184,12 +192,12 @@ delete_ea_def() {
 
 # record_a_refs_for_token returns one "<_ref><TAB><name>" line per
 # record:a object still on the Grid whose name carries this run's
-# RUN_TOKEN, or nothing if none remain. RUN_TOKEN (a timestamp) is
-# embedded in every scratch object this script creates (see apply_arecord)
-# and in nothing else on a shared Grid, so a substring match on it alone
-# is exact scoping — never a bare "idp-" prefix and never an age check,
-# both of which would risk matching another concurrent run's live
-# fixtures.
+# RUN_TOKEN, or nothing if none remain. RUN_TOKEN (a timestamp plus this
+# process's PID) is embedded in every scratch object this script creates
+# (see apply_arecord) and in nothing else on a shared Grid, so a substring
+# match on it alone is exact scoping — never a bare "idp-" prefix and
+# never an age check, both of which would risk matching another
+# concurrent run's live fixtures.
 record_a_refs_for_token() {
   curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET \
     "record:a?name~=${RUN_TOKEN}&_return_fields=name" \
