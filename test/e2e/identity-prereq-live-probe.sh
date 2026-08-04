@@ -329,11 +329,44 @@ YAML
 
 wait_synced() {
   # wait_synced <kind.group> <name> <scope: cluster|namespaced> <want True|False> <timeout-seconds>
-  local res="$1" name="$2" scope="$3" want="$4" timeout="${5:-90}" ns_args=()
+  # On success, also sets the global LAST_SYNCED_MESSAGE to the Synced
+  # condition's message from the SAME kubectl snapshot that matched
+  # `want` — a separate follow-up `kubectl get` for the message, after
+  # this function returns, can race a fast-reconciling object and
+  # capture a DIFFERENT (possibly still-empty) condition than the one
+  # that just satisfied `want`. Live-verified to actually happen: the
+  # status matched "False" one poll, then a second, independent read of
+  # the message moments later came back empty.
+  local res="$1" name="$2" scope="$3" want="$4" timeout="${5:-90}" ns_args=() json got
   [ "${scope}" = "namespaced" ] && ns_args=(-n default)
+  LAST_SYNCED_MESSAGE=""
   for _ in $(seq 1 "$((timeout / 3))"); do
-    got="$(${KUBECTL} "${ns_args[@]}" get "${res}/${name}" -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null || true)"
-    [ "${got}" = "${want}" ] && return 0
+    json="$(${KUBECTL} "${ns_args[@]}" get "${res}/${name}" -o json 2>/dev/null || true)"
+    got="$(printf '%s' "${json}" | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for c in d.get("status", {}).get("conditions", []):
+    if c.get("type") == "Synced":
+        print(c.get("status", ""))
+        break
+' 2>/dev/null || true)"
+    if [ "${got}" = "${want}" ]; then
+      LAST_SYNCED_MESSAGE="$(printf '%s' "${json}" | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for c in d.get("status", {}).get("conditions", []):
+    if c.get("type") == "Synced":
+        print(c.get("message", ""))
+        break
+' 2>/dev/null || true)"
+      return 0
+    fi
     sleep 3
   done
   echo "FATAL: ${res}/${name} never reached Synced=${want} within ${timeout}s (last seen: ${got:-<none>})" >&2
@@ -350,13 +383,6 @@ wait_deleted() {
   done
   echo "FATAL: ${res}/${name} was not deleted within ${timeout}s" >&2
   return 1
-}
-
-synced_message() {
-  # synced_message <kind.group> <name> <scope: cluster|namespaced>
-  local res="$1" name="$2" scope="$3" ns_args=()
-  [ "${scope}" = "namespaced" ] && ns_args=(-n default)
-  ${KUBECTL} "${ns_args[@]}" get "${res}/${name}" -o jsonpath='{.status.conditions[?(@.type=="Synced")].message}'
 }
 
 # fake_stale_ref <label> — a syntactically well-formed record:a WAPI
@@ -459,8 +485,7 @@ ${KUBECTL} annotate arecord.recorda.infobloxnios.m.crossplane.io/idp-s1-ns-${RUN
 # ── Scenario 2: reactive guard converts the raw search failure ────────────
 log "=== scenario 2: Observe()'s reactive guard (controller.go:732) surfaces the remediation, not the raw WAPI error ==="
 wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster False 60
-msg="$(synced_message arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster)"
-assert_condition_prefix "scenario 2 (Observe)" "${msg}" "observe failed: "
+assert_condition_prefix "scenario 2 (Observe)" "${LAST_SYNCED_MESSAGE}" "observe failed: "
 
 raw="$(python3 -c "
 import urllib.parse
@@ -487,11 +512,10 @@ curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" "${WAPI_BASE}/record:a?${raw}" -
 # definition returns.
 log "=== scenario 6: an in-flight delete of a stale-ref object is blocked safely by Observe(), not silently completed ==="
 ${KUBECTL} delete arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} --wait=false
-sleep 10
 deletion_ts="$(${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)"
 [ -n "${deletion_ts}" ] || { echo "FATAL: idp-s1 has no deletionTimestamp after kubectl delete" >&2; exit 1; }
-msg="$(synced_message arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster)"
-assert_condition_prefix "scenario 6 (in-flight delete, blocked by Observe)" "${msg}" "observe failed: "
+wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster False 60
+assert_condition_prefix "scenario 6 (in-flight delete, blocked by Observe)" "${LAST_SYNCED_MESSAGE}" "observe failed: "
 ${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} >/dev/null 2>&1 || {
   echo "FATAL: idp-s1 disappeared from Kubernetes despite Observe() refusing — this would mean the delete completed (or the finalizer was dropped) without ever proving ownership, exactly the silent-loss failure mode ADR-IN-0006 §5 exists to close" >&2
   exit 1
@@ -519,12 +543,9 @@ log "=== scenario 3: Observe()'s reactive guard refuses a brand-new object under
 apply_arecord "idp-s2-${RUN_TOKEN}" "192.0.2.160" cluster
 apply_arecord "idp-s2-ns-${RUN_TOKEN}" "192.0.2.161" namespaced
 wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s2-${RUN_TOKEN}" cluster False 60
+assert_condition_prefix "scenario 3 (Observe, cluster)" "${LAST_SYNCED_MESSAGE}" "observe failed: "
 wait_synced arecord.recorda.infobloxnios.m.crossplane.io "idp-s2-ns-${RUN_TOKEN}" namespaced False 60
-
-msg="$(synced_message arecord.recorda.infobloxnios.crossplane.io "idp-s2-${RUN_TOKEN}" cluster)"
-assert_condition_prefix "scenario 3 (Observe, cluster)" "${msg}" "observe failed: "
-msg="$(synced_message arecord.recorda.infobloxnios.m.crossplane.io "idp-s2-ns-${RUN_TOKEN}" namespaced)"
-assert_condition_prefix "scenario 3 (Observe, namespaced)" "${msg}" "observe failed: "
+assert_condition_prefix "scenario 3 (Observe, namespaced)" "${LAST_SYNCED_MESSAGE}" "observe failed: "
 
 for n in "idp-s2-${RUN_TOKEN}" "idp-s2-ns-${RUN_TOKEN}"; do
   found="$(curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET "record:a?name=${n}.example.com")"
@@ -569,12 +590,9 @@ log "=== scenario 5: Create()'s unconditional guard refuses a brand-new object v
 apply_arecord "idp-s4-${RUN_TOKEN}" "192.0.2.170" cluster
 apply_arecord "idp-s4-ns-${RUN_TOKEN}" "192.0.2.171" namespaced
 wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s4-${RUN_TOKEN}" cluster False 60
+assert_condition_prefix "scenario 5 (Create, cluster)" "${LAST_SYNCED_MESSAGE}" "create failed: "
 wait_synced arecord.recorda.infobloxnios.m.crossplane.io "idp-s4-ns-${RUN_TOKEN}" namespaced False 60
-
-msg="$(synced_message arecord.recorda.infobloxnios.crossplane.io "idp-s4-${RUN_TOKEN}" cluster)"
-assert_condition_prefix "scenario 5 (Create, cluster)" "${msg}" "create failed: "
-msg="$(synced_message arecord.recorda.infobloxnios.m.crossplane.io "idp-s4-ns-${RUN_TOKEN}" namespaced)"
-assert_condition_prefix "scenario 5 (Create, namespaced)" "${msg}" "create failed: "
+assert_condition_prefix "scenario 5 (Create, namespaced)" "${LAST_SYNCED_MESSAGE}" "create failed: "
 
 for n in "idp-s4-${RUN_TOKEN}" "idp-s4-ns-${RUN_TOKEN}"; do
   found="$(curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET "record:a?name=${n}.example.com")"
