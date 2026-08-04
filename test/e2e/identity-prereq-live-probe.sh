@@ -47,12 +47,16 @@
 #      script proves that chain live (see "Scenario 6") rather than
 #      asserting it from the source alone: it drives an in-flight deletion
 #      of a resource with a stale reference into exactly this state and
-#      confirms the observable, user-facing outcome — the delete is
-#      blocked safely (no orphan, no false success) and completes on its
-#      own once the definition returns — while documenting why the
-#      specific refusal at controller.go:791 cannot be triggered from
-#      outside the process without racing two calls a few milliseconds
-#      apart on a live Grid.
+#      confirms the observable, user-facing outcome while it holds — the
+#      delete is blocked safely (no orphan, no false success) as long as
+#      the definition stays absent — while documenting why the specific
+#      refusal at controller.go:791 cannot be triggered from outside the
+#      process without racing two calls a few milliseconds apart on a
+#      live Grid. Recreating the definition afterward exposed a SEPARATE,
+#      real gap this script cannot fix (production code, out of a test
+#      script's charter): the Kubernetes object then finalizes cleanly,
+#      but the Grid object is never actually deleted — see Scenario 6's
+#      own header comment for the live-verified mechanism.
 #
 # ── Isolation: a scratch attribute name, not the real one ─────────────────
 #
@@ -506,8 +510,8 @@ print(urllib.parse.urlencode({'*' + '${SCRATCH_KEY}': 'probe'}))
 log "raw WAPI error for the same search, captured independently:"
 curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" "${WAPI_BASE}/record:a?${raw}" -w '\nHTTP %{http_code}\n'
 
-# ── Scenario 6: Delete()'s lifecycle is safe even though its own reactive
-#    guard (controller.go:791) cannot independently fire ────────────────
+# ── Scenario 6: Delete()'s lifecycle while the definition is absent, and
+#    the recovery gap this scenario exposes ─────────────────────────────
 #
 # idp-s1 is still staled from scenario 2 above — its stored reference
 # 404s, and the scratch definition is still absent. Every reconcile
@@ -519,9 +523,24 @@ curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" "${WAPI_BASE}/record:a?${raw}" -
 # cannot reach Delete()'s independent reactive guard at controller.go:791
 # — Observe() refuses on the very same reconcile and the reconciler never
 # gets past it to call Delete() at all. What IS live-verifiable, and is
-# the property that actually protects an operator, is that this is safe:
-# no orphan, no silently-successful delete, and full recovery once the
-# definition returns.
+# asserted below, is that THIS part is safe: no orphan, no
+# silently-successful delete while the definition stays absent.
+#
+# The part that is NOT safe, live-verified in the same run this scenario
+# performs: once the definition is recreated (below), the identity-EA
+# search starts succeeding again but matches zero objects, because
+# deleting the definition also wiped every object's stamp (ADR-IN-0006
+# §4) — recreating the definition does not restore old stamp values.
+# Observe() reads that zero-match search as "genuinely absent" (no
+# error), so the reconciler's WasDeleted branch skips Delete() entirely
+# and removes the finalizer — the Kubernetes object disappears cleanly,
+# but the Grid object is never actually deleted. This scenario's own
+# wait_deleted call below only proves the Kubernetes side converged; it
+# does not prove the backend was touched, and a direct Grid read-back
+# after this script's own full run confirmed the object survives,
+# unstamped, exactly as this comment describes. That is a real gap in
+# the identity ladder's delete path, tracked separately — not something
+# this test-only script can fix.
 log "=== scenario 6: an in-flight delete of a stale-ref object is blocked safely by Observe(), not silently completed ==="
 ${KUBECTL} delete arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} --wait=false
 deletion_ts="$(${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)"
@@ -534,7 +553,7 @@ ${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} >/
 }
 found="$(curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET "record:a?name=idp-s1-${RUN_TOKEN}.example.com")"
 [ "${found}" != "[]" ] || { echo "FATAL: idp-s1's Grid object is gone — it should still exist, untouched, while the delete is blocked" >&2; exit 1; }
-log "scenario 6 setup PASSED — deletion is in flight (deletionTimestamp ${deletion_ts}), Observe() refuses, no orphan, Grid object intact. Recovery is asserted after the definition is recreated below."
+log "scenario 6 setup PASSED — deletion is in flight (deletionTimestamp ${deletion_ts}), Observe() refuses, no orphan, Grid object intact. The Kubernetes side is expected to converge once the definition is recreated below, but that convergence does NOT prove the Grid object was deleted — see this scenario's header comment."
 
 # Restore idp-s1-ns's real reference — only the cluster-scoped sibling is
 # being carried into the delete scenario above, so the namespaced one goes
@@ -629,6 +648,6 @@ pod_restarts_after="$(${KUBECTL} -n crossplane-system get "${PROVIDER_POD}" -o j
 pod_start_after="$(${KUBECTL} -n crossplane-system get "${PROVIDER_POD}" -o jsonpath='{.status.startTime}')"
 [ "${pod_start_after}" = "${POD_START}" ] || { echo "FATAL: provider pod restarted (start time changed from ${POD_START} to ${pod_start_after})" >&2; exit 1; }
 [ "${pod_restarts_before}" = "${pod_restarts_after}" ] || { echo "FATAL: provider pod restart count changed (${pod_restarts_before} -> ${pod_restarts_after})" >&2; exit 1; }
-log "scenario 4 PASSED — converged at ${converge_ts} (recreated at ${recreate_ts}), idp-s1 finished deleting (scenario 6 recovery), pod start time unchanged (${POD_START}), restarts unchanged (${pod_restarts_after})"
+log "scenario 4 PASSED — converged at ${converge_ts} (recreated at ${recreate_ts}), idp-s1's Kubernetes object finished deleting (scenario 6) — this confirms Kubernetes convergence only, not that the Grid object was deleted (see scenario 6's header comment), pod start time unchanged (${POD_START}), restarts unchanged (${pod_restarts_after})"
 
 log "all scenarios passed"
