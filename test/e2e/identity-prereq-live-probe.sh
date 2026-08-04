@@ -386,6 +386,19 @@ apply_arecord "idp-s1-ns-${RUN_TOKEN}" "192.0.2.151" namespaced
 wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster True
 wait_synced arecord.recorda.infobloxnios.m.crossplane.io "idp-s1-ns-${RUN_TOKEN}" namespaced True
 
+# Pause both objects the moment they converge. Update() calls
+# ensureIdentityPrerequisite unconditionally on every reconcile (ADR-
+# IN-0006 §4), so an unpaused, still-reconciling object keeps refreshing
+# the shared Prober's cached POSITIVE verdict on every poll interval —
+# live-verified: a fixed sleep timed from "scenario 1 converged" was not
+# long enough to observe the cache actually expire, because these objects
+# kept re-arming it right up until the delete-and-swap below. Pausing
+# stops all further reconciliation of these two objects, so the TTL wait
+# further down counts from their last real refresh, not from whenever the
+# script happens to check.
+${KUBECTL} annotate arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} crossplane.io/paused=true --overwrite
+${KUBECTL} annotate arecord.recorda.infobloxnios.m.crossplane.io/idp-s1-ns-${RUN_TOKEN} -n default crossplane.io/paused=true --overwrite
+
 def_after_create="$(curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET \
   "extensibleattributedef?name=$(url_encode "${SCRATCH_KEY}")&_return_fields=name,type,flags")"
 echo "${def_after_create}" | grep -q '"flags": *"CR"' || { echo "FATAL: scratch definition missing or not CR after scenario 1" >&2; exit 1; }
@@ -416,8 +429,12 @@ ${KUBECTL} create secret generic infobloxnios-credentials -n crossplane-system \
 # resource forced down the identity-search path sees the raw WAPI error the
 # guard exists to convert, not the remediation. Wait it out so the
 # assertions below observe steady state rather than a race with the cache.
+# idp-s1(+ns) are paused above specifically so this clock starts from
+# their last real reconcile, not from whenever the script happens to
+# check — a few seconds of margin over the TTL itself is still kept here
+# for scheduling/clock jitter.
 log "waiting for the cached prerequisite verdict to expire (up to 5 minutes)..."
-sleep 280
+sleep 310
 
 # Force scenario 1's cluster-scoped object down the identity-search path by
 # staling its reference to something that will 404. Its namespaced sibling
