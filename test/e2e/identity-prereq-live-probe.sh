@@ -364,7 +364,7 @@ for c in d.get("status", {}).get("conditions", []):
         # mistaken for a second record by the caller.
         sys.stdout.write(c.get("status", "") + "\x00" + c.get("message", "").replace("\n", " "))
         break
-' 2>/dev/null | tr '\0' '\t' || true)
+' 2>/dev/null | tr '\0' '\t') || true
     if [ "${got}" = "${want}" ] && { [ "${want}" != "False" ] || [ -n "${msg}" ]; }; then
       LAST_SYNCED_MESSAGE="$(printf '%s' "${json}" | python3 -c '
 import json,sys
