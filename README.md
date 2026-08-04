@@ -738,9 +738,12 @@ kubectl apply -f examples/zone-delegated/zone-delegated-namespaced.yaml
 
 Manage Infoblox NIOS authoritative DNS zones (WAPI object type `zone_auth`).
 
-A zone needs at least one Grid member listed as a primary server before WAPI
-will accept the create — an authoritative zone with an empty `gridPrimary`
-list is unlikely to be created successfully, so both examples below set one.
+`gridPrimary` is optional at create — WAPI accepts an authoritative zone with
+an empty `gridPrimary` list. But a zone with no primary name server does not
+serve DNS, and NIOS will not return or persist the SOA timer fields
+(`soaDefaultTtl`, `soaExpire`, `soaNegativeTtl`, `soaRefresh`, `soaRetry`,
+`useGridZoneTimer`) for it — a PUT that sets them is silently accepted and
+never reflected back. That is why both examples below set a `gridPrimary`.
 Substitute your own Grid member's hostname for `gridmaster.example.com`.
 
 **Cluster-scoped** (`zoneauth.infobloxnios.crossplane.io/v1alpha1`):
