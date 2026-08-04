@@ -169,6 +169,41 @@ delete_ea_def() {
   fi
 }
 
+# record_a_refs_for_token returns one "<_ref><TAB><name>" line per
+# record:a object still on the Grid whose name carries this run's
+# RUN_TOKEN, or nothing if none remain. RUN_TOKEN (a timestamp) is
+# embedded in every scratch object this script creates (see apply_arecord)
+# and in nothing else on a shared Grid, so a substring match on it alone
+# is exact scoping — never a bare "idp-" prefix and never an age check,
+# both of which would risk matching another concurrent run's live
+# fixtures.
+record_a_refs_for_token() {
+  curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET \
+    "record:a?name~=${RUN_TOKEN}&_return_fields=name" \
+    | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+for o in d:
+    print(o.get("_ref", "") + "\t" + o.get("name", ""))' 2>/dev/null || true
+}
+
+# sweep_record_a deletes every record:a object still on the Grid whose
+# name carries this run's RUN_TOKEN. This is here because of a known,
+# separately-filed production gap: once the identity EA definition is
+# recreated mid-run (scenario 4), a resource whose stored reference was
+# staled (scenario 6) finalizes cleanly on the Kubernetes side but its
+# Grid object is never actually deleted — see scenario 6's own header
+# comment for the live-verified mechanism. This function's job is only to
+# leave the Grid clean regardless; it does not touch, retry, or work
+# around the reconciler's delete path.
+sweep_record_a() {
+  local ref name
+  while IFS=$'\t' read -r ref name; do
+    [ -z "${ref}" ] && continue
+    curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" DELETE "${ref}" >/dev/null || true
+    log "cleanup: swept orphaned record:a ${name} (${ref})"
+  done < <(record_a_refs_for_token)
+}
+
 # recreate_scratch_definition (re)creates the scratch identity EA
 # definition as a superuser, with the exact type/flags/comment shape the
 # provider itself uses. Shared by scenario 1's post-condition check and by
@@ -214,6 +249,23 @@ cleanup() {
   log "cleanup: removing the scratch extensible attribute definition (if it still exists)..."
   delete_ea_def "${SCRATCH_KEY}"
 
+  # The kubectl delete above cannot reach a record:a object whose
+  # Kubernetes resource already finalized without a matching Grid delete
+  # (see sweep_record_a's comment) — sweep the Grid directly by RUN_TOKEN,
+  # then read back to confirm the sweep actually worked rather than
+  # asserting it did. grid_clean only becomes true once the read-back
+  # itself comes back empty.
+  log "cleanup: sweeping any surviving token-scoped record:a objects from the Grid..."
+  sweep_record_a
+  local surviving grid_clean=1
+  surviving="$(record_a_refs_for_token)"
+  if [ -n "${surviving}" ]; then
+    grid_clean=0
+    status=1
+    log "FATAL: the following token-scoped record:a object(s) survived the sweep and are still on the Grid:"
+    echo "${surviving}" >&2
+  fi
+
   log "cleanup: tearing down the kind cluster..."
   make controlplane.down KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 
@@ -222,10 +274,12 @@ cleanup() {
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
   fi
 
-  if [ "${status}" -eq 0 ]; then
-    log "done — all scenarios passed, Grid and cluster clean"
+  if [ "${status}" -eq 0 ] && [ "${grid_clean}" -eq 1 ]; then
+    log "done — all scenarios passed, Grid and cluster clean (verified by read-back)"
+  elif [ "${grid_clean}" -eq 1 ]; then
+    log "FAILED (exit ${status}) — Grid verified clean by read-back, cluster and scratch worktree cleaned up regardless"
   else
-    log "FAILED (exit ${status}) — Grid, cluster, and scratch worktree cleaned up regardless"
+    log "FAILED (exit ${status}) — Grid is NOT clean, see the FATAL line(s) above for the surviving record:a object(s); cluster and scratch worktree cleaned up regardless"
   fi
   exit "${status}"
 }
