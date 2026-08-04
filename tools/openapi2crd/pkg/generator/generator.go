@@ -25,8 +25,12 @@
 // xpv2.ManagedResourceSpec; both embed xpv2.ManagedResourceStatus for
 // status (xpv2 is github.com/crossplane/crossplane/apis/v2/core/v2). CRD
 // categories are {crossplane,managed,infobloxnios}. Immutable fields get a
-// CEL `self == oldSelf` XValidation rule. JSON struct tags never carry
-// omitempty on slice/map fields.
+// CEL `self == oldSelf` XValidation rule — except a ForProvider field that
+// is BOTH Immutable AND cross-resource-reference-fed, which gets the
+// empty-tolerant form (`self == oldSelf || oldSelf == ”`, or the slice
+// equivalent) so the reference resolver's post-admission empty-to-populated
+// first write is not rejected. JSON struct tags never carry omitempty on
+// slice/map fields.
 //
 // Filenames: per this provider's Phase 3 plan, generated type files use the
 // plain "<slug>_types.go" name (no "zz_" prefix) — e.g. "recorda_types.go" —
@@ -127,8 +131,6 @@ type ReferenceData struct {
 	SelectorGoType string
 	// SelectorFieldJSONName is the camelCase JSON name for SelectorFieldName.
 	SelectorFieldJSONName string
-	// ImmutableOnceSet mirrors catalog.ReferenceDescriptor.ImmutableOnceSet.
-	ImmutableOnceSet bool
 }
 
 // NestedTypeData is the template data for a custom nested struct type.
@@ -243,9 +245,7 @@ func safeGoPackageName(slug string) string {
 }
 
 // buildReferenceData converts a catalog.ReferenceDescriptor into template
-// data for the value field named goFieldName with Go type goType. Not
-// exercised by any current resource (ARecord has no reference fields) but
-// wired up so a future referencing resource needs no generator changes.
+// data for the value field named goFieldName with Go type goType.
 func buildReferenceData(ref *catalog.ReferenceDescriptor, goFieldName, goType string, isCluster bool) *ReferenceData {
 	if ref == nil {
 		return nil
@@ -282,7 +282,6 @@ func buildReferenceData(ref *catalog.ReferenceDescriptor, goFieldName, goType st
 		SelectorFieldName:     selectorFieldName,
 		SelectorGoType:        "*" + selectorType,
 		SelectorFieldJSONName: lowerFirst(selectorFieldName),
-		ImmutableOnceSet:      ref.ImmutableOnceSet,
 	}
 }
 
@@ -512,20 +511,19 @@ type {{.TypeName}} struct {
 {{end -}}
 type {{.Kind}}Parameters struct {
 {{range .ForProvider}}	// {{.Description}}
-{{- if and .Immutable .Reference .Reference.ImmutableOnceSet}}
-	// +optional
-{{- if isSliceType .GoType}}
-	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || self == oldSelf",message="field is immutable once set"
-{{- else}}
-	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="field is immutable once set"
-{{- end}}
-{{- else}}
 {{- if .Required}}
 	// +kubebuilder:validation:Required
 {{- else if not .OmitEmpty}}
 	// +optional
 {{- end}}
 {{- if .Immutable}}
+{{- if .Reference}}
+{{- if isSliceType .GoType}}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || size(oldSelf) == 0",message="{{.JSONName}} is immutable after creation"
+{{- else}}
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="{{.JSONName}} is immutable after creation"
+{{- end}}
+{{- else}}
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="{{.JSONName}} is immutable after creation"
 {{- end}}
 {{- end}}

@@ -14,7 +14,7 @@ import (
 type NetworkContainerParameters struct {
 	// Network view the container belongs to. Immutable — absent from UpdateNetworkContainer. Identifies a NetworkView by name.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView"`
 	// +optional

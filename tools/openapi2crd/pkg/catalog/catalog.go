@@ -213,10 +213,23 @@ func reservedEAKeyValidations() []ValidationRule {
 }
 
 // ReferenceDescriptor describes a cross-resource reference for a FieldDef.
-// Not used by any ARecord field (see FieldDef.Reference doc) but retained
-// on the shared ResourceDescriptor/generator so later resources (e.g.
-// CNAMERecord.canonical -> ARecord) can populate it without a generator
-// rework.
+// Used by any field whose value is resolved from another managed resource
+// (e.g. NetworkContainer.networkView -> NetworkView, CNAMERecord.canonical
+// -> ARecord).
+//
+// A field that is BOTH Immutable AND carries a Reference gets special CEL
+// treatment from the generator: the resolver populates the value field
+// AFTER the CR is admitted (Resolve runs post-admission, as part of
+// reconciliation), so the field's first write is an empty-to-populated
+// transition. A bare `self == oldSelf` rule rejects that transition,
+// which admits the CR successfully and then makes it fail to reconcile
+// forever with a CEL error that does not obviously point at the
+// reference. The generator therefore renders the empty-tolerant form
+// (`self == oldSelf || oldSelf == ”`, or the slice equivalent) for every
+// Immutable+Reference field automatically — this is intentionally NOT an
+// opt-in flag, because an opt-in that nobody remembers to set is exactly
+// how the bare rule reached six sites across three resources on this
+// provider.
 type ReferenceDescriptor struct {
 	// TargetKind is the referenced resource's Kind (e.g. "ARecord").
 	TargetKind string
@@ -229,11 +242,6 @@ type ReferenceDescriptor struct {
 	// with a fully-qualified function reference. Empty means the
 	// generator default.
 	Extractor string
-	// ImmutableOnceSet opts a field with Immutable=true into a two-tier
-	// immutability pattern (see the vultr/tailscale generator precedent
-	// this catalog followed) — not exercised by any current NIOS
-	// resource.
-	ImmutableOnceSet bool
 }
 
 // NestedTypeDef describes a supporting nested struct type referenced from a

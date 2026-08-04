@@ -45,7 +45,7 @@ type HostRecordParameters struct {
 	// +optional
 	Ipv6Addrs []HostRecordIpv6Addr `json:"ipv6Addrs"`
 	// Network view the host record resides in. Immutable after creation (live-verified: supports=rws, no u — corrects Phase 1 inventory).
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
