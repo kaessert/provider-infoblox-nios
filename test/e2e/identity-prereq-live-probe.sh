@@ -89,7 +89,7 @@
 # Usage:
 #   INFOBLOX_HOST=... INFOBLOX_USER=... INFOBLOX_PASS=... \
 #   INFOBLOX_E2E_RESTRICTED_USER=... INFOBLOX_E2E_RESTRICTED_PASS=... \
-#   bash test/e2e/identity-prereq-live-probe.sh
+#   ./test/e2e/identity-prereq-live-probe.sh
 #
 # Requires: the usual E2E toolchain (kind, kubectl, helm — see
 # build/makelib/k8s_tools.mk, which downloads them on demand), a superuser
@@ -293,6 +293,26 @@ log "scratch attribute name: ${SCRATCH_KEY}"
 # `git worktree add` below would fail outright if that path is still
 # claimed, so prune stale entries first — this never touches a worktree
 # still in use, only registrations whose directory no longer exists.
+git -C "${ROOT_DIR}" worktree prune 2>/dev/null || true
+
+# `worktree prune` above only drops registrations whose directory is
+# already gone — a SIGKILLed run's scratch worktree directory survives
+# (only the running process, not the filesystem, was killed), so its
+# registration survives every subsequent `prune` forever. A killed run has
+# no scenario state worth keeping, so force-remove any leftover
+# identity-prereq-probe-build.* worktree before minting a fresh one, then
+# prune again so the registration is gone immediately rather than lingering
+# until the run after next.
+STALE_SCRATCH_PREFIX="${TMPDIR:-/tmp}/identity-prereq-probe-build."
+while IFS= read -r stale_worktree; do
+  [ -n "${stale_worktree}" ] || continue
+  case "${stale_worktree}" in
+    "${STALE_SCRATCH_PREFIX}"*)
+      log "cleanup: removing stale scratch worktree from a prior killed run: ${stale_worktree}"
+      git -C "${ROOT_DIR}" worktree remove --force "${stale_worktree}" 2>/dev/null || rm -rf "${stale_worktree}"
+      ;;
+  esac
+done < <(git -C "${ROOT_DIR}" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
 git -C "${ROOT_DIR}" worktree prune 2>/dev/null || true
 
 # ── 1. Build from a throwaway worktree with the scratch identity key ──────
