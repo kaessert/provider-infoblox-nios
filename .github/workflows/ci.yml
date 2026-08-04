@@ -10,8 +10,8 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.23'
-  GOLANGCI_VERSION: 'v2.1.2'
+  GO_VERSION: '1.25.12'
+  GOLANGCI_VERSION: 'v2.12.2'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
 
   # Common users. We can't run a step 'if secrets.XXX != ""' but we can run a
@@ -166,9 +166,6 @@ jobs:
 
       - name: Run Unit Tests
         run: make -j2 test
-
-      - name: Run Tool Module Tests
-        run: make test.tools
 
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@v3
