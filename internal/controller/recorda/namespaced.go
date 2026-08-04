@@ -141,7 +141,7 @@ type namespacedExternal struct {
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), meta.WasDeleted(cr),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
 		// A *identity.PrerequisiteError carries the missing-extensible-

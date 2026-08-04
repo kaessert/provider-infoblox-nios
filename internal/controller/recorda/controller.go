@@ -65,7 +65,10 @@ const (
 	errEmptyUID                  = "cannot stamp ARecord identity: managed resource's metadata.uid is empty"
 	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
 		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
-	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
+	errPrerequisiteCheck    = "cannot verify the identity extensible attribute definition prerequisite"
+	errAmbiguousDeleteState = "cannot verify deletion: this managed resource previously resolved a real object (its external name is not the framework default), but a delete is now in progress and neither the stored reference nor an identity-attribute search can currently find that object. " +
+		"This is ambiguous, not evidence of a completed delete: the object may already be gone, or its identity stamp may have been lost while the reference was stale or rotated, leaving a live object this ladder cannot currently see. " +
+		"Refusing to report success and abandon a possibly-live Grid object — reconcile the external-name annotation, verify the Grid object manually, or confirm the identity extensible attribute definition is present and try again."
 )
 
 // unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
@@ -717,7 +720,20 @@ type observeResult struct {
 // verdict is cached by endpoint for several minutes of wall-clock time, a
 // single mismatched probe call there would poison every later Observe
 // sharing that cache key for the rest of that window.
-func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
+//
+// wasDeleted reports whether the managed resource has a deletionTimestamp
+// set (meta.WasDeleted). It changes how a 0-match identity.OutcomeNotFound
+// is interpreted when the caller previously held a real reference
+// (ref != ""): crossplane-runtime only invokes Delete() when Observe
+// reports ResourceExists: true, so a bare "not found" here during a
+// delete would make the finalizer clear — and the object look cleanly
+// removed — without deleteARecordIdentity's ownership verification ever
+// running. See errAmbiguousDeleteState for the full rationale; outside a
+// delete (wasDeleted == false) a 0-match result is reported as
+// ResourceExists: false exactly as before, since that is the normal,
+// expected way Crossplane notices the object was deleted out of band and
+// recreates it.
+func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *identity.Prober, endpoint, crName, externalName, uid string, wasDeleted bool, comment **string, ttl **uint32, useTTL **bool, extAttrs *map[string]string) (observeResult, error) {
 	ref := observeRefFor(crName, externalName)
 
 	rec, outcome, err := resolveARecordIdentity(ctx, conn, ref, uid)
@@ -736,6 +752,22 @@ func observeARecord(ctx context.Context, conn ibclient.IBConnector, prober *iden
 		return observeResult{}, err
 	}
 	if outcome == identity.OutcomeNotFound {
+		if wasDeleted && ref != "" {
+			// A delete is in flight and this managed resource previously
+			// held a real reference (ref != "" — observeRefFor only
+			// reports "" for the framework's pre-create default, never
+			// for a server-assigned or previously-recovered ref), yet
+			// neither the stored reference nor a fresh identity-EA
+			// search can find the object now. Unlike the non-deleting
+			// case, this is not safe to read as "already gone": it is
+			// exactly what a stamp-wipe (the identity extensible
+			// attribute definition deleted and recreated mid-delete)
+			// looks like from here, and reporting ResourceExists: false
+			// would make crossplane-runtime clear the finalizer without
+			// ever calling Delete() — silently abandoning a possibly-live
+			// Grid object. Erroring forces a retry instead.
+			return observeResult{}, errors.New(errAmbiguousDeleteState)
+		}
 		return observeResult{exists: false}, nil
 	}
 
