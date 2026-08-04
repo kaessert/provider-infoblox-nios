@@ -334,7 +334,17 @@ build: $(if $(filter e2e e2e.% e2e-full,$(MAKECMDGOALS)),e2e-preflight tools.pre
 # downstream tar/mv step. curl's own `--retry`/`--retry-all-errors` flags
 # provide the retry-with-backoff (curl's default backoff between retries is
 # exponential; passing `--retry-delay` would replace that with a fixed
-# delay, so it is deliberately omitted here).
+# delay, so it is deliberately omitted here). `--remove-on-error` (curl
+# 7.83+) covers the remaining gap: a server that announces a Content-Length
+# and then truncates the body mid-transfer causes curl to retry and
+# eventually fail loudly, but without this flag it leaves the partial file
+# at the final -o path. The next `make` invocation's `test -f $(TOOL)`
+# guard (and k8s_tools.mk's own file-target check) then see a file and skip
+# the download entirely, handing a truncated binary to controlplane.up —
+# turning today's loud failure into a confusing one on the next run.
+# `--remove-on-error` deletes the partial output file whenever curl exits
+# non-zero, so a truncated transfer leaves nothing behind and the next run
+# retries the download instead of trusting corrupt bytes.
 #
 # Because $(KIND) et al. are ordinary file targets in k8s_tools.mk with no
 # listed prerequisites, once the file exists on disk make treats that rule
@@ -342,7 +352,7 @@ build: $(if $(filter e2e e2e.% e2e-full,$(MAKECMDGOALS)),e2e-preflight tools.pre
 # only needs to win the race to create the file first, which the `build`
 # attachment point above guarantees.
 TOOL_FETCH_RETRIES ?= 3
-CURL_RETRY_FLAGS := --retry $(TOOL_FETCH_RETRIES) --retry-all-errors --connect-timeout 15
+CURL_RETRY_FLAGS := --retry $(TOOL_FETCH_RETRIES) --retry-all-errors --connect-timeout 15 --remove-on-error
 
 .PHONY: tools.prefetch
 tools.prefetch: ## Pre-fetch e2e tool binaries with retry (helm, kind, kubectl, kustomize, crossplane-cli, kuttl, chainsaw, uptest, yq)
