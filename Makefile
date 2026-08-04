@@ -50,7 +50,10 @@ IMAGES = provider-infobloxnios
 # ====================================================================================
 # Setup XPKG
 
-UP_ORG ?= crossplane-contrib
+UP_ORG ?= upbound
+ifeq ($(strip $(UP_ORG)),)
+UP_ORG := upbound
+endif
 XPKG_REG_ORGS ?= xpkg.upbound.io/$(UP_ORG)
 # NOTE(hasheddan): skip promoting on xpkg.upbound.io as channel tags are
 # inferred.
