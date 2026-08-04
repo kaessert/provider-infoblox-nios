@@ -92,7 +92,9 @@
 #   ./test/e2e/identity-prereq-live-probe.sh
 #
 # Requires: the usual E2E toolchain (kind, kubectl, helm — see
-# build/makelib/k8s_tools.mk, which downloads them on demand), a superuser
+# build/makelib/k8s_tools.mk, which downloads them on demand), flock
+# (util-linux — used to tell a live scratch build worktree apart from an
+# abandoned one, see the cleanup hygiene section below), a superuser
 # and a non-superuser WAPI credential (see the credentials section of the
 # provider documentation), and a kind cluster name exported as
 # KIND_CLUSTER_NAME (falls back to a script-generated one). Run from the
@@ -272,6 +274,7 @@ cleanup() {
   if [ -n "${SCRATCH_WORKTREE:-}" ]; then
     log "cleanup: removing the scratch build worktree..."
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
+    rm -f "${SCRATCH_WORKTREE}.lock"
   fi
 
   if [ "${status}" -eq 0 ] && [ "${grid_clean}" -eq 1 ]; then
@@ -300,16 +303,36 @@ git -C "${ROOT_DIR}" worktree prune 2>/dev/null || true
 # (only the running process, not the filesystem, was killed), so its
 # registration survives every subsequent `prune` forever. A killed run has
 # no scenario state worth keeping, so force-remove any leftover
-# identity-prereq-probe-build.* worktree before minting a fresh one, then
-# prune again so the registration is gone immediately rather than lingering
-# until the run after next.
+# identity-prereq-probe-build.* worktree before minting a fresh one — but
+# ONLY if it is actually abandoned, not merely old: a second probe started
+# against this same checkout while a first one is still mid-build must
+# leave the first one's worktree alone. Liveness is decided with an flock,
+# not a PID file — a PID file only proves a process with that number
+# existed once, and PIDs get reused, so a stale file can lie "alive" long
+# after its owner is gone. Every run holds an exclusive, non-blocking
+# flock on "<worktree>.lock" for its entire lifetime (acquired right below,
+# before the worktree is even created) via a file descriptor that is never
+# closed explicitly, so the kernel is the one thing that has to agree a
+# run is alive: a live run still holds the lock, and a SIGKILLed run's
+# lock is released automatically the instant the process dies, with no
+# trap required. That makes "can this run acquire the lock" and "is the
+# owning run dead" the same question, so the sweep below can ask it
+# directly instead of inferring liveness from a timestamp or a PID.
+# Then prune again so the registration is gone immediately rather than
+# lingering until the run after next.
 STALE_SCRATCH_PREFIX="${TMPDIR:-/tmp}/identity-prereq-probe-build."
 while IFS= read -r stale_worktree; do
   [ -n "${stale_worktree}" ] || continue
   case "${stale_worktree}" in
     "${STALE_SCRATCH_PREFIX}"*)
+      stale_lock="${stale_worktree}.lock"
+      if [ -e "${stale_lock}" ] && ! flock -n "${stale_lock}" -c true 2>/dev/null; then
+        log "cleanup: leaving scratch worktree in place, still owned by a live run: ${stale_worktree}"
+        continue
+      fi
       log "cleanup: removing stale scratch worktree from a prior killed run: ${stale_worktree}"
       git -C "${ROOT_DIR}" worktree remove --force "${stale_worktree}" 2>/dev/null || rm -rf "${stale_worktree}"
+      rm -f "${stale_lock}"
       ;;
   esac
 done < <(git -C "${ROOT_DIR}" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
@@ -317,8 +340,18 @@ git -C "${ROOT_DIR}" worktree prune 2>/dev/null || true
 
 # ── 1. Build from a throwaway worktree with the scratch identity key ──────
 IDENTITY_GO_REL="internal/clients/identity/identity.go"
-SCRATCH_WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/identity-prereq-probe-build.XXXXXX")"
-rmdir "${SCRATCH_WORKTREE}"
+SCRATCH_WORKTREE="$(mktemp -u "${TMPDIR:-/tmp}/identity-prereq-probe-build.XXXXXX")"
+SCRATCH_LOCK="${SCRATCH_WORKTREE}.lock"
+# Take the liveness lock BEFORE the worktree directory exists, so there is
+# no window in which a concurrent sweep can see this path without also
+# seeing an unlockable lock file for it. The descriptor is intentionally
+# left open for the rest of the script — see the comment above the sweep
+# for why that is the whole mechanism, not a leak.
+exec {SCRATCH_LOCK_FD}>"${SCRATCH_LOCK}"
+if ! flock -n "${SCRATCH_LOCK_FD}"; then
+  echo "FATAL: could not acquire the scratch worktree liveness lock ${SCRATCH_LOCK} (unexpected — the name was just minted)" >&2
+  exit 1
+fi
 git -C "${ROOT_DIR}" worktree add --detach --quiet "${SCRATCH_WORKTREE}" HEAD
 log "scratch build worktree: ${SCRATCH_WORKTREE}"
 git -C "${SCRATCH_WORKTREE}" submodule update --init --recursive
