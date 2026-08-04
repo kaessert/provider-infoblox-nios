@@ -11,3 +11,7 @@ cover.out
 # Credentials
 .env
 .env.*
+
+# Scratch artifacts from test/e2e/identity-prereq-live-probe.sh
+*.go.orig
+identity-prereq-probe.kubeconfig
