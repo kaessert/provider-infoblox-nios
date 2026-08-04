@@ -562,15 +562,24 @@ update-test.dtc-lbdn:
 .PHONY: update-test.dtc-lbdn
 
 # ====================================================================================
-# test.tools: unit tests for standalone tool modules and hook scripts
+# test.tools: unit tests for standalone tool modules, root-module tools/
+# packages, and hook scripts
 #
-# Iterates every tools/*/go.mod directory and every test/hooks/*_test.sh,
-# running whichever exist. A tools/*/ module that declares only a `tool`
-# directive (e.g. tools/update-tester, a stub module with no Go files of its
-# own) has nothing to test — `go test ./...` exits non-zero in a
-# package-less module, so it is skipped via a `go list ./...` guard rather
-# than being allowed to fail the recipe.
-test.tools: ## Run unit tests for tools/*/ modules and test/hooks/*_test.sh
+# Three passes, none of which overlap:
+#  1. Root-module tools/ packages via `go test ./tools/...`. `go list ./...`
+#     in the root module automatically excludes directories that declare
+#     their own go.mod, so this reaches exactly the tools/ code that lives
+#     in the root module (e.g. tools/openapi, tools/openapi2crd) without
+#     double-running anything the next loop covers.
+#  2. Every tools/*/go.mod directory and every test/hooks/*_test.sh,
+#     running whichever exist. A tools/*/ module that declares only a `tool`
+#     directive (e.g. tools/update-tester, a stub module with no Go files of
+#     its own) has nothing to test — `go test ./...` exits non-zero in a
+#     package-less module, so it is skipped via a `go list ./...` guard
+#     rather than being allowed to fail the recipe.
+test.tools: ## Run unit tests for tools/*/ modules, root-module tools/ packages, and test/hooks/*_test.sh
+	@$(INFO) go test ./tools/...
+	@go test ./tools/... -count=1 || $(FAIL)
 	@rc=0; for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \;); do \
 		[ -n "$$(cd $$d && go list ./... 2>/dev/null)" ] || continue; \
 		$(INFO) go test $$d; \
