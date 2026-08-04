@@ -275,7 +275,18 @@ remove_scratch_build_images() {
   local worktree="$1" registry ref
   [ -n "${worktree}" ] && [ -d "${worktree}" ] || return 0
   command -v docker >/dev/null 2>&1 || return 0
-  registry="$(make -C "${worktree}" build.vars 2>/dev/null | sed -n 's/^BUILD_REGISTRY=//p')"
+  # Guarded, not just `|| true`-wrapped at the call site: under `set -e`,
+  # a failing command on the right of a pipe still aborts THIS function
+  # (pipefail propagates the failure into the assignment) before the
+  # `[ -n ... ] || return 0` guard below ever runs. A worktree whose
+  # build/ submodule was never initialized (e.g. a SIGKILL landed between
+  # `git worktree add` and `git submodule update`) makes `make build.vars`
+  # fail exactly this way, so the empty-registry case above must be
+  # reachable even when the underlying command errors, not only when it
+  # succeeds with no output.
+  registry=""
+  registry="$(make -C "${worktree}" build.vars 2>/dev/null \
+              | sed -n 's/^BUILD_REGISTRY=//p')" || registry=""
   [ -n "${registry}" ] || return 0
   while IFS= read -r ref; do
     [ -n "${ref}" ] || continue
@@ -318,10 +329,13 @@ cleanup() {
   if [ -n "${SCRATCH_WORKTREE:-}" ]; then
     # MUST run before the worktree is removed below — once the directory is
     # gone the registry name can no longer be derived from anything and the
-    # image becomes unattributable. `|| true` inside the helper itself: a
-    # docker/make hiccup here must never turn a passing probe red.
+    # image becomes unattributable. The helper itself guards its `make
+    # build.vars` call so a docker/make hiccup degrades to "nothing to
+    # clean" instead of propagating; the `|| true` here is defence in
+    # depth for any future change to the helper, not the only thing
+    # standing between a docker/make hiccup and a passing probe going red.
     log "cleanup: removing the scratch build worktree's images..."
-    remove_scratch_build_images "${SCRATCH_WORKTREE}"
+    remove_scratch_build_images "${SCRATCH_WORKTREE}" || true
     log "cleanup: removing the scratch build worktree..."
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
     rm -f "${SCRATCH_WORKTREE}.lock"
@@ -392,9 +406,15 @@ while IFS= read -r stale_worktree; do
       # away, same as the live-run cleanup above, and for the same reason:
       # the registry name is derived from this path and is unrecoverable
       # once it is gone. The helper itself is a no-op if the kill landed
-      # before `make build` (or before the submodule was initialized),
-      # which is not a failure worth surfacing here.
-      remove_scratch_build_images "${stale_worktree}"
+      # before `make build` (or before the submodule was initialized, in
+      # which case `make build.vars` itself fails and the helper's own
+      # guard degrades that to a no-op) — this is exactly the case a
+      # SIGKILL between `git worktree add` and `git submodule update`
+      # leaves behind, so it must not abort this startup sweep. `|| true`
+      # here is defence in depth on top of that guard: this sweep runs
+      # before any scenario and outside any trap, so an unguarded failure
+      # here would brick every subsequent run on the same stale worktree.
+      remove_scratch_build_images "${stale_worktree}" || true
       git -C "${ROOT_DIR}" worktree remove --force "${stale_worktree}" 2>/dev/null || rm -rf "${stale_worktree}"
       rm -f "${stale_lock}"
       ;;
