@@ -477,6 +477,13 @@ treated as fixed at creation (CEL rule enforced). `targetName` and
 `targetType` are mutable — updating them does not change the record's
 `_ref`.
 
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/record-alias/record-alias.yaml
+kubectl apply -f examples/record-alias/record-alias-namespaced.yaml
+```
+
 ### PTRRecord
 
 Manage Infoblox NIOS DNS "PTR" records (WAPI object type `record:ptr`).
@@ -772,59 +779,6 @@ Apply the full set of example manifests:
 kubectl apply -f examples/zone-auth/zone-auth.yaml
 kubectl apply -f examples/zone-auth/zone-auth-namespaced.yaml
 ```
-
-### CNAMERecord
-
-Manage Infoblox NIOS DNS "CNAME" records (WAPI object type `record:cname`).
-
-**Cluster-scoped** (`recordcname.infobloxnios.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
-kind: CNAMERecord
-metadata:
-  name: example-cnamerecord
-spec:
-  forProvider:
-    name: alias.example.com
-    canonical: www.example.com
-    view: default
-    comment: Managed by Crossplane
-  providerConfigRef:
-    name: default
-```
-
-**Namespace-scoped** (`zonedelegated.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: zonedelegated.infobloxnios.m.crossplane.io/v1alpha1
-kind: ZoneDelegated
-metadata:
-  name: example-zonedelegated-ns
-  namespace: default
-spec:
-  forProvider:
-    fqdn: delegated-ns.example.com
-    delegateTo:
-      - name: ns1.delegate.com
-        address: 10.0.1.1
-      - name: ns2.delegate.com
-        address: 10.0.1.2
-    view: default
-  providerConfigRef:
-    kind: ClusterProviderConfig
-    name: default
-```
-
-External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `zone_delegated/ZG5zLnpvbmUk...:delegated.example.com/default`).
-Crossplane stores this in the `crossplane.io/external-name` annotation — do
-not set it manually.
-
-The `fqdn`, `view`, and `zoneFormat` fields are immutable after creation: the
-underlying SDK's update call has no parameters for them, and WAPI
-additionally rejects moving an existing zone between views at the data
-level.
 
 ### CNAMERecord
 
@@ -1411,6 +1365,72 @@ kubectl apply -f examples/dns-view/dns-view-namespaced.yaml
 ```
 
 ### IPv4SharedNetwork
+
+Manage Infoblox NIOS IPv4 shared networks (WAPI object type `sharednetwork`)
+— a group of member networks that share a single DHCP address pool.
+
+**Cluster-scoped** (`ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network
+spec:
+  forProvider:
+    name: example-shared-network
+    networks:
+      - 203.0.113.0/25
+    networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
+**Namespace-scoped** (`ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1
+kind: IPv4SharedNetwork
+metadata:
+  name: example-ipv4-shared-network-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-shared-network-ns
+    networks:
+      - 203.0.113.128/25
+    networkView: default
+    comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object.
+Crossplane stores this in the `crossplane.io/external-name` annotation —
+do not set it manually.
+
+Each entry in `networks` must match the CIDR of an existing Network object
+on the Grid Manager — WAPI validates shared-network membership against real
+network objects, not arbitrary strings. This provider ships a Network
+managed resource; create the referenced Network objects first (or ensure
+they already exist on the target Grid Manager) before applying an
+IPv4SharedNetwork that references their CIDRs.
+
+The `networkView` field is immutable after creation: although the
+underlying SDK's update call accepts a `networkView` parameter, live WAPI
+schema probing found the Grid Manager rejects changing it once the shared
+network is created. All other fields (`name`, `comment`, `extAttrs`,
+`disable`, `useOptions`, `options`) are mutable in place via WAPI PUT.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network.yaml
+kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+```
+
 ### ExtensibleAttributeDef
 
 Manage Infoblox NIOS extensible attribute definitions (WAPI object type
@@ -1466,27 +1486,6 @@ kubectl apply -f examples/extensible-attribute-def/extensible-attribute-def.yaml
 kubectl apply -f examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
 ```
 
-Manage Infoblox NIOS IPv4 shared networks (WAPI object type `sharednetwork`)
-— a group of member networks that share a single DHCP address pool.
-
-**Cluster-scoped** (`ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: ipv4sharednetwork.infobloxnios.crossplane.io/v1alpha1
-kind: IPv4SharedNetwork
-metadata:
-  name: example-ipv4-shared-network
-spec:
-  forProvider:
-    name: example-shared-network
-    networks:
-      - 203.0.113.0/25
-    networkView: default
-    comment: Managed by Crossplane
-  providerConfigRef:
-    name: default
-```
-
 ### DTCServer
 
 Manage Infoblox NIOS DTC (DNS Traffic Control) servers (WAPI object type
@@ -1507,6 +1506,38 @@ spec:
     comment: Managed by Crossplane
   providerConfigRef:
     name: default
+```
+
+**Namespace-scoped** (`dtcserver.infobloxnios.m.crossplane.io/v1alpha1`):
+
+```yaml
+apiVersion: dtcserver.infobloxnios.m.crossplane.io/v1alpha1
+kind: DTCServer
+metadata:
+  name: example-dtcserver-ns
+  namespace: default
+spec:
+  forProvider:
+    name: example-server-ns.example.com
+    host: 192.0.2.31
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
+External name: WAPI assigns an opaque `_ref` reference to every object
+(e.g. `dtc:server/ZG5zLmRfoi5zZXJ2ZXIkX2V4YW1wbGU:example-server`).
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
+
+Create is synchronous: WAPI's POST returns the `_ref` immediately, so no
+special create-pending handling is required.
+
+Apply the full set of example manifests:
+
+```bash
+kubectl apply -f examples/dtc-server/dtc-server.yaml
+kubectl apply -f examples/dtc-server/dtc-server-namespaced.yaml
 ```
 
 ### Range
@@ -1531,43 +1562,6 @@ spec:
     name: default
 ```
 
-**Namespace-scoped** (`ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: ipv4sharednetwork.infobloxnios.m.crossplane.io/v1alpha1
-kind: IPv4SharedNetwork
-metadata:
-  name: example-ipv4-shared-network-ns
-  namespace: default
-spec:
-  forProvider:
-    name: example-shared-network-ns
-    networks:
-      - 203.0.113.128/25
-    networkView: default
-    comment: Managed by Crossplane (namespaced)
-  providerConfigRef:
-    kind: ClusterProviderConfig
-    name: default
-```
-
-**Namespace-scoped** (`dtcserver.infobloxnios.m.crossplane.io/v1alpha1`):
-
-```yaml
-apiVersion: dtcserver.infobloxnios.m.crossplane.io/v1alpha1
-kind: DTCServer
-metadata:
-  name: example-dtcserver-ns
-  namespace: default
-spec:
-  forProvider:
-    name: example-server-ns.example.com
-    host: 192.0.2.31
-  providerConfigRef:
-    kind: ClusterProviderConfig
-    name: default
-```
-
 **Namespace-scoped** (`range.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
@@ -1588,21 +1582,8 @@ spec:
 ```
 
 External name: WAPI assigns an opaque `_ref` reference to every object.
-Crossplane stores this in the `crossplane.io/external-name` annotation —
-do not set it manually.
-
-Each entry in `networks` must match the CIDR of an existing Network object
-on the Grid Manager — WAPI validates shared-network membership against real
-network objects, not arbitrary strings. This provider ships a Network
-managed resource; create the referenced Network objects first (or ensure
-they already exist on the target Grid Manager) before applying an
-IPv4SharedNetwork that references their CIDRs.
-
-The `networkView` field is immutable after creation: although the
-underlying SDK's update call accepts a `networkView` parameter, live WAPI
-schema probing found the Grid Manager rejects changing it once the shared
-network is created. All other fields (`name`, `comment`, `extAttrs`,
-`disable`, `useOptions`, `options`) are mutable in place via WAPI PUT.
+Crossplane stores this in the `crossplane.io/external-name` annotation — do
+not set it manually.
 
 `template` (the optional `RangeTemplate` to pre-populate settings from) is a
 create-only parameter: `UpdateNetworkRange` does not accept it, so it is
@@ -1615,8 +1596,6 @@ it runs standalone without requiring a pre-existing `Network` object.
 Apply the full set of example manifests:
 
 ```bash
-kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network.yaml
-kubectl apply -f examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 kubectl apply -f examples/range/range.yaml
 kubectl apply -f examples/range/range-namespaced.yaml
 ```
@@ -1670,21 +1649,12 @@ underlying SDK's update call has no parameters for either field.
 `networkViewRef`/`networkViewSelector` also available); this example uses
 the Grid's well-known "default" network view so it runs standalone without
 creating a NetworkView resource first.
-External name: WAPI assigns an opaque `_ref` reference to every object
-(e.g. `dtc:server/ZG5zLmRfoi5zZXJ2ZXIkX2V4YW1wbGU:example-server`).
-Crossplane stores this in the `crossplane.io/external-name` annotation — do
-not set it manually.
-
-Create is synchronous: WAPI's POST returns the `_ref` immediately, so no
-special create-pending handling is required.
 
 Apply the full set of example manifests:
 
 ```bash
 kubectl apply -f examples/network-container/network-container.yaml
 kubectl apply -f examples/network-container/network-container-namespaced.yaml
-kubectl apply -f examples/zone-forward/zone-forward.yaml
-kubectl apply -f examples/zone-forward/zone-forward-namespaced.yaml
 ```
 
 ### FixedAddress
@@ -1747,8 +1717,6 @@ Apply the full set of example manifests:
 ```bash
 kubectl apply -f examples/fixed-address/fixed-address.yaml
 kubectl apply -f examples/fixed-address/fixed-address-namespaced.yaml
-kubectl apply -f examples/dtc-server/dtc-server.yaml
-kubectl apply -f examples/dtc-server/dtc-server-namespaced.yaml
 ```
 
 ### DTCPool
