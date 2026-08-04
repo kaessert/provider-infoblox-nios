@@ -105,7 +105,21 @@ DRC_FILE := $(CACHE_DIR)/e2e-deployment-runtime-config.yaml
 # test/hooks/run-update-tester.sh, which execs into the tool reading this from
 # the environment. `export` propagates it through uptest -> chainsaw -> the
 # post-assert hook subprocess tree.
-export UPDATE_TESTER_POLL_INTERVAL := $(E2E_POLL_INTERVAL)
+#
+# `E2E_POLL_INTERVAL` (above) is the ONLY supported knob for this pairing.
+# `override` here means a command-line or environment attempt to set
+# UPDATE_TESTER_POLL_INTERVAL directly (e.g. `make e2e.record-a
+# UPDATE_TESTER_POLL_INTERVAL=5s`) is deliberately ignored — GNU Make lets a
+# command-line variable outrank a plain `:=` assignment, so without
+# `override` that invocation would unpair the two knobs: the tester's
+# drift-detection sleep would shrink to 1.5x the smaller value while the
+# controlplane still polls at the E2E_POLL_INTERVAL-derived rate. That sleep
+# would no longer outlast a reconcile cycle, so every converge would pass
+# because nothing had a chance to happen — a silent correctness regression,
+# not a tuning choice. `override` does not affect E2E_POLL_INTERVAL itself,
+# so the documented per-resource escape hatch (`make e2e.<resource>
+# E2E_POLL_INTERVAL=30s`) still moves both knobs together.
+export override UPDATE_TESTER_POLL_INTERVAL := $(E2E_POLL_INTERVAL)
 
 # Renders test/e2e/deployment-runtime-config.yaml's placeholder into $(DRC_FILE).
 #
