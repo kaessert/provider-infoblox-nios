@@ -167,6 +167,15 @@ jobs:
       - name: Run Unit Tests
         run: make -j2 test
 
+      - name: Run Tool Module Tests
+        # Modules under tools/ carry their own go.mod and sit outside
+        # GO_SUBDIRS, so `make test` above never reaches them. This step is
+        # DELIBERATE, not template drift -- do not delete it during a
+        # re-stamp. `make reviewable` depends on test.tools for the same
+        # reason, so a broken tool-module test blocks review the same way a
+        # broken provider test does.
+        run: make test.tools
+
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@v3
         with:
