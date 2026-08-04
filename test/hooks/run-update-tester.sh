@@ -10,6 +10,20 @@
 # tools/update-tester; this wrapper does no work of its own beyond
 # resolving the repo root and exec-ing into it.
 #
+# The step sequence the `hook` subcommand runs for every manifest is:
+# converge, then — ONLY when the manifest carries the
+# crossplane.io/expect-external-name-prefix annotation — check-external-name-prefix
+# followed by resolve-recover (pause the MR, strip crossplane.io/external-name,
+# unpause, assert it re-resolves to the SAME backend object rather than
+# creating a second one or wedging), then run, then a final converge. The
+# prefix annotation alone only proves the create path picked the right
+# object-type variant; resolve-recover is what proves the runtime search path
+# (Observe with no stored handle) resolves to the same variant instead of
+# silently creating a duplicate. See tools/update-tester's own README and
+# test/hooks/resolve_recover_wiring_test.go, which drives this exact wiring
+# against a fake backend and proves the resolve-recover step disappears when
+# the annotation is absent.
+#
 # Symlink naming convention:
 #   test/hooks/post-assert-<resource>.sh            → examples/<resource>/<resource>.yaml
 #   test/hooks/post-assert-<resource>-namespaced.sh → examples/<resource>/<resource>-namespaced.yaml
