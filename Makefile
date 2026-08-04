@@ -72,6 +72,75 @@ fallthrough: submodules
 
 UPTEST_LOCAL_DEPLOY_TARGET = local-deploy
 
+# ----------------------------------------------------------------------------------
+# E2E poll interval — single source of truth
+#
+# The provider's post-assert converge/run checks (test/hooks/run-update-tester.sh)
+# wait a multiple of the provider's --poll interval to prove the controller has
+# actually stopped reconciling, not just that it hasn't ticked yet. At the
+# production default (--poll=1m) those waits dominate E2E wall-clock time. This
+# variable exists to lower BOTH sides of that wait — the E2E controlplane's
+# --poll flag AND the update-tester wait windows — from one place, so neither
+# can be changed without the other following. Lowering only the tester side
+# would shrink its drift-detection sleep below a real reconcile cycle and
+# silently stop catching the reconcile-loop / drift bug class it exists to
+# catch — every converge would pass because nothing had a chance to happen.
+#
+# `?=` keeps this overridable per invocation (e.g. a resource whose backend
+# settles slowly can raise it: `make e2e.<resource> E2E_POLL_INTERVAL=30s`).
+E2E_POLL_INTERVAL ?= 10s
+
+# Rendered E2E-only DeploymentRuntimeConfig. test/e2e/deployment-runtime-config.yaml
+# is the checked-in template (placeholder: __E2E_POLL_INTERVAL__); the e2e-drc
+# target below substitutes the current E2E_POLL_INTERVAL and writes the result
+# here. build/makelib/local.xpkg.mk's local.xpkg.deploy.provider.% rule reads
+# DRC_FILE and applies it instead of its own built-in default — but only on
+# the controlplane.up path (local-deploy, below), which is reached only from
+# `make e2e`/`make e2e.<resource>`/`make e2e-full`. It never touches production
+# packaging, and the provider's own default (cmd/provider/main.go) stays 1m.
+DRC_FILE := $(CACHE_DIR)/e2e-deployment-runtime-config.yaml
+
+# Reaches update-tester's `converge` (drift-detection sleep = 1.5x this value)
+# and `run` (slow-observe bar = 0.5x this value) subcommands via
+# test/hooks/run-update-tester.sh, which execs into the tool reading this from
+# the environment. `export` propagates it through uptest -> chainsaw -> the
+# post-assert hook subprocess tree.
+#
+# `E2E_POLL_INTERVAL` (above) is the ONLY supported knob for this pairing.
+# `override` here means a command-line or environment attempt to set
+# UPDATE_TESTER_POLL_INTERVAL directly (e.g. `make e2e.record-a
+# UPDATE_TESTER_POLL_INTERVAL=5s`) is deliberately ignored — GNU Make lets a
+# command-line variable outrank a plain `:=` assignment, so without
+# `override` that invocation would unpair the two knobs: the tester's
+# drift-detection sleep would shrink to 1.5x the smaller value while the
+# controlplane still polls at the E2E_POLL_INTERVAL-derived rate. That sleep
+# would no longer outlast a reconcile cycle, so every converge would pass
+# because nothing had a chance to happen — a silent correctness regression,
+# not a tuning choice. `override` does not affect E2E_POLL_INTERVAL itself,
+# so the documented per-resource escape hatch (`make e2e.<resource>
+# E2E_POLL_INTERVAL=30s`) still moves both knobs together.
+export override UPDATE_TESTER_POLL_INTERVAL := $(E2E_POLL_INTERVAL)
+
+# Renders test/e2e/deployment-runtime-config.yaml's placeholder into $(DRC_FILE).
+#
+# NOTE: this can NOT be wired the way e2e-datasource (below) is wired onto
+# `uptest` — that trick relies on merging prerequisite lists across two
+# rules for the SAME target, which only works for ordinary (non-%) targets.
+# local.xpkg.deploy.provider.% is a pattern rule, and GNU Make does not merge
+# a second pattern rule's prerequisites onto a stem that already matched a
+# pattern rule WITH a recipe (verified empirically: an `local.xpkg.deploy.
+# provider.%: e2e-drc` rule here is silently never evaluated). Instead this
+# is listed as the FIRST prerequisite, in the SAME rule statement, ahead of
+# local.xpkg.deploy.provider.$(PROJECT_NAME) on the `local-deploy:` line
+# below — GNU Make's default serial (non -j) mode builds one rule's own
+# prerequisite list strictly left to right, so e2e-drc's render is
+# guaranteed to finish before local.xpkg.deploy.provider.%'s recipe runs and
+# reads $(DRC_FILE). This repo does not invoke E2E with -j.
+.PHONY: e2e-drc
+e2e-drc:
+	@mkdir -p $(CACHE_DIR)
+	@sed 's/__E2E_POLL_INTERVAL__/$(E2E_POLL_INTERVAL)/' test/e2e/deployment-runtime-config.yaml > $(DRC_FILE)
+
 # Helper variables for comma-separated manifest lists (uptest CLI convention —
 # `uptest e2e` takes a single comma-separated string; GNU Make's $(wildcard)
 # produces space-separated lists).
@@ -488,7 +557,9 @@ e2e-full: e2e-preflight e2e
 
 # local-deploy: build + load provider image into kind cluster, then deploy the xpkg.
 # Called by `make e2e` via UPTEST_LOCAL_DEPLOY_TARGET=local-deploy.
-local-deploy: local.xpkg.deploy.provider.$(PROJECT_NAME)
+# e2e-drc MUST stay first in this list — see its own comment above for why
+# ordering (not merged prerequisites) is what makes DRC_FILE ready in time.
+local-deploy: e2e-drc local.xpkg.deploy.provider.$(PROJECT_NAME)
 
 .PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.network-v6 e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.network-container-v6 e2e.fixed-address e2e.fixed-address-v6 e2e.zone-forward e2e.range e2e.network-allocate e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
 
