@@ -36,6 +36,8 @@ package hooks_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -72,7 +74,7 @@ func repoRoot(t *testing.T) string {
 func fakeKubectlPath(t *testing.T, root string) string {
 	t.Helper()
 	toolDir := filepath.Join(root, "tools", "update-tester")
-	out, err := exec.Command("go", "-C", toolDir, "list", "-m", "-f", "{{.Dir}}",
+	out, err := exec.CommandContext(t.Context(), "go", "-C", toolDir, "list", "-m", "-f", "{{.Dir}}",
 		"github.com/kaessert/crossplane-update-tester").Output()
 	if err != nil {
 		t.Fatalf("locating the crossplane-update-tester module directory: %v", err)
@@ -205,7 +207,10 @@ func runHook(t *testing.T, kubectlBin, hookScript, manifestOverride string) hook
 	state := t.TempDir()
 	elsewhere := t.TempDir()
 
-	cmd := exec.Command("bash", hookScript)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", hookScript)
 	cmd.Dir = elsewhere
 	cmd.Env = append(os.Environ(),
 		"PATH="+kubectlBin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -221,25 +226,21 @@ func runHook(t *testing.T, kubectlBin, hookScript, manifestOverride string) hook
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Run() }()
-
-	select {
-	case err := <-done:
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				t.Fatalf("running hook %s: %v\noutput:\n%s", hookScript, err, out.String())
-			}
-		}
-		return hookResult{output: out.String(), exitCode: exitCode}
-	case <-time.After(90 * time.Second):
-		_ = cmd.Process.Kill()
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("hook %s did not finish within 90s\noutput so far:\n%s", hookScript, out.String())
-		return hookResult{}
 	}
+
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("running hook %s: %v\noutput:\n%s", hookScript, err, out.String())
+		}
+	}
+	return hookResult{output: out.String(), exitCode: exitCode}
 }
 
 // stripPrefixAnnotation returns a copy of a manifest's contents with the
