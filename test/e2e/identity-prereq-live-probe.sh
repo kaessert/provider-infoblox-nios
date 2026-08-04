@@ -251,6 +251,39 @@ assert_condition_prefix() {
   echo "${msg}"
 }
 
+# remove_scratch_build_images <worktree> — removes only the docker image(s)
+# the crossplane build submodule tagged for THIS scratch worktree
+# (build/makelib/imagelight.mk scopes every build to
+# build-$(sha256(HOSTNAME-ROOT_DIR))/..., and that registry can never be
+# recomputed once the worktree directory is gone — see the cleanup call
+# sites below for why this must run before `git worktree remove`).
+#
+# This intentionally does NOT shell out to `make img.clean`: that target's
+# own `do.img.clean` recipe parses the human-readable `docker images` table
+# by fixed column position (`awk '{print $1":"$2}'`), and at least one
+# supported docker CLI here reports a merged IMAGE column (repo:tag already
+# combined) rather than separate REPOSITORY/TAG columns — `img.clean` then
+# builds a garbled reference, silently matches nothing, and reports "OK"
+# having removed zero images. `make build.vars` is the same upstream
+# mechanism computing the same BUILD_REGISTRY value, but as a plain
+# `KEY=value` line with no table to misparse; the actual removal then uses
+# `docker images --filter reference=... --format` (Go-template fields, not
+# column position) exactly like the shared ant-worktree.sh reclaimer.
+# Never `-f`: a reference docker still considers in use by a container is
+# left alone rather than forced out from under it.
+remove_scratch_build_images() {
+  local worktree="$1" registry ref
+  [ -n "${worktree}" ] && [ -d "${worktree}" ] || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  registry="$(make -C "${worktree}" build.vars 2>/dev/null | sed -n 's/^BUILD_REGISTRY=//p')"
+  [ -n "${registry}" ] || return 0
+  while IFS= read -r ref; do
+    [ -n "${ref}" ] || continue
+    docker rmi "${ref}" >/dev/null 2>&1 && log "cleanup: removed build image ${ref}"
+  done < <(docker images --filter "reference=${registry}/*" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+  return 0
+}
+
 cleanup() {
   local status=$?
   log "cleanup: removing scratch managed resources (if any remain)..."
@@ -283,16 +316,12 @@ cleanup() {
   make controlplane.down KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 
   if [ -n "${SCRATCH_WORKTREE:-}" ]; then
-    # `img.clean` computes BUILD_REGISTRY itself from the scratch worktree's
-    # own path (build/makelib/imagelight.mk), so there is no hash to
-    # reimplement here. It MUST run before the worktree is removed below —
-    # once the directory is gone the registry name can no longer be derived
-    # from anything and the image becomes unattributable. Guarded with
-    # `|| true` (and a missing Makefile, e.g. a SIGKILL before the submodule
-    # was initialized, is exactly such a failure): a docker/make hiccup here
-    # must never turn a passing probe red.
+    # MUST run before the worktree is removed below — once the directory is
+    # gone the registry name can no longer be derived from anything and the
+    # image becomes unattributable. `|| true` inside the helper itself: a
+    # docker/make hiccup here must never turn a passing probe red.
     log "cleanup: removing the scratch build worktree's images..."
-    make -C "${SCRATCH_WORKTREE}" img.clean >/dev/null 2>&1 || true
+    remove_scratch_build_images "${SCRATCH_WORKTREE}"
     log "cleanup: removing the scratch build worktree..."
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
     rm -f "${SCRATCH_WORKTREE}.lock"
@@ -362,10 +391,10 @@ while IFS= read -r stale_worktree; do
       # leak this sweep exists to reclaim — do it before the worktree goes
       # away, same as the live-run cleanup above, and for the same reason:
       # the registry name is derived from this path and is unrecoverable
-      # once it is gone. `|| true` because a run killed before `make build`
-      # (or before the submodule was initialized) leaves no img.clean target
-      # to run, and that is not a failure worth surfacing here.
-      make -C "${stale_worktree}" img.clean >/dev/null 2>&1 || true
+      # once it is gone. The helper itself is a no-op if the kill landed
+      # before `make build` (or before the submodule was initialized),
+      # which is not a failure worth surfacing here.
+      remove_scratch_build_images "${stale_worktree}"
       git -C "${ROOT_DIR}" worktree remove --force "${stale_worktree}" 2>/dev/null || rm -rf "${stale_worktree}"
       rm -f "${stale_lock}"
       ;;
