@@ -5,10 +5,13 @@
 # extended with govulncheck reachability analysis, vens contextual risk scoring,
 # and OpenVEX declarations.
 #
-# Convention: 0104 — Supply Chain Security Artifacts
-#
 # Usage: Copy to provider-<name>/.github/workflows/supplychain.yaml and
 # update the env block with provider-specific values.
+#
+# Registry policy: the Upbound Marketplace mirror is the ONLY release target
+# signed and attested here. ghcr.io is used for throwaway, temporarily
+# shareable builds and is deliberately NOT signed or attested — signing an
+# image the release pipeline never pushes produces a job that always fails.
 
 name: Supply Chain and Xpkg Extensions
 
@@ -25,15 +28,21 @@ on:
 permissions:
   contents: write          # create releases, attach assets
   id-token: write          # keyless cosign via Sigstore OIDC
-  packages: write          # push to GHCR, attach OCI artifacts
   attestations: write      # SLSA provenance attestation
   security-events: write   # upload SARIF (optional)
 
 env:
   # ── Provider-specific (UPDATE THESE) ──────────────────────────────
   PROVIDER_NAME: provider-infobloxnios
-  GHCR_IMAGE: ghcr.io/kaessert/provider-infobloxnios
-  MIRROR_IMAGE: xpkg.upbound.io/kaessert/provider-infobloxnios
+  # Registry org. Do NOT hardcode an org here. The publish target is defined
+  # once, in the Makefile:
+  #     UP_ORG        ?= <default>
+  #     XPKG_REG_ORGS ?= xpkg.upbound.io/$(UP_ORG)
+  # This passes the CI secret through with `?=` semantics: set, it overrides the
+  # Makefile default; unset, the Makefile default is used. A literal org here
+  # would drift from the Makefile silently, and the workflow would then sign a
+  # reference `make publish` never pushed.
+  UP_ORG: ${{ secrets.UP_ORG }}
   # ── Tooling versions ──────────────────────────────────────────────
   UP_VERSION: v0.51.1
   GO_VERSION: "1.25"
@@ -151,43 +160,19 @@ jobs:
         id: version
         run: echo "tag=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
-      # ── GHCR: sign + attest ──────────────────────────────────────
-      - name: Login to GHCR
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Sign GHCR Image
-        run: cosign sign --yes ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }}
-
-      - name: Generate GHCR SBOM (SPDX — container level)
-        run: ${{ steps.syft-install.outputs.cmd }} ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }} -o spdx-json=ghcr-sbom.spdx.json
-
-      - name: Attest SBOM to GHCR Image (SPDX)
-        run: cosign attest --yes --predicate ghcr-sbom.spdx.json --type spdxjson ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }}
-
-      - name: Attest SBOM to GHCR Image (CycloneDX)
-        run: cosign attest --yes --predicate sbom.cdx.json --type cyclonedx ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }}
-
-      - name: Attest VEX to GHCR Image
-        if: hashFiles('vex.openvex.json') != ''
-        run: cosign attest --yes --predicate vex.openvex.json --type openvex ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }}
-
-      - name: Resolve GHCR Image Digest
-        id: ghcr-digest
+      # Resolved from the Makefile so it cannot diverge from XPKG_REG_ORGS,
+      # i.e. from what `make publish` actually pushes.
+      - name: Resolve mirror image reference
+        id: images
         run: |
-          DIGEST=$(docker buildx imagetools inspect ${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.tag }} | awk '/^Digest:/{print $2}')
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-
-      - name: Attest SLSA Provenance to GHCR Image
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
-        with:
-          subject-name: ${{ env.GHCR_IMAGE }}
-          subject-digest: ${{ steps.ghcr-digest.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
+          # `?=` semantics: UP_ORG from the environment (CI secret) wins if set,
+          # otherwise fall back to the Makefile's own default.
+          ORG="${UP_ORG:-$(grep -oP '^UP_ORG[[:space:]]*\?=[[:space:]]*\K\S+' Makefile)}"
+          if [ -z "$ORG" ]; then
+            echo "::error::could not resolve UP_ORG from the environment or from the Makefile"
+            exit 1
+          fi
+          echo "mirror=xpkg.upbound.io/${ORG}/${PROVIDER_NAME}" >> "$GITHUB_OUTPUT"
 
       # ── Upbound Marketplace: sign + attest + extensions ──────────
       - name: Login to Upbound Registry
@@ -206,7 +191,7 @@ jobs:
           /tmp/up login
 
       - name: Generate Upbound Mirror SBOM (SPDX)
-        run: ${{ steps.syft-install.outputs.cmd }} ${{ env.MIRROR_IMAGE }}:${{ steps.version.outputs.tag }} -o spdx-json=mirror-sbom.spdx.json
+        run: ${{ steps.syft-install.outputs.cmd }} ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }} -o spdx-json=mirror-sbom.spdx.json
 
       - name: Generate release notes
         env:
@@ -228,24 +213,31 @@ jobs:
           if [ -f ./release_notes.md ]; then
             cp ./release_notes.md $extensions_dir/release-notes/
           fi
-          /tmp/up alpha xpkg append ${{ env.MIRROR_IMAGE }}:${{ steps.version.outputs.tag }} --extensions-root $extensions_dir
+          /tmp/up alpha xpkg append ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }} --extensions-root $extensions_dir
 
       - name: Sign Upbound Mirror Image
-        run: cosign sign --yes ${{ env.MIRROR_IMAGE }}:${{ steps.version.outputs.tag }}
+        run: cosign sign --yes ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }}
 
-      - name: Attest SBOM to Upbound Mirror Image
-        run: cosign attest --yes --predicate mirror-sbom.spdx.json --type spdxjson ${{ env.MIRROR_IMAGE }}:${{ steps.version.outputs.tag }}
+      - name: Attest SBOM to Upbound Mirror Image (SPDX — container level)
+        run: cosign attest --yes --predicate mirror-sbom.spdx.json --type spdxjson ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }}
+
+      - name: Attest SBOM to Upbound Mirror Image (CycloneDX — Go modules)
+        run: cosign attest --yes --predicate sbom.cdx.json --type cyclonedx ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }}
+
+      - name: Attest VEX to Upbound Mirror Image
+        if: hashFiles('vex.openvex.json') != ''
+        run: cosign attest --yes --predicate vex.openvex.json --type openvex ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }}
 
       - name: Resolve Upbound Mirror Image Digest
         id: mirror-digest
         run: |
-          DIGEST=$(docker buildx imagetools inspect ${{ env.MIRROR_IMAGE }}:${{ steps.version.outputs.tag }} | awk '/^Digest:/{print $2}')
+          DIGEST=$(docker buildx imagetools inspect ${{ steps.images.outputs.mirror }}:${{ steps.version.outputs.tag }} | awk '/^Digest:/{print $2}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Attest SLSA Provenance to Upbound Mirror Image
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-name: ${{ env.MIRROR_IMAGE }}
+          subject-name: ${{ steps.images.outputs.mirror }}
           subject-digest: ${{ steps.mirror-digest.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
@@ -257,6 +249,6 @@ jobs:
         with:
           files: |
             sbom.cdx.json
-            ghcr-sbom.spdx.json
+            mirror-sbom.spdx.json
             vex.openvex.json
             risk-scored.vex.json
