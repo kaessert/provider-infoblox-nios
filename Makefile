@@ -110,16 +110,27 @@ DRC_FILE := $(CACHE_DIR)/e2e-deployment-runtime-config.yaml
 # `override` here means a command-line or environment attempt to set
 # UPDATE_TESTER_POLL_INTERVAL directly (e.g. `make e2e.record-a
 # UPDATE_TESTER_POLL_INTERVAL=5s`) is deliberately ignored — GNU Make lets a
-# command-line variable outrank a plain `:=` assignment, so without
-# `override` that invocation would unpair the two knobs: the tester's
-# drift-detection sleep would shrink to 1.5x the smaller value while the
-# controlplane still polls at the E2E_POLL_INTERVAL-derived rate. That sleep
-# would no longer outlast a reconcile cycle, so every converge would pass
-# because nothing had a chance to happen — a silent correctness regression,
-# not a tuning choice. `override` does not affect E2E_POLL_INTERVAL itself,
-# so the documented per-resource escape hatch (`make e2e.<resource>
-# E2E_POLL_INTERVAL=30s`) still moves both knobs together.
-export override UPDATE_TESTER_POLL_INTERVAL := $(E2E_POLL_INTERVAL)
+# command-line variable outrank a plain assignment, so without `override`
+# that invocation would unpair the two knobs: the tester's drift-detection
+# sleep would shrink to 1.5x the smaller value while the controlplane still
+# polls at the E2E_POLL_INTERVAL-derived rate. That sleep would no longer
+# outlast a reconcile cycle, so every converge would pass because nothing had
+# a chance to happen — a silent correctness regression, not a tuning choice.
+# `override` does not affect E2E_POLL_INTERVAL itself, so the documented
+# per-resource escape hatch (`make e2e.<resource> E2E_POLL_INTERVAL=30s`)
+# still moves both knobs together.
+#
+# Per-resource tuning uses the target-specific idiom already established
+# fleet-wide (e.g. `e2e.record-a: E2E_POLL_INTERVAL = 30s`), NOT a
+# command-line override. This assignment MUST stay recursive (`=`, not
+# `:=`): a simple assignment expands $(E2E_POLL_INTERVAL) once at parse
+# time, before any target-specific value is set, so it would permanently
+# capture the global default and never see a per-target override. Recursive
+# expansion is evaluated per-recipe, so a target-specific E2E_POLL_INTERVAL
+# reaches both knobs. `override` still blocks setting the derived variable
+# directly, so the two compose: `override` forces callers onto
+# E2E_POLL_INTERVAL, and `=` makes that knob work per-target.
+export override UPDATE_TESTER_POLL_INTERVAL = $(E2E_POLL_INTERVAL)
 
 # Renders test/e2e/deployment-runtime-config.yaml's placeholder into $(DRC_FILE).
 #
