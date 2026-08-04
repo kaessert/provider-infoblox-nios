@@ -126,7 +126,7 @@ spec:
                     type: string
                     x-kubernetes-validations:
                     - message: networkView is immutable after creation
-                      rule: self == oldSelf
+                      rule: self == oldSelf || oldSelf == ''
                   networkViewRef:
                     description: A Reference to a named object.
                     properties:

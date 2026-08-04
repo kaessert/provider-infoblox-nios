@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -265,8 +266,15 @@ func TestReferenceFieldRendersThreeFieldPattern(t *testing.T) {
 
 	// The value field itself must also carry the immutability CEL rule
 	// (network_view is immutable — absent from UpdateNetworkContainer).
+	// Because it is ALSO reference-fed, the rule must be the
+	// empty-tolerant form: a bare self==oldSelf would reject the
+	// reference resolver's post-admission empty-to-populated first
+	// write.
 	if !strings.Contains(cs, `message="networkView is immutable after creation"`) {
 		t.Errorf("expected CEL immutability rule for networkView field, got:\n%s", cs)
+	}
+	if !strings.Contains(cs, `rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"`) {
+		t.Errorf("expected empty-tolerant CEL rule for reference-fed networkView field, got:\n%s", cs)
 	}
 }
 
@@ -314,5 +322,74 @@ func TestRangeCommonReferencePackageNameIsValidGo(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "package rangepkg") {
 		t.Errorf("expected rendered source to declare `package rangepkg`, got:\n%s", src)
+	}
+}
+
+// TestReferenceFedImmutableFieldsAreEmptyTolerant is a derived,
+// catalog-wide regression guard: for EVERY cataloged resource, every
+// ForProvider field that is BOTH Immutable AND cross-resource-reference-fed
+// must render an empty-tolerant CEL immutability rule ("self == oldSelf ||
+// oldSelf == ”", or the slice equivalent "self == oldSelf || size(oldSelf)
+// == 0"), never the bare "self == oldSelf" form. The reference resolver
+// populates the value field AFTER the CR is admitted, so the field's first
+// write is an empty-to-populated transition — a bare rule rejects that
+// transition, which admits the CR successfully and then makes it fail to
+// reconcile forever with a CEL error that does not obviously point at the
+// reference (this exact defect shipped on networkView across network,
+// networkContainer, and hostRecord before this test existed). Fields are
+// enumerated from the catalog rather than a hardcoded resource/field list,
+// so a future resource that pairs Immutable with a Reference is covered
+// automatically — no generator or test change required.
+func TestReferenceFedImmutableFieldsAreEmptyTolerant(t *testing.T) {
+	for _, rd := range catalog.All() {
+		var refImmutableFields []catalog.FieldDef
+		for _, f := range rd.Fields {
+			// Only fields with a ForProvider representation can be
+			// resolver-fed pre-admission; FieldScopeResponse fields
+			// have no ForProvider counterpart to write into.
+			if f.Immutable && f.Reference != nil && f.Scope != catalog.FieldScopeResponse {
+				refImmutableFields = append(refImmutableFields, f)
+			}
+		}
+		if len(refImmutableFields) == 0 {
+			continue
+		}
+
+		for _, isCluster := range []bool{true, false} {
+			src, err := RenderScopeTypes(BuildScopeData(rd, isCluster))
+			if err != nil {
+				t.Fatalf("%s: RenderScopeTypes(isCluster=%v): %v", rd.Kind, isCluster, err)
+			}
+			s := string(src)
+
+			// Scope the check to the Parameters (ForProvider) struct
+			// only. The Observation (AtProvider) mirror of the same
+			// field is populated by Observe() from the live API
+			// response, not by the reference resolver, so it is out
+			// of scope for this defect and legitimately keeps the
+			// bare rule.
+			paramsStart := strings.Index(s, fmt.Sprintf("type %sParameters struct {", rd.Kind))
+			obsStart := strings.Index(s, fmt.Sprintf("type %sObservation struct {", rd.Kind))
+			if paramsStart == -1 || obsStart == -1 || obsStart < paramsStart {
+				t.Fatalf("%s (isCluster=%v): could not locate Parameters/Observation struct boundaries in rendered source:\n%s", rd.Kind, isCluster, s)
+			}
+			forProviderSrc := s[paramsStart:obsStart]
+
+			for _, f := range refImmutableFields {
+				message := fmt.Sprintf(`message="%s is immutable after creation"`, f.JSONName)
+				bareRule := fmt.Sprintf(`rule="self == oldSelf",%s`, message)
+				if strings.Contains(forProviderSrc, bareRule) {
+					t.Errorf("%s (isCluster=%v): reference-fed immutable field %q renders the bare self==oldSelf rule on its ForProvider field, which rejects the reference resolver's post-admission empty-to-populated first write; want the empty-tolerant form, got:\n%s", rd.Kind, isCluster, f.JSONName, forProviderSrc)
+				}
+
+				tolerantRule := fmt.Sprintf(`rule="self == oldSelf || oldSelf == ''",%s`, message)
+				if strings.HasPrefix(f.GoType, "[]") {
+					tolerantRule = fmt.Sprintf(`rule="self == oldSelf || size(oldSelf) == 0",%s`, message)
+				}
+				if !strings.Contains(forProviderSrc, tolerantRule) {
+					t.Errorf("%s (isCluster=%v): expected empty-tolerant CEL rule for reference-fed immutable ForProvider field %q, got:\n%s", rd.Kind, isCluster, f.JSONName, forProviderSrc)
+				}
+			}
+		}
 	}
 }

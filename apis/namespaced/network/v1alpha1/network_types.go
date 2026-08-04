@@ -26,7 +26,7 @@ type NetworkMember struct {
 type NetworkParameters struct {
 	// Network view the network belongs to, identified by NetworkView name. Fixed at creation — confirmed absent from the UpdateNetwork SDK method signature.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkView is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
 	NetworkView *string `json:"networkView"`
 	// +optional
