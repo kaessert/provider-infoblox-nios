@@ -283,6 +283,16 @@ cleanup() {
   make controlplane.down KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 
   if [ -n "${SCRATCH_WORKTREE:-}" ]; then
+    # `img.clean` computes BUILD_REGISTRY itself from the scratch worktree's
+    # own path (build/makelib/imagelight.mk), so there is no hash to
+    # reimplement here. It MUST run before the worktree is removed below —
+    # once the directory is gone the registry name can no longer be derived
+    # from anything and the image becomes unattributable. Guarded with
+    # `|| true` (and a missing Makefile, e.g. a SIGKILL before the submodule
+    # was initialized, is exactly such a failure): a docker/make hiccup here
+    # must never turn a passing probe red.
+    log "cleanup: removing the scratch build worktree's images..."
+    make -C "${SCRATCH_WORKTREE}" img.clean >/dev/null 2>&1 || true
     log "cleanup: removing the scratch build worktree..."
     git -C "${ROOT_DIR}" worktree remove --force "${SCRATCH_WORKTREE}" 2>/dev/null || true
     rm -f "${SCRATCH_WORKTREE}.lock"
@@ -347,6 +357,15 @@ while IFS= read -r stale_worktree; do
         continue
       fi
       log "cleanup: removing stale scratch worktree from a prior killed run: ${stale_worktree}"
+      # A SIGKILLed run never reached its own trap, so its build image (if
+      # the kill landed after the `make build` on line ~385) is exactly the
+      # leak this sweep exists to reclaim — do it before the worktree goes
+      # away, same as the live-run cleanup above, and for the same reason:
+      # the registry name is derived from this path and is unrecoverable
+      # once it is gone. `|| true` because a run killed before `make build`
+      # (or before the submodule was initialized) leaves no img.clean target
+      # to run, and that is not a failure worth surfacing here.
+      make -C "${stale_worktree}" img.clean >/dev/null 2>&1 || true
       git -C "${ROOT_DIR}" worktree remove --force "${stale_worktree}" 2>/dev/null || rm -rf "${stale_worktree}"
       rm -f "${stale_lock}"
       ;;
