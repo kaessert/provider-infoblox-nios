@@ -359,6 +359,26 @@ synced_message() {
   ${KUBECTL} "${ns_args[@]}" get "${res}/${name}" -o jsonpath='{.status.conditions[?(@.type=="Synced")].message}'
 }
 
+# fake_stale_ref <label> — a syntactically well-formed record:a WAPI
+# reference that resolves to a genuine 404, for forcing the identity
+# ladder's search fallback (identity.Resolve treats a 404 at ref, not a
+# malformed one, as "recover by searching"). WAPI's ref parser requires
+# the middle segment to decode as base64; an arbitrary placeholder string
+# (e.g. "record:a/nonexistent-123:name/default") fails that check outright
+# with a 400 "AdmConProtoError: Invalid reference" — resolveByRef treats
+# that as a genuine, non-recoverable error and returns immediately without
+# ever reaching the identity-EA search, which silently defeats every
+# scenario that depends on staling a reference. Live-verified: a
+# placeholder string 400s; a base64-encoded (fabricated, never real)
+# identity-field tuple 404s with "AdmConDataNotFoundError ... not found",
+# exactly the shape a genuinely rotated handle produces.
+fake_stale_ref() {
+  local label="$1" b64
+  b64="$(python3 -c "import base64,sys; print(base64.b64encode(sys.argv[1].encode()).decode())" \
+    "dns.bind_a\$._default.com.example,${label},0.0.0.0")"
+  echo "record:a/${b64}:${label}.example.com/default"
+}
+
 # ── Scenario 1: superuser auto-create ──────────────────────────────────────
 log "=== scenario 1: superuser auto-creates the scratch definition ==="
 apply_arecord "idp-s1-${RUN_TOKEN}" "192.0.2.150" cluster
@@ -409,9 +429,9 @@ sleep 280
 # here, to be restored once scenario 2 has used it.
 ns_ref="$(${KUBECTL} get arecord.recorda.infobloxnios.m.crossplane.io/idp-s1-ns-${RUN_TOKEN} -n default -o jsonpath='{.metadata.annotations.crossplane\.io/external-name}')"
 ${KUBECTL} annotate arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} \
-  crossplane.io/external-name="record:a/nonexistent-${RUN_TOKEN}:stale.example.com/default" --overwrite
+  crossplane.io/external-name="$(fake_stale_ref "nonexistent-${RUN_TOKEN}")" --overwrite
 ${KUBECTL} annotate arecord.recorda.infobloxnios.m.crossplane.io/idp-s1-ns-${RUN_TOKEN} -n default \
-  crossplane.io/external-name="record:a/nonexistent-ns-${RUN_TOKEN}:stale-ns.example.com/default" --overwrite
+  crossplane.io/external-name="$(fake_stale_ref "nonexistent-ns-${RUN_TOKEN}")" --overwrite
 # Force an immediate reconcile rather than waiting for the poll interval.
 ${KUBECTL} annotate arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} crossplane.io/paused=true --overwrite
 ${KUBECTL} annotate arecord.recorda.infobloxnios.m.crossplane.io/idp-s1-ns-${RUN_TOKEN} -n default crossplane.io/paused=true --overwrite
