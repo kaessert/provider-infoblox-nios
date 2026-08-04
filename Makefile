@@ -305,7 +305,88 @@ e2e-preflight: ## Validate credentials before E2E
 # filter below correctly sees the real top-level goal the user asked for.
 # `e2e.%` covers every per-resource target alongside the bare `e2e`
 # aggregate and `e2e-full`.
-build: $(if $(filter e2e e2e.% e2e-full,$(MAKECMDGOALS)),e2e-preflight,)
+#
+# tools.prefetch (below) rides the same attachment point and for the same
+# reason: it too must run before controlplane.up touches $(KIND)/$(KUBECTL)/
+# $(HELM), and `build` is the earliest recipe-bearing link in the chain.
+build: $(if $(filter e2e e2e.% e2e-full,$(MAKECMDGOALS)),e2e-preflight tools.prefetch,)
+
+# ====================================================================================
+# E2E tool download retry
+#
+# build/makelib/k8s_tools.mk fetches every E2E tool binary (helm, kind,
+# kubectl, kustomize, the Crossplane CLI, kuttl, chainsaw, uptest, yq) with
+# a single bare `curl` and no retry. helm, kustomize, and chainsaw
+# additionally pipe curl straight into tar, which loses curl's exit code to
+# the pipeline (tar's own status wins) unless pipefail is set — a failed
+# download there can proceed straight to a tar error that hides the real
+# cause. A lone transient connection reset anywhere in that tool set aborts
+# a 30+ minute E2E run before the kind cluster even exists, and the failure
+# looks exactly like a real E2E failure in the log.
+#
+# build/ is the upstream crossplane/build submodule and must not be patched
+# in place — a submodule bump would silently revert any fix made there.
+# Instead, this target pre-populates the EXACT same target file paths
+# k8s_tools.mk's own rules would produce ($(TOOLS_HOST_DIR)/<tool>-<version>,
+# driven by the same version variables declared above), but downloads each
+# one to a temp file first and extracts separately — never a bare
+# `curl | tar` — so a failed transfer is never silently masked by a
+# downstream tar/mv step. curl's own `--retry`/`--retry-all-errors` flags
+# provide the retry-with-backoff (curl's default backoff between retries is
+# exponential; passing `--retry-delay` would replace that with a fixed
+# delay, so it is deliberately omitted here).
+#
+# Because $(KIND) et al. are ordinary file targets in k8s_tools.mk with no
+# listed prerequisites, once the file exists on disk make treats that rule
+# as already satisfied and never runs its retry-less recipe — this target
+# only needs to win the race to create the file first, which the `build`
+# attachment point above guarantees.
+TOOL_FETCH_RETRIES ?= 3
+CURL_RETRY_FLAGS := --retry $(TOOL_FETCH_RETRIES) --retry-all-errors --connect-timeout 15
+
+.PHONY: tools.prefetch
+tools.prefetch: ## Pre-fetch e2e tool binaries with retry (helm, kind, kubectl, kustomize, crossplane-cli, kuttl, chainsaw, uptest, yq)
+	@mkdir -p $(TOOLS_HOST_DIR)
+	@test -f $(KIND) || { $(INFO) "tools.prefetch: kind $(KIND_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(KIND) https://github.com/kubernetes-sigs/kind/releases/download/$(KIND_VERSION)/kind-$(SAFEHOSTPLATFORM) \
+		&& chmod +x $(KIND) || $(FAIL); }
+	@test -f $(KUBECTL) || { $(INFO) "tools.prefetch: kubectl $(KUBECTL_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(KUBECTL) https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/$(HOSTOS)/$(SAFEHOSTARCH)/kubectl \
+		&& chmod +x $(KUBECTL) || $(FAIL); }
+	@test -f $(CROSSPLANE_CLI) || { $(INFO) "tools.prefetch: crossplane-cli $(CROSSPLANE_CLI_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(CROSSPLANE_CLI) "https://releases.crossplane.io/$(CROSSPLANE_CLI_CHANNEL)/$(CROSSPLANE_CLI_VERSION)/bin/$(SAFEHOST_PLATFORM)/crank?source=build" \
+		&& chmod +x $(CROSSPLANE_CLI) || $(FAIL); }
+	@test -f $(KUTTL) || { $(INFO) "tools.prefetch: kuttl $(KUTTL_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(KUTTL) https://github.com/kudobuilder/kuttl/releases/download/v$(KUTTL_VERSION)/kubectl-kuttl_$(KUTTL_VERSION)_$(HOST_PLATFORM) \
+		&& chmod +x $(KUTTL) || $(FAIL); }
+	@test -f $(UPTEST) || { $(INFO) "tools.prefetch: uptest $(UPTEST_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(UPTEST) https://github.com/crossplane/uptest/releases/download/$(UPTEST_VERSION)/uptest_$(SAFEHOSTPLATFORM) \
+		&& chmod +x $(UPTEST) || $(FAIL); }
+	@test -f $(YQ) || { $(INFO) "tools.prefetch: yq $(YQ_VERSION)"; \
+		curl $(CURL_RETRY_FLAGS) -fsSLo $(YQ) https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_$(SAFEHOST_PLATFORM) \
+		&& chmod +x $(YQ) || $(FAIL); }
+	@test -f $(HELM) || { $(INFO) "tools.prefetch: helm $(HELM_VERSION)"; \
+		tmp=$$(mktemp -d) && \
+		curl $(CURL_RETRY_FLAGS) -fsSL -o $$tmp/helm.tar.gz https://get.helm.sh/helm-$(HELM_VERSION)-$(SAFEHOSTPLATFORM).tar.gz \
+		&& tar -xzf $$tmp/helm.tar.gz -C $$tmp \
+		&& mv $$tmp/$(SAFEHOSTPLATFORM)/helm $(HELM) \
+		&& chmod +x $(HELM) \
+		&& rm -rf $$tmp || $(FAIL); }
+	@test -f $(KUSTOMIZE) || { $(INFO) "tools.prefetch: kustomize $(KUSTOMIZE_VERSION)"; \
+		tmp=$$(mktemp -d) && \
+		curl $(CURL_RETRY_FLAGS) -fsSL -o $$tmp/kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$(KUSTOMIZE_VERSION)/kustomize_$(KUSTOMIZE_VERSION)_$(SAFEHOST_PLATFORM).tar.gz \
+		&& tar -xzf $$tmp/kustomize.tar.gz -C $$tmp \
+		&& mv $$tmp/kustomize $(KUSTOMIZE) \
+		&& chmod +x $(KUSTOMIZE) \
+		&& rm -rf $$tmp || $(FAIL); }
+	@test -f $(CHAINSAW) || { $(INFO) "tools.prefetch: chainsaw $(CHAINSAW_VERSION)"; \
+		tmp=$$(mktemp -d) && \
+		curl $(CURL_RETRY_FLAGS) -fsSL -o $$tmp/chainsaw.tar.gz https://github.com/kyverno/chainsaw/releases/download/v$(CHAINSAW_VERSION)/chainsaw_$(SAFEHOST_PLATFORM).tar.gz \
+		&& tar -xzf $$tmp/chainsaw.tar.gz -C $$tmp chainsaw \
+		&& mv $$tmp/chainsaw $(CHAINSAW) \
+		&& chmod +x $(CHAINSAW) \
+		&& rm -rf $$tmp || $(FAIL); }
+	@$(OK) "tools.prefetch: all e2e tool binaries present"
 
 # Per-resource E2E targets
 e2e.record-a: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_A)
