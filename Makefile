@@ -139,7 +139,7 @@ export override UPDATE_TESTER_POLL_INTERVAL := $(E2E_POLL_INTERVAL)
 .PHONY: e2e-drc
 e2e-drc:
 	@mkdir -p $(CACHE_DIR)
-	@sed 's/__E2E_POLL_INTERVAL__/$(E2E_POLL_INTERVAL)/' test/e2e/deployment-runtime-config.yaml > $(DRC_FILE)
+	@sed 's/--poll=__E2E_POLL_INTERVAL__/--poll=$(E2E_POLL_INTERVAL)/' test/e2e/deployment-runtime-config.yaml > $(DRC_FILE)
 
 # Helper variables for comma-separated manifest lists (uptest CLI convention —
 # `uptest e2e` takes a single comma-separated string; GNU Make's $(wildcard)
