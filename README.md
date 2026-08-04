@@ -1481,6 +1481,11 @@ spec:
     networks:
       - 203.0.113.0/25
     networkView: default
+    comment: Managed by Crossplane
+  providerConfigRef:
+    name: default
+```
+
 ### DTCServer
 
 Manage Infoblox NIOS DTC (DNS Traffic Control) servers (WAPI object type
@@ -1540,6 +1545,11 @@ spec:
       - 203.0.113.128/25
     networkView: default
     comment: Managed by Crossplane (namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+```
+
 **Namespace-scoped** (`dtcserver.infobloxnios.m.crossplane.io/v1alpha1`):
 
 ```yaml
