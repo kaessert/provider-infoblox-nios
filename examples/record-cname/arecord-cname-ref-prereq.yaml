@@ -1,0 +1,42 @@
+# arecord-cname-ref-prereq.yaml — prerequisite ARecord for
+# record-cname-ref.yaml, the one example in this directory that resolves
+# its canonical field through canonicalRef instead of setting the literal
+# value record-cname.yaml/record-cname-namespaced.yaml use.
+#
+# The reference resolver needs a real ARecord managed resource in the
+# cluster to resolve against, so this manifest creates one purely as a
+# dependency. Makefile prerequisite-bundling (UPTEST_MANIFESTS_RECORD_CNAME)
+# lists it before record-cname-ref.yaml so uptest creates it first — same
+# pattern as examples/network-container/network-view-ref-prereq.yaml (a
+# prerequisite NetworkView for network-container-ref.yaml).
+#
+# ${data.runToken}: reuses the SAME per-run isolation token
+# examples/record-cname/record-cname.yaml and examples/record-a/record-a.yaml
+# already draw (see test/e2e/gen-datasource.sh) so this prerequisite's name
+# never collides with a concurrent run's. The literal "target-cname-ref-"
+# prefix (distinct from record-a.yaml's own "www-" prefix and this
+# directory's "alias-" / "alias-ref-" prefixes) keeps the objects from
+# colliding with each other within the same run, even though they share
+# the token.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: record-cname-ref.yaml's
+# reference resolution depends on this object's identity staying stable
+# for the whole run, and it is not itself a resource under test — see
+# examples/record-a/record-a.yaml for the general-purpose, independently
+# update-tested ARecord example.
+apiVersion: recorda.infobloxnios.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-record-cname-ref-target
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: target-cname-ref-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.20
+    view: default
+    comment: "Prerequisite ARecord for record-cname-ref.yaml (canonicalRef E2E coverage)"
+  providerConfigRef:
+    name: default
