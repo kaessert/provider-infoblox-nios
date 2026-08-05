@@ -8,10 +8,11 @@
 # both options.
 #
 # Distinct identity: the ipv4Addr below is the disjoint
-# ${data.netPtrHostNamespaced} half of the shared 10.1.1.0/24 reverse-zone
-# pool (see record-ptr.yaml's "Identity" and "E2E fixture note" sections)
-# so both examples can be applied to the same NIOS Grid Manager at once
-# without colliding on the same (view, in-addr.arpa name) WAPI identity.
+# ${data.netPtrHostNamespaced} third of the shared 10.1.1.0/24 reverse-zone
+# pool (see record-ptr.yaml's "Identity" and "E2E fixture note" sections,
+# and test/e2e/gen-datasource.sh's header for the exact ranges) so both
+# examples can be applied to the same NIOS Grid Manager at once without
+# colliding on the same (view, in-addr.arpa name) WAPI identity.
 #
 # E2E fixture note: see record-ptr.yaml's "E2E fixture note" — ipv4Addr must
 # be in 10.1.1.0/24 and view must be "Internal" to match the only reverse
