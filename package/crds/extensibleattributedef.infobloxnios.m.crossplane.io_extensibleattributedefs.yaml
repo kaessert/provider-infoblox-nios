@@ -264,12 +264,18 @@ spec:
                       rejected by WAPI on update.
                     format: int32
                     type: integer
+                    x-kubernetes-validations:
+                    - message: max is immutable after creation
+                      rule: self == oldSelf
                   min:
                     description: Minimum allowed value of the extensible attribute.
                       Applicable if type=INTEGER. Immutable — WAPI rejects a change
                       with "Minimum value cannot be modified".
                     format: int32
                     type: integer
+                    x-kubernetes-validations:
+                    - message: min is immutable after creation
+                      rule: self == oldSelf
                   name:
                     description: Name of the Extensible Attribute Definition. Mutable
                       — renaming changes the record's _ref.
@@ -288,6 +294,9 @@ spec:
                       — WAPI rejects a change with "Type of extensible attribute definition
                       cannot be modified".
                     type: string
+                    x-kubernetes-validations:
+                    - message: type is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.
