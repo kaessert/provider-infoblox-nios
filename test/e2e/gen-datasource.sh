@@ -107,7 +107,37 @@
 #                 .144/28  netContainerRefCluster        (NetworkContainer, networkViewRef reference-path
 #                                                          example, cluster only — no namespaced sibling exists
 #                                                          for this pair yet)
-#                 .130-.143 reserved / unused — room to grow
+#                 .132/30  netNetworkRefCluster          (Network, networkViewRef reference-path example,
+#                                                          cluster only)
+#                 .136/30  netFixedAddrRefParentCluster  (prerequisite parent Network, in the ref example's
+#                                                          own per-run NetworkView, for FixedAddress's
+#                                                          networkViewRef reference-path example, cluster only)
+#                 .137     netFixedAddrRefHostCluster    (FixedAddress ipv4addr, networkViewRef reference-path
+#                                                          example, cluster only — inside the block above,
+#                                                          avoiding the .136 network and .139 broadcast
+#                                                          addresses of its /30 parent)
+#                 .140/30  netRangeRefParentCluster      (prerequisite parent Network, in the ref example's
+#                                                          own per-run NetworkView, for Range's networkViewRef
+#                                                          reference-path example, cluster only)
+#                 .141-.142 netRangeRefStartCluster/netRangeRefEndCluster (Range, networkViewRef reference-path
+#                                                          example, cluster only — 2 addresses, inside the
+#                                                          block above, avoiding the .140 network and .143
+#                                                          broadcast addresses of its /30 parent)
+#                 .130-.131 reserved / unused — room to grow
+#
+#               HostRecord's networkViewRef reference-path example
+#               (host-record-ref.yaml) deliberately reuses netHostRecordCluster
+#               above rather than drawing a new sub-block: hostRecordExistsByNaturalKey
+#               searches on the FULL (networkView, view, name, ipv4Addr, ipv6Addr)
+#               tuple together, and the ref example already gets its own per-run
+#               NetworkView (a distinct networkView component) and its own
+#               token-suffixed name (a distinct name component) — either alone
+#               is sufficient to keep the tuple disjoint from host-record.yaml's
+#               own object, so reusing the numeric address adds no collision
+#               risk and spends no additional free space. Network, FixedAddress,
+#               and Range do NOT have this luxury: each one's WAPI identity is
+#               the CIDR/address itself (no independently-sufficient name field),
+#               so their ref examples need real, disjoint address space above.
 #
 #               netAllocParentCluster arithmetic: the allocate example
 #               requests a /28 (16 addresses) via allocatePrefixLen, so the
@@ -317,6 +347,19 @@ NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
 NET_ALLOC_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.224/27"
 NET_CONTAINER_REF_CLUSTER="100.64.${BLOCK_INDEX}.144/28"
 
+# networkViewRef reference-path sub-blocks for Network, FixedAddress, and
+# Range (HostRecord's ref example reuses NET_HOSTRECORD_CLUSTER instead —
+# see the header comment's sub-allocation map). Each of these three
+# resources has no name field independently sufficient to disambiguate it
+# from a sibling run, so each ref example needs its own disjoint address
+# space even though it also gets its own per-run NetworkView.
+NET_NETWORK_REF_CLUSTER="100.64.${BLOCK_INDEX}.132/30"
+NET_FIXEDADDR_REF_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.136/30"
+NET_FIXEDADDR_REF_HOST_CLUSTER="100.64.${BLOCK_INDEX}.137"
+NET_RANGE_REF_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.140/30"
+NET_RANGE_REF_START_CLUSTER="100.64.${BLOCK_INDEX}.141"
+NET_RANGE_REF_END_CLUSTER="100.64.${BLOCK_INDEX}.142"
+
 # netV6Network{Cluster,Namespaced} — Network's IPv6 (ipv6network) variant,
 # see the header comment's netV6 section. Reuses BLOCK_INDEX (same byte
 # netPrefix drew, no second hash byte) rendered as 2-digit lowercase hex and
@@ -374,6 +417,12 @@ netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
 netAllocParentCluster: "${NET_ALLOC_PARENT_CLUSTER}"
 netContainerRefCluster: "${NET_CONTAINER_REF_CLUSTER}"
+netNetworkRefCluster: "${NET_NETWORK_REF_CLUSTER}"
+netFixedAddrRefParentCluster: "${NET_FIXEDADDR_REF_PARENT_CLUSTER}"
+netFixedAddrRefHostCluster: "${NET_FIXEDADDR_REF_HOST_CLUSTER}"
+netRangeRefParentCluster: "${NET_RANGE_REF_PARENT_CLUSTER}"
+netRangeRefStartCluster: "${NET_RANGE_REF_START_CLUSTER}"
+netRangeRefEndCluster: "${NET_RANGE_REF_END_CLUSTER}"
 netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
 netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
 netV6ContainerCluster: "${NET_V6_CONTAINER_CLUSTER}"

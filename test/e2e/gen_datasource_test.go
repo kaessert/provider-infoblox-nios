@@ -107,6 +107,12 @@ const (
 	keyNetV6FixedAddrParent         = "netV6FixedAddrParent"
 	keyNetV6FixedAddrHostCluster    = "netV6FixedAddrHostCluster"
 	keyNetV6FixedAddrHostNamespaced = "netV6FixedAddrHostNamespaced"
+	keyNetNetworkRefCluster         = "netNetworkRefCluster"
+	keyNetFixedAddrRefParentCluster = "netFixedAddrRefParentCluster"
+	keyNetFixedAddrRefHostCluster   = "netFixedAddrRefHostCluster"
+	keyNetRangeRefParentCluster     = "netRangeRefParentCluster"
+	keyNetRangeRefStartCluster      = "netRangeRefStartCluster"
+	keyNetRangeRefEndCluster        = "netRangeRefEndCluster"
 )
 
 // requiredKeys is every key gen-datasource.sh's sub-allocation map
@@ -144,6 +150,12 @@ var requiredKeys = []string{
 	keyNetV6FixedAddrParent,
 	keyNetV6FixedAddrHostCluster,
 	keyNetV6FixedAddrHostNamespaced,
+	keyNetNetworkRefCluster,
+	keyNetFixedAddrRefParentCluster,
+	keyNetFixedAddrRefHostCluster,
+	keyNetRangeRefParentCluster,
+	keyNetRangeRefStartCluster,
+	keyNetRangeRefEndCluster,
 }
 
 func TestGenDatasourceEmitsAllKeys(t *testing.T) {
@@ -255,6 +267,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 		keyNetAllocParentCluster,
+		keyNetNetworkRefCluster, keyNetFixedAddrRefParentCluster, keyNetRangeRefParentCluster,
 	}
 	for _, key := range cidrKeys {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -272,6 +285,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetHostRecordCluster, keyNetHostRecordNamespaced,
 		keyNetRangeStartCluster, keyNetRangeEndCluster,
 		keyNetRangeStartNamespaced, keyNetRangeEndNamespaced,
+		keyNetFixedAddrRefHostCluster, keyNetRangeRefStartCluster, keyNetRangeRefEndCluster,
 	}
 	for _, key := range hostKeys {
 		ip := net.ParseIP(values[key])
@@ -307,6 +321,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		keyNetFixedAddrParentCluster, keyNetFixedAddrParentNamespaced,
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 		keyNetAllocParentCluster,
+		keyNetNetworkRefCluster, keyNetFixedAddrRefParentCluster, keyNetRangeRefParentCluster,
 	}
 	// Range is a contiguous [start, end] address span, not a CIDR.
 	rangeSpans := [][2]string{
@@ -314,7 +329,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		{keyNetRangeStartNamespaced, keyNetRangeEndNamespaced},
 	}
 	// Single-host consumers.
-	hostKeys := []string{keyNetFixedAddrHostCluster, keyNetFixedAddrHostNamespaced, keyNetHostRecordCluster, keyNetHostRecordNamespaced}
+	hostKeys := []string{keyNetFixedAddrHostCluster, keyNetFixedAddrHostNamespaced, keyNetHostRecordCluster, keyNetHostRecordNamespaced, keyNetFixedAddrRefHostCluster}
 
 	spans := make([]span, 0, len(cidrKeys)+len(rangeSpans)+len(hostKeys))
 	for _, key := range cidrKeys {
@@ -336,6 +351,21 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		spans = append(spans, span{name: rs[0] + ".." + rs[1], ips: ips})
 	}
 
+	// The networkViewRef reference-path Range example uses a deliberately
+	// short 2-address span (its own /30 parent, see gen-datasource.sh's
+	// sub-allocation map) rather than mirroring range.yaml's full 21-address
+	// span — it only proves the resolver wiring, not range sizing, so it
+	// gets its own length check instead of joining rangeSpans above.
+	refRangeIPs, err := expandRange(values[keyNetRangeRefStartCluster], values[keyNetRangeRefEndCluster])
+	if err != nil {
+		t.Fatalf("range %s..%s: %v", keyNetRangeRefStartCluster, keyNetRangeRefEndCluster, err)
+	}
+	if len(refRangeIPs) != 2 {
+		t.Errorf("range %s..%s spans %d addresses, want 2", keyNetRangeRefStartCluster, keyNetRangeRefEndCluster, len(refRangeIPs))
+	}
+	refRangeSpanName := keyNetRangeRefStartCluster + ".." + keyNetRangeRefEndCluster
+	spans = append(spans, span{name: refRangeSpanName, ips: refRangeIPs})
+
 	for _, key := range hostKeys {
 		ip := net.ParseIP(values[key])
 		if ip == nil {
@@ -353,6 +383,8 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		{keyNetFixedAddrParentNamespaced, keyNetFixedAddrHostNamespaced}:                            true,
 		{keyNetRangeParentCluster, keyNetRangeStartCluster + ".." + keyNetRangeEndCluster}:          true,
 		{keyNetRangeParentNamespaced, keyNetRangeStartNamespaced + ".." + keyNetRangeEndNamespaced}: true,
+		{keyNetFixedAddrRefParentCluster, keyNetFixedAddrRefHostCluster}:                            true,
+		{keyNetRangeRefParentCluster, refRangeSpanName}:                                             true,
 	}
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
@@ -372,6 +404,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 	// covering the per-run allocated address).
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostCluster, keyNetFixedAddrParentCluster)
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostNamespaced, keyNetFixedAddrParentNamespaced)
+	assertHostInsideCIDR(t, values, keyNetFixedAddrRefHostCluster, keyNetFixedAddrRefParentCluster)
 
 	// Range's [start,end] span MUST fall entirely inside its own parent
 	// block — CreateNetworkRange requires an existing parent Network
@@ -382,6 +415,8 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 	assertHostInsideCIDR(t, values, keyNetRangeEndCluster, keyNetRangeParentCluster)
 	assertHostInsideCIDR(t, values, keyNetRangeStartNamespaced, keyNetRangeParentNamespaced)
 	assertHostInsideCIDR(t, values, keyNetRangeEndNamespaced, keyNetRangeParentNamespaced)
+	assertHostInsideCIDR(t, values, keyNetRangeRefStartCluster, keyNetRangeRefParentCluster)
+	assertHostInsideCIDR(t, values, keyNetRangeRefEndCluster, keyNetRangeRefParentCluster)
 }
 
 func assertHostInsideCIDR(t *testing.T, values map[string]string, hostKey, cidrKey string) {
@@ -771,6 +806,9 @@ func TestGenDatasourceFixedAddressHostNotNetworkOrBroadcast(t *testing.T) {
 		{keyNetRangeEndCluster, keyNetRangeParentCluster},
 		{keyNetRangeStartNamespaced, keyNetRangeParentNamespaced},
 		{keyNetRangeEndNamespaced, keyNetRangeParentNamespaced},
+		{keyNetFixedAddrRefHostCluster, keyNetFixedAddrRefParentCluster},
+		{keyNetRangeRefStartCluster, keyNetRangeRefParentCluster},
+		{keyNetRangeRefEndCluster, keyNetRangeRefParentCluster},
 	} {
 		host := net.ParseIP(values[pair[0]])
 		_, cidr, err := net.ParseCIDR(values[pair[1]])

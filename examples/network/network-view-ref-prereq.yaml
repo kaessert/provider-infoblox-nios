@@ -1,0 +1,39 @@
+# network-view-ref-prereq.yaml — prerequisite NetworkView for
+# network-ref.yaml, the one example in this directory that resolves its
+# networkView through networkViewRef instead of setting the literal value
+# network.yaml/network-namespaced.yaml use.
+#
+# The reference resolver needs a real NetworkView managed resource in the
+# cluster to resolve against, so this manifest creates one purely as a
+# dependency. Makefile prerequisite-bundling (UPTEST_MANIFESTS_NETWORK)
+# lists it before network-ref.yaml so uptest creates it first — same
+# pattern as examples/network-container/network-view-ref-prereq.yaml, the
+# NetworkContainer sibling this manifest mirrors.
+#
+# ${data.runToken}: reuses the SAME per-run isolation token
+# examples/network-view/network-view.yaml already draws (see
+# test/e2e/gen-datasource.sh) so this prerequisite's name never collides
+# with a concurrent run's. The literal "test-network-view-network-ref-"
+# prefix (distinct from every sibling *-ref-view prefix in this repo) keeps
+# this object from colliding with any of them within the same run, even
+# though they all share the token.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: network-ref.yaml's
+# reference resolution depends on this object's identity staying stable
+# for the whole run, and it is not itself a resource under test — see
+# examples/network-view/network-view.yaml for the general-purpose,
+# independently update-tested NetworkView example.
+apiVersion: networkview.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkView
+metadata:
+  name: example-network-ref-view
+  annotations:
+    meta.upbound.io/example-id: infobloxnios/v1alpha1/networkview
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: "test-network-view-network-ref-${data.runToken}"
+    comment: "Prerequisite NetworkView for network-ref.yaml (networkViewRef E2E coverage)"
+  providerConfigRef:
+    name: default
