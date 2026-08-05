@@ -20,23 +20,39 @@
 # (UPTEST_MANIFESTS_HOST_RECORD) applies network-view-ref-prereq.yaml
 # first so the reference has something to resolve against.
 #
-# No new gen-datasource.sh address sub-block: unlike Network, FixedAddress,
-# and Range (whose WAPI identity IS their CIDR/address, with no
-# independently-sufficient name field), HostRecord's
-# hostRecordExistsByNaturalKey searches on the FULL (networkView, view,
-# name, ipv4Addr, ipv6Addr) tuple together. This example's own per-run
-# NetworkView (a distinct networkView component, from the prereq above)
-# and its own token-suffixed name below (a distinct name component,
-# "-ref-" instead of host-record.yaml's own prefix) are each independently
-# sufficient to keep the tuple disjoint from host-record.yaml's own
-# object — so this manifest safely reuses host-record.yaml's own
-# ${data.netHostRecordCluster} address rather than drawing new address
-# space (see test/e2e/gen-datasource.sh's sub-allocation map).
+# configureForDns is false here, and view is omitted entirely — unlike
+# host-record.yaml. In NIOS a DNS view is bound to exactly one network
+# view, and the `default` DNS view belongs to the `default` NETWORK view.
+# This example's networkView comes from the resolver and points at the
+# per-run custom NetworkView created by network-view-ref-prereq.yaml, so
+# asking for DNS registration in the `default` DNS view (the only auth
+# zone test/setup.sh provisions) while the record's network view is that
+# custom view is a contradiction the Grid rejects at Create
+# (IB.Data.Conflict: the zone's DNS view doesn't belong to the selected
+# network view). Turning DNS registration off removes the conflict — this
+# example is purely proving the networkViewRef resolver wiring, which
+# needs no DNS involvement at all.
 #
-# view stays "default": that's the DNS view, unrelated to the per-run
-# NetworkView this example resolves through networkViewRef, and
-# test/setup.sh's example.com auth zone (which configureForDns below
-# depends on) lives in the default DNS view.
+# view stays unset (rather than empty string) since it is optional
+# (omitempty) on the CRD and is only meaningful when configureForDns is
+# true.
+#
+# Without DNS registration, WAPI unconditionally requires the address to
+# already belong to an existing Network object —
+# host-record-ref-network-prereq.yaml provisions that per-run parent
+# Network, inside network-view-ref-prereq.yaml's custom view, ahead of
+# this example. Makefile prerequisite-bundling (UPTEST_MANIFESTS_HOST_RECORD)
+# applies both prereqs, in that order, before this manifest.
+#
+# ${data.netHostRecordRefHostCluster}: a per-run host address nested
+# inside host-record-ref-network-prereq.yaml's
+# ${data.netHostRecordRefParentCluster} /30 (see the sub-allocation map in
+# test/e2e/gen-datasource.sh's header comment) — numerically overlaps
+# host-record.yaml's/host-record-namespaced.yaml's own
+# ${data.netHostRecordCluster}/${data.netHostRecordNamespaced} addresses,
+# but never collides with them: this record resolves into a different,
+# per-run custom network view, and network views are independent address
+# realms in NIOS.
 #
 # No update-test annotation and no post-assert-hook: this manifest's sole
 # purpose is proving the reference resolves — comment's per-field update
@@ -53,15 +69,11 @@ spec:
   forProvider:
     name: test-host-ref-${data.runToken}.example.com
     ipv4Addrs:
-      - ipv4Addr: ${data.netHostRecordCluster}
-    view: default
+      - ipv4Addr: ${data.netHostRecordRefHostCluster}
     networkView: ""
     networkViewRef:
       name: example-hostrecord-ref-view
-    # configureForDns must be true — see host-record.yaml's field docs for
-    # the full rationale (the WAPI Grid Manager rejects Create otherwise
-    # unless the address already belongs to an existing IPAM Network).
-    configureForDns: true
+    configureForDns: false
     comment: "Managed by Crossplane (networkViewRef reference path)"
   providerConfigRef:
     name: default

@@ -123,21 +123,42 @@
 #                                                          example, cluster only — 2 addresses, inside the
 #                                                          block above, avoiding the .140 network and .143
 #                                                          broadcast addresses of its /30 parent)
-#                 .130-.131 reserved / unused — room to grow
+#                 .128/30  netHostRecordRefParentCluster (prerequisite parent Network, in the ref example's
+#                                                          own per-run NetworkView, for HostRecord's
+#                                                          networkViewRef reference-path example, cluster only
+#                                                          — overlaps netHostRecordCluster/netHostRecordNamespaced
+#                                                          below by decimal value only; see the paragraph below
+#                                                          for why that is not a collision)
+#                 .130     netHostRecordRefHostCluster   (HostRecord ipv4Addr, networkViewRef reference-path
+#                                                          example, cluster only — inside the block above,
+#                                                          avoiding the .128 network and .131 broadcast
+#                                                          addresses of its /30 parent)
+#                 .128     netHostRecordCluster          (HostRecord ipv4Addr, cluster)
+#                 .129     netHostRecordNamespaced       (HostRecord ipv4Addr, namespaced)
 #
-#               HostRecord's networkViewRef reference-path example
-#               (host-record-ref.yaml) deliberately reuses netHostRecordCluster
-#               above rather than drawing a new sub-block: hostRecordExistsByNaturalKey
-#               searches on the FULL (networkView, view, name, ipv4Addr, ipv6Addr)
-#               tuple together, and the ref example already gets its own per-run
-#               NetworkView (a distinct networkView component) and its own
-#               token-suffixed name (a distinct name component) — either alone
-#               is sufficient to keep the tuple disjoint from host-record.yaml's
-#               own object, so reusing the numeric address adds no collision
-#               risk and spends no additional free space. Network, FixedAddress,
-#               and Range do NOT have this luxury: each one's WAPI identity is
-#               the CIDR/address itself (no independently-sufficient name field),
-#               so their ref examples need real, disjoint address space above.
+#               netHostRecordRefParentCluster (.128/30) numerically overlaps
+#               netHostRecordCluster (.128) and netHostRecordNamespaced (.129)
+#               above. This is not a live collision: a NIOS network view is an
+#               independent address realm, and the parent Network prereq for
+#               the ref example is created ONLY inside the ref example's own
+#               per-run custom NetworkView (network-view-ref-prereq.yaml's
+#               object), never in "default" where host-record.yaml and
+#               host-record-namespaced.yaml's HostRecords live — the same
+#               principle the ref example already relies on for its own
+#               ipv4Addr. Reusing this nibble (rather than drawing a fresh
+#               one) also sidesteps the fact that the /24 partition above is
+#               fully subscribed with no free space left for a new /30.
+#
+#               HostRecord's ref example needs this parent Network because,
+#               unlike host-record.yaml/host-record-namespaced.yaml (which
+#               set configureForDns: true to bypass the requirement — see
+#               below), the ref example sets configureForDns: false so no
+#               DNS view is involved at all, and WAPI unconditionally rejects
+#               Create for a DNS-less HostRecord unless its address already
+#               belongs to an existing Network object — same requirement
+#               FixedAddress and Range have below, and the same
+#               *-ref-network-prereq.yaml prerequisite shape they use to
+#               satisfy it.
 #
 #               netAllocParentCluster arithmetic: the allocate example
 #               requests a /28 (16 addresses) via allocatePrefixLen, so the
@@ -153,11 +174,15 @@
 #               moot either way; the headroom is about allocation room, not
 #               about surviving repeat allocations.
 #
-#               HostRecord does not need its own parent Network object (it
-#               bypasses the requirement via configureForDns). FixedAddress
-#               and Range both DO need one: FixedAddress's AllocateIP call
-#               and Range's CreateNetworkRange call each unconditionally
-#               require an existing parent Network covering the address —
+#               host-record.yaml and host-record-namespaced.yaml do not need
+#               a parent Network object (they set configureForDns: true,
+#               which bypasses the requirement). host-record-ref.yaml DOES
+#               need one — see netHostRecordRefParentCluster above — because
+#               it sets configureForDns: false instead. FixedAddress and
+#               Range both DO need one for every example, ref or not:
+#               FixedAddress's AllocateIP call and Range's CreateNetworkRange
+#               call each unconditionally require an existing parent Network
+#               covering the address —
 #               live-verified on the Grid for Range (WAPI 400
 #               IBDataConflictError: "Cannot find the parent network for
 #               the DHCP range ..." when no covering Network object
@@ -360,6 +385,14 @@ NET_RANGE_REF_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.140/30"
 NET_RANGE_REF_START_CLUSTER="100.64.${BLOCK_INDEX}.141"
 NET_RANGE_REF_END_CLUSTER="100.64.${BLOCK_INDEX}.142"
 
+# HostRecord's networkViewRef reference-path sub-block. Deliberately reuses
+# the .128/30 nibble netHostRecordCluster/netHostRecordNamespaced already
+# occupy — see the header comment's sub-allocation map for why that is not
+# a live collision (this parent Network only ever exists inside the ref
+# example's own per-run custom NetworkView, never in "default").
+NET_HOSTRECORD_REF_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.128/30"
+NET_HOSTRECORD_REF_HOST_CLUSTER="100.64.${BLOCK_INDEX}.130"
+
 # netV6Network{Cluster,Namespaced} — Network's IPv6 (ipv6network) variant,
 # see the header comment's netV6 section. Reuses BLOCK_INDEX (same byte
 # netPrefix drew, no second hash byte) rendered as 2-digit lowercase hex and
@@ -423,6 +456,8 @@ netFixedAddrRefHostCluster: "${NET_FIXEDADDR_REF_HOST_CLUSTER}"
 netRangeRefParentCluster: "${NET_RANGE_REF_PARENT_CLUSTER}"
 netRangeRefStartCluster: "${NET_RANGE_REF_START_CLUSTER}"
 netRangeRefEndCluster: "${NET_RANGE_REF_END_CLUSTER}"
+netHostRecordRefParentCluster: "${NET_HOSTRECORD_REF_PARENT_CLUSTER}"
+netHostRecordRefHostCluster: "${NET_HOSTRECORD_REF_HOST_CLUSTER}"
 netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
 netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
 netV6ContainerCluster: "${NET_V6_CONTAINER_CLUSTER}"

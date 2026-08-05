@@ -210,7 +210,7 @@ UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,example
 # same variable (not a separate e2e target) so `make e2e.host-record`
 # proves both the literal-networkView path (still covered by the first two
 # manifests) AND the reference-resolver path in one run.
-UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml,examples/host-record/network-view-ref-prereq.yaml,examples/host-record/host-record-ref.yaml
+UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml,examples/host-record/network-view-ref-prereq.yaml,examples/host-record/host-record-ref-network-prereq.yaml,examples/host-record/host-record-ref.yaml
 # network-view-ref-prereq.yaml + network-ref.yaml are the third member of
 # this set: network-ref.yaml exercises the networkViewRef reference path
 # instead of the literal networkView network.yaml/network-namespaced.yaml

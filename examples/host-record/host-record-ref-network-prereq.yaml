@@ -1,0 +1,55 @@
+# host-record-ref-network-prereq.yaml — prerequisite parent Network for
+# host-record-ref.yaml, provisioned inside network-view-ref-prereq.yaml's
+# per-run custom NetworkView.
+#
+# host-record-ref.yaml sets configureForDns: false (unlike
+# host-record.yaml/host-record-namespaced.yaml, which set it to true): a
+# DNS view is bound to exactly one network view in NIOS, and the ref
+# example's networkView resolves through networkViewRef to a per-run
+# custom NetworkView that has no DNS view of its own, so registering DNS
+# there is a contradiction the Grid rejects at Create. Turning DNS
+# registration off removes that conflict, but WAPI then unconditionally
+# requires the host's address to already belong to an existing Network
+# object — this manifest provisions that parent, mirroring
+# fixed-address-ref-network-prereq.yaml and range-ref-network-prereq.yaml,
+# which solve the identical problem for their own resources' ref examples.
+#
+# The literal networkView value below must match
+# network-view-ref-prereq.yaml's spec.forProvider.name exactly: both are
+# plain string literals built from the same ${data.runToken}, so there is
+# no reference indirection needed here (only host-record-ref.yaml itself
+# exercises the networkViewRef resolver — this manifest just needs to land
+# in the same already-known view name).
+#
+# Makefile prerequisite-bundling (UPTEST_MANIFESTS_HOST_RECORD) applies
+# network-view-ref-prereq.yaml, then this manifest, then
+# host-record-ref.yaml, in that order, so each dependency exists before
+# the next needs it.
+#
+# ${data.netHostRecordRefParentCluster}: a per-run /30 that numerically
+# overlaps netHostRecordCluster/netHostRecordNamespaced (see
+# test/e2e/gen-datasource.sh's sub-allocation map) but never collides with
+# them in practice — network views are independent address realms, and
+# this Network object lives only inside the per-run custom view above,
+# never in "default" where host-record.yaml's and
+# host-record-namespaced.yaml's HostRecords live.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: host-record-ref.yaml's
+# Create depends on this object's CIDR staying stable for the whole run,
+# and it is not itself a resource under test — see examples/network/network.yaml
+# for the general-purpose, independently update-tested Network example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-hostrecord-ref-network
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: "test-network-view-hostrecord-ref-${data.runToken}"
+    network: ${data.netHostRecordRefParentCluster}
+    comment: "Prerequisite parent network for host-record-ref.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default
