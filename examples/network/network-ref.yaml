@@ -1,0 +1,57 @@
+# network-ref.yaml — Network created via the networkViewRef cross-resource
+# reference, instead of the literal networkView field network.yaml/
+# network-namespaced.yaml use. See network.yaml for the full field
+# documentation — this file only documents what's specific to the
+# reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end, mirroring
+# examples/network-container/network-container-ref.yaml. The CEL
+# immutability rule on networkView is deliberately tolerant of an
+# empty-to-populated first write ("self == oldSelf || oldSelf == ''")
+# specifically so the resolver can write the resolved name into
+# spec.forProvider.networkView post-admission — this manifest sets
+# networkViewRef and leaves networkView at "" in spec, so whatever value
+# ends up on the live object can only have come from the resolver, never
+# from the manifest.
+#
+# networkView must still be present in spec ("" here) because it is a
+# schema-required field (one of network, parentCidr, or filterParams is
+# independently required too, and is satisfied below by `network`) — the
+# empty string is exactly the "oldSelf == ''" case the CEL rule above
+# tolerates, letting the resolver's first write through on Create.
+#
+# networkViewRef.name: the metadata.name of network-view-ref-prereq.yaml's
+# NetworkView object (a Kubernetes object name, not the NetworkView's WAPI
+# _ref or its own spec.forProvider.name) — Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_NETWORK) applies network-view-ref-prereq.yaml first so
+# the reference has something to resolve against.
+#
+# ${data.netNetworkRefCluster}: a per-run /30 disjoint from every other
+# addressed example's sub-block, including this directory's own
+# ${data.netNetworkCluster}/${data.netNetworkNamespaced} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) — required because this
+# manifest runs in the SAME e2e.network invocation as both of those, not a
+# separate target. A /30 (rather than the /28 network.yaml itself uses) is
+# enough: this object's own CIDR is all it needs to exist, with no nested
+# host allocation to fit inside it.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — comment's per-field update
+# coverage already exists on network.yaml, and exercising it a second time
+# here adds no new coverage while doubling this target's runtime.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-network-ref
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: ""
+    networkViewRef:
+      name: example-network-ref-view
+    network: ${data.netNetworkRefCluster}
+    comment: "Managed by Crossplane (networkViewRef reference path)"
+  providerConfigRef:
+    name: default

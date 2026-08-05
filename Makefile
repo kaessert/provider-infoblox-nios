@@ -202,8 +202,24 @@ UPTEST_MANIFESTS_RECORD_MX := examples/record-mx/record-mx.yaml,examples/record-
 UPTEST_MANIFESTS_RECORD_NS := examples/record-ns/record-ns.yaml,examples/record-ns/record-ns-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/record-srv/record-srv-namespaced.yaml
 UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,examples/network-view/network-view-namespaced.yaml
-UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml
-UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml
+# host-record-ref.yaml is the third member of this set: it exercises the
+# networkViewRef reference path instead of the literal networkView
+# host-record.yaml/host-record-namespaced.yaml use, so it needs its own
+# NetworkView prerequisite (network-view-ref-prereq.yaml, listed first so
+# uptest creates it before the reference can resolve). Folded into this
+# same variable (not a separate e2e target) so `make e2e.host-record`
+# proves both the literal-networkView path (still covered by the first two
+# manifests) AND the reference-resolver path in one run.
+UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml,examples/host-record/network-view-ref-prereq.yaml,examples/host-record/host-record-ref-network-prereq.yaml,examples/host-record/host-record-ref.yaml
+# network-view-ref-prereq.yaml + network-ref.yaml are the third member of
+# this set: network-ref.yaml exercises the networkViewRef reference path
+# instead of the literal networkView network.yaml/network-namespaced.yaml
+# use, so it needs its own NetworkView prerequisite (listed first so
+# uptest creates it before the reference can resolve). Folded into this
+# same variable (not a separate e2e target) so `make e2e.network` proves
+# both the literal-networkView path (still covered by the first two
+# manifests) AND the reference-resolver path in one run.
+UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml,examples/network/network-view-ref-prereq.yaml,examples/network/network-ref.yaml
 # IPv6 variant of Network — WAPI resolves this to the ipv6network object
 # type at runtime instead of network. Kept as a separate target (not
 # folded into UPTEST_MANIFESTS_NETWORK/e2e.network) so a regression on
@@ -247,7 +263,17 @@ UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,example
 # bundling: the parent Network's manifest is listed BEFORE
 # fixed-address.yaml's own, so uptest creates it first (IN-ISO-IPAM-PREREQ;
 # address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml
+# network-view-ref-prereq.yaml, fixed-address-ref-network-prereq.yaml, and
+# fixed-address-ref.yaml are a third, later-added member of this set:
+# fixed-address-ref.yaml exercises the networkViewRef reference path
+# instead of the literal networkView the first two fixed-address examples
+# use, so it needs both its own NetworkView prerequisite AND its own
+# parent Network prerequisite (in that NetworkView) — listed in that order
+# so uptest creates each dependency before the next needs it. Folded into
+# this same variable (not a separate e2e target) so `make e2e.fixed-address`
+# proves both the literal-networkView path (still covered by the first two
+# manifests) AND the reference-resolver path in one run.
+UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml,examples/fixed-address/network-view-ref-prereq.yaml,examples/fixed-address/fixed-address-ref-network-prereq.yaml,examples/fixed-address/fixed-address-ref.yaml
 # Range's CreateNetworkRange call, like FixedAddress's AllocateIP,
 # unconditionally requires an existing parent Network object covering the
 # range's address span, even though the example leaves the Range's own
@@ -258,7 +284,17 @@ UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,exa
 # Prerequisite-bundling: each scope's parent Network manifest is listed
 # BEFORE its own range.yaml/range-namespaced.yaml, so uptest creates it
 # first (IN-ISO-IPAM-PREREQ fix; address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml
+# network-view-ref-prereq.yaml, range-ref-network-prereq.yaml, and
+# range-ref.yaml are a third, later-added member of this set: range-ref.yaml
+# exercises the networkViewRef reference path instead of the literal
+# networkView the first two range examples use, so it needs both its own
+# NetworkView prerequisite AND its own parent Network prerequisite (in
+# that NetworkView) — listed in that order so uptest creates each
+# dependency before the next needs it. Folded into this same variable (not
+# a separate e2e target) so `make e2e.range` proves both the
+# literal-networkView path (still covered by the first two manifests) AND
+# the reference-resolver path in one run.
+UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml,examples/range/network-view-ref-prereq.yaml,examples/range/range-ref-network-prereq.yaml,examples/range/range-ref.yaml
 # IPv6 variant of FixedAddress — WAPI resolves this to the
 # ipv6fixedaddress object type at runtime instead of fixedaddress. Kept as
 # a separate target (not folded into UPTEST_MANIFESTS_FIXED_ADDRESS/

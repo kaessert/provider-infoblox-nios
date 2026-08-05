@@ -1,0 +1,54 @@
+# range-ref-network-prereq.yaml — prerequisite parent Network for
+# range-ref.yaml, provisioned inside network-view-ref-prereq.yaml's per-run
+# custom NetworkView.
+#
+# Range's CreateNetworkRange call (see range.yaml's field docs)
+# unconditionally requires an existing parent Network object covering the
+# range's address span, in the SAME network view the Range itself ends up
+# in — live-verified on the Grid: WAPI 400 IBDataConflictError ("Cannot
+# find the parent network for the DHCP range ...") without one. Since
+# range-ref.yaml resolves its networkView through networkViewRef to
+# network-view-ref-prereq.yaml's custom view (not "default"), the parent
+# Network covering its span must exist in that same custom view too —
+# unlike examples/range/network-prereq.yaml, which covers the
+# literal-networkView path and lives in "default".
+#
+# The literal networkView value below must match
+# network-view-ref-prereq.yaml's spec.forProvider.name exactly: both are
+# plain string literals built from the same ${data.runToken}, so there is
+# no reference indirection needed here (only range-ref.yaml itself
+# exercises the networkViewRef resolver — this manifest just needs to land
+# in the same already-known view name).
+#
+# Makefile prerequisite-bundling (UPTEST_MANIFESTS_RANGE) applies
+# network-view-ref-prereq.yaml, then this manifest, then range-ref.yaml,
+# in that order, so each dependency exists before the next needs it.
+#
+# ${data.netRangeRefParentCluster}: a per-run /30 disjoint from every
+# other addressed example's sub-block, including this directory's own
+# ${data.netRangeParentCluster}/${data.netRangeParentNamespaced} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) — required because this
+# manifest runs in the SAME e2e.range invocation as both of those, not a
+# separate target. range-ref.yaml's own
+# ${data.netRangeRefStartCluster}/${data.netRangeRefEndCluster} span is
+# nested inside this /30.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: range-ref.yaml's Create
+# depends on this object's CIDR staying stable for the whole run, and it
+# is not itself a resource under test — see examples/network/network.yaml
+# for the general-purpose, independently update-tested Network example.
+apiVersion: network.infobloxnios.crossplane.io/v1alpha1
+kind: Network
+metadata:
+  name: example-range-ref-network
+  annotations:
+    meta.upbound.io/example-id: network/v1alpha1/network
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: "test-network-view-range-ref-${data.runToken}"
+    network: ${data.netRangeRefParentCluster}
+    comment: "Prerequisite parent network for range-ref.yaml (E2E isolation)"
+  providerConfigRef:
+    name: default

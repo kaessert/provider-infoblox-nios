@@ -1,0 +1,79 @@
+# host-record-ref.yaml — HostRecord created via the networkViewRef
+# cross-resource reference, instead of the literal networkView field
+# host-record.yaml/host-record-namespaced.yaml use. See host-record.yaml
+# for the full field documentation — this file only documents what's
+# specific to the reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end, mirroring
+# examples/network-container/network-container-ref.yaml. The CEL
+# immutability rule on the spec-level networkView field is deliberately
+# tolerant of an empty-to-populated first write ("self == oldSelf ||
+# oldSelf == ''") specifically so the resolver can write the resolved name
+# into spec.forProvider.networkView post-admission — this manifest sets
+# networkViewRef and leaves networkView at "" in spec, so whatever value
+# ends up on the live object can only have come from the resolver, never
+# from the manifest.
+#
+# networkViewRef.name: the metadata.name of network-view-ref-prereq.yaml's
+# NetworkView object (a Kubernetes object name, not the NetworkView's WAPI
+# _ref or its own spec.forProvider.name) — Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_HOST_RECORD) applies network-view-ref-prereq.yaml
+# first so the reference has something to resolve against.
+#
+# configureForDns is false here, and view is omitted entirely — unlike
+# host-record.yaml. In NIOS a DNS view is bound to exactly one network
+# view, and the `default` DNS view belongs to the `default` NETWORK view.
+# This example's networkView comes from the resolver and points at the
+# per-run custom NetworkView created by network-view-ref-prereq.yaml, so
+# asking for DNS registration in the `default` DNS view (the only auth
+# zone test/setup.sh provisions) while the record's network view is that
+# custom view is a contradiction the Grid rejects at Create
+# (IB.Data.Conflict: the zone's DNS view doesn't belong to the selected
+# network view). Turning DNS registration off removes the conflict — this
+# example is purely proving the networkViewRef resolver wiring, which
+# needs no DNS involvement at all.
+#
+# view stays unset (rather than empty string) since it is optional
+# (omitempty) on the CRD and is only meaningful when configureForDns is
+# true.
+#
+# Without DNS registration, WAPI unconditionally requires the address to
+# already belong to an existing Network object —
+# host-record-ref-network-prereq.yaml provisions that per-run parent
+# Network, inside network-view-ref-prereq.yaml's custom view, ahead of
+# this example. Makefile prerequisite-bundling (UPTEST_MANIFESTS_HOST_RECORD)
+# applies both prereqs, in that order, before this manifest.
+#
+# ${data.netHostRecordRefHostCluster}: a per-run host address nested
+# inside host-record-ref-network-prereq.yaml's
+# ${data.netHostRecordRefParentCluster} /30 (see the sub-allocation map in
+# test/e2e/gen-datasource.sh's header comment) — numerically overlaps
+# host-record.yaml's/host-record-namespaced.yaml's own
+# ${data.netHostRecordCluster}/${data.netHostRecordNamespaced} addresses,
+# but never collides with them: this record resolves into a different,
+# per-run custom network view, and network views are independent address
+# realms in NIOS.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — comment's per-field update
+# coverage already exists on host-record.yaml, and exercising it a second
+# time here adds no new coverage while doubling this target's runtime.
+apiVersion: hostrecord.infobloxnios.crossplane.io/v1alpha1
+kind: HostRecord
+metadata:
+  name: example-hostrecord-ref
+  annotations:
+    meta.upbound.io/example-id: hostrecord/v1alpha1/hostrecord
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: test-host-ref-${data.runToken}.example.com
+    ipv4Addrs:
+      - ipv4Addr: ${data.netHostRecordRefHostCluster}
+    networkView: ""
+    networkViewRef:
+      name: example-hostrecord-ref-view
+    configureForDns: false
+    comment: "Managed by Crossplane (networkViewRef reference path)"
+  providerConfigRef:
+    name: default

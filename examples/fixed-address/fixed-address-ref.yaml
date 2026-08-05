@@ -1,0 +1,61 @@
+# fixed-address-ref.yaml — FixedAddress created via the networkViewRef
+# cross-resource reference, instead of the literal networkView field
+# fixed-address.yaml/fixed-address-namespaced.yaml use. See
+# fixed-address.yaml for the full field documentation — this file only
+# documents what's specific to the reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end, mirroring
+# examples/network-container/network-container-ref.yaml. FixedAddress's
+# networkView field has no CEL immutability rule at all (unlike Network,
+# NetworkContainer, and HostRecord) and defaults to "default" when unset —
+# but this example still sets it to "" explicitly and resolves it via
+# networkViewRef, so whatever value ends up on the live object can only
+# have come from the resolver, never from the manifest, matching the other
+# three ref examples' proof shape.
+#
+# networkViewRef.name: the metadata.name of network-view-ref-prereq.yaml's
+# NetworkView object (a Kubernetes object name, not the NetworkView's WAPI
+# _ref or its own spec.forProvider.name).
+#
+# AllocateIP unconditionally requires an existing parent Network object
+# covering the address, in the SAME network view this FixedAddress
+# resolves into — fixed-address-ref-network-prereq.yaml provisions that
+# per-run parent Network, inside network-view-ref-prereq.yaml's custom
+# view, ahead of this example. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_FIXED_ADDRESS) applies both prereqs, in that order,
+# before this manifest.
+#
+# ${data.netFixedAddrRefHostCluster}: a per-run host address nested inside
+# fixed-address-ref-network-prereq.yaml's ${data.netFixedAddrRefParentCluster}
+# /30 (see the sub-allocation map in test/e2e/gen-datasource.sh's header
+# comment; disjoint from this directory's own
+# ${data.netFixedAddrHostCluster}/${data.netFixedAddrHostNamespaced}, which
+# run in the SAME e2e.fixed-address invocation).
+#
+# mac: set to a real, non-zero placeholder (distinct from
+# fixed-address.yaml's own "00:00:00:00:0a:01") so Create lands in
+# matchClient=MAC_ADDRESS mode — see fixed-address.yaml's field docs for
+# the all-zero-MAC RESERVED-mode trap this avoids.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — comment's per-field update
+# coverage already exists on fixed-address.yaml, and exercising it a
+# second time here adds no new coverage while doubling this target's
+# runtime.
+apiVersion: fixedaddress.infobloxnios.crossplane.io/v1alpha1
+kind: FixedAddress
+metadata:
+  name: example-fixed-address-ref
+  annotations:
+    meta.upbound.io/example-id: fixedaddress/v1alpha1/fixedaddress
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    ipv4addr: ${data.netFixedAddrRefHostCluster}
+    mac: "00:00:00:00:0a:02"
+    networkView: ""
+    networkViewRef:
+      name: example-fixedaddress-ref-view
+    comment: "Managed by Crossplane (networkViewRef reference path)"
+  providerConfigRef:
+    name: default

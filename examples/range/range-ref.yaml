@@ -1,0 +1,58 @@
+# range-ref.yaml — Range created via the networkViewRef cross-resource
+# reference, instead of the literal networkView field range.yaml/
+# range-namespaced.yaml use. See range.yaml for the full field
+# documentation — this file only documents what's specific to the
+# reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end, mirroring
+# examples/network-container/network-container-ref.yaml. Range's
+# networkView field has no CEL immutability rule at all (unlike Network,
+# NetworkContainer, and HostRecord) and is fully optional — but this
+# example still sets it to "" explicitly and resolves it via
+# networkViewRef, so whatever value ends up on the live object can only
+# have come from the resolver, never from the manifest, matching the other
+# three ref examples' proof shape.
+#
+# networkViewRef.name: the metadata.name of network-view-ref-prereq.yaml's
+# NetworkView object (a Kubernetes object name, not the NetworkView's WAPI
+# _ref or its own spec.forProvider.name).
+#
+# CreateNetworkRange unconditionally requires an existing parent Network
+# object covering the range's address span, in the SAME network view this
+# Range resolves into — range-ref-network-prereq.yaml provisions that
+# per-run parent Network, inside network-view-ref-prereq.yaml's custom
+# view, ahead of this example. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_RANGE) applies both prereqs, in that order, before
+# this manifest.
+#
+# ${data.netRangeRefStartCluster} / ${data.netRangeRefEndCluster}: a
+# deliberately short 2-address span nested inside
+# range-ref-network-prereq.yaml's ${data.netRangeRefParentCluster} /30
+# (see the sub-allocation map in test/e2e/gen-datasource.sh's header
+# comment; disjoint from this directory's own
+# ${data.netRangeStartCluster}/${data.netRangeEndCluster} span, which runs
+# in the SAME e2e.range invocation). Shorter than range.yaml's own
+# 21-address span on purpose: this example only proves the resolver
+# wiring, not range sizing.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — comment's per-field update
+# coverage already exists on range.yaml, and exercising it a second time
+# here adds no new coverage while doubling this target's runtime.
+apiVersion: range.infobloxnios.crossplane.io/v1alpha1
+kind: Range
+metadata:
+  name: example-range-ref
+  annotations:
+    meta.upbound.io/example-id: range/v1alpha1/range
+    uptest.upbound.io/timeout: "300"
+spec:
+  forProvider:
+    startAddr: ${data.netRangeRefStartCluster}
+    endAddr: ${data.netRangeRefEndCluster}
+    networkView: ""
+    networkViewRef:
+      name: example-range-ref-view
+    comment: "Managed by Crossplane (networkViewRef reference path)"
+  providerConfigRef:
+    name: default
