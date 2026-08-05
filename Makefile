@@ -165,43 +165,41 @@ space := $(empty) $(empty)
 
 # Per-resource manifest variables (comma pair of cluster + namespaced variants,
 # so `make e2e.<resource>` gates both scopes).
-UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
-# record-ptr's two literal-ptrdname examples need no Makefile
-# prerequisite-bundling: their reverse zone is the pre-existing, shared
-# 10.1.1.0/24 zone_auth (view Internal) that test/setup.sh already
-# provisions convergently, not a per-run object. Isolation is per-run HOST
-# offsets drawn from a second, independently-hashed pool within that
-# shared zone (test/e2e/gen-datasource.sh's ptrHost derivation) — a
-# documented exception, not prerequisite-bundling (IN-ISO-IPAM-PREREQ;
-# address plan: IN-ISO-IPAM-PLAN). record-ptr-ref.yaml is a third member
-# of this set: it exercises the ptrdnameRef reference path instead, so it
-# needs its own ARecord prerequisite (arecord-ptr-ref-prereq.yaml, listed
-# first so uptest creates it before the reference can resolve) — same
-# pattern as UPTEST_MANIFESTS_RECORD_CNAME below. Folded into this same
-# variable (not a separate e2e target) so `make e2e.record-ptr` proves
-# both the literal-ptrdname path (still covered by the first two
+UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
+UPTEST_MANIFESTS_DTC_LBDN := examples/dtc-lbdn/dtc-lbdn.yaml,examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
+UPTEST_MANIFESTS_DTC_POOL := examples/dtc-pool/dtc-pool.yaml,examples/dtc-pool/dtc-pool-namespaced.yaml
+UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
+UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
+# FixedAddress's AllocateIP call unconditionally requires an existing
+# parent Network object covering the address (unlike HostRecord, which
+# bypasses the requirement via configureForDns — see
+# test/e2e/gen-datasource.sh's sub-allocation map comment). Prerequisite-
+# bundling: the parent Network's manifest is listed BEFORE
+# fixed-address.yaml's own, so uptest creates it first (IN-ISO-IPAM-PREREQ;
+# address plan: IN-ISO-IPAM-PLAN).
+# network-view-ref-prereq.yaml, fixed-address-ref-network-prereq.yaml, and
+# fixed-address-ref.yaml are a third, later-added member of this set:
+# fixed-address-ref.yaml exercises the networkViewRef reference path
+# instead of the literal networkView the first two fixed-address examples
+# use, so it needs both its own NetworkView prerequisite AND its own
+# parent Network prerequisite (in that NetworkView) — listed in that order
+# so uptest creates each dependency before the next needs it. Folded into
+# this same variable (not a separate e2e target) so `make e2e.fixed-address`
+# proves both the literal-networkView path (still covered by the first two
 # manifests) AND the reference-resolver path in one run.
-UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml,examples/record-ptr/arecord-ptr-ref-prereq.yaml,examples/record-ptr/record-ptr-ref.yaml
-UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
-UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
-# canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
-# a real ARecord instead of a literal FQDN, but both scoped example
-# manifests above set the literal value directly — same pattern as
-# UPTEST_MANIFESTS_NETWORK above. record-cname-ref.yaml is a third member
-# of this set: it exercises the canonicalRef reference path instead, so it
-# needs its own ARecord prerequisite (arecord-cname-ref-prereq.yaml, listed
-# first so uptest creates it before the reference can resolve). Folded
-# into this same variable (not a separate e2e target) so
-# `make e2e.record-cname` proves both the literal-canonical path (still
-# covered by the first two manifests) AND the reference-resolver path in
-# one run.
-UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml,examples/record-cname/arecord-cname-ref-prereq.yaml,examples/record-cname/record-cname-ref.yaml
-UPTEST_MANIFESTS_RECORD_MX := examples/record-mx/record-mx.yaml,examples/record-mx/record-mx-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_NS := examples/record-ns/record-ns.yaml,examples/record-ns/record-ns-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/record-srv/record-srv-namespaced.yaml
-UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,examples/network-view/network-view-namespaced.yaml
+UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml,examples/fixed-address/network-view-ref-prereq.yaml,examples/fixed-address/fixed-address-ref-network-prereq.yaml,examples/fixed-address/fixed-address-ref.yaml
+# IPv6 variant of FixedAddress — WAPI resolves this to the
+# ipv6fixedaddress object type at runtime instead of fixedaddress. Kept as
+# a separate target (not folded into UPTEST_MANIFESTS_FIXED_ADDRESS/
+# e2e.fixed-address) so a regression on either address family fails
+# independently. AllocateIP's parent-network requirement is scoped to
+# (network_view, network), not to a Kubernetes API scope, so — unlike
+# IPv4 FixedAddress's two per-scope prereqs — a SINGLE shared
+# network-prereq-v6.yaml (a per-run /64) covers both
+# fixed-address-v6.yaml and fixed-address-v6-namespaced.yaml. Listed
+# first so uptest creates the parent ipv6network before either resource
+# manifest (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_FIXED_ADDRESS_V6 := examples/fixed-address/network-prereq-v6.yaml,examples/fixed-address/fixed-address-v6.yaml,examples/fixed-address/fixed-address-v6-namespaced.yaml
 # host-record-ref.yaml is the third member of this set: it exercises the
 # networkViewRef reference path instead of the literal networkView
 # host-record.yaml/host-record-namespaced.yaml use, so it needs its own
@@ -211,6 +209,14 @@ UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,example
 # proves both the literal-networkView path (still covered by the first two
 # manifests) AND the reference-resolver path in one run.
 UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/host-record/host-record-namespaced.yaml,examples/host-record/network-view-ref-prereq.yaml,examples/host-record/host-record-ref-network-prereq.yaml,examples/host-record/host-record-ref.yaml
+# IPv4SharedNetwork's `networks` field must reference a real, pre-existing
+# Network object's CIDR, and a Network can belong to only ONE shared
+# network — so its member is a per-run prerequisite, not the general
+# examples/network/network.yaml object (which is independently created and
+# deleted by its own e2e.network run). Prerequisite-bundling: the member
+# Network's manifest is listed BEFORE ipv4-shared-network.yaml's own, so
+# uptest creates it first (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
+UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-prereq.yaml,examples/ipv4-shared-network/network-prereq-namespaced.yaml,examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 # network-view-ref-prereq.yaml + network-ref.yaml are the third member of
 # this set: network-ref.yaml exercises the networkViewRef reference path
 # instead of the literal networkView network.yaml/network-namespaced.yaml
@@ -220,22 +226,14 @@ UPTEST_MANIFESTS_HOST_RECORD := examples/host-record/host-record.yaml,examples/h
 # both the literal-networkView path (still covered by the first two
 # manifests) AND the reference-resolver path in one run.
 UPTEST_MANIFESTS_NETWORK := examples/network/network.yaml,examples/network/network-namespaced.yaml,examples/network/network-view-ref-prereq.yaml,examples/network/network-ref.yaml
-# IPv6 variant of Network — WAPI resolves this to the ipv6network object
-# type at runtime instead of network. Kept as a separate target (not
-# folded into UPTEST_MANIFESTS_NETWORK/e2e.network) so a regression on
-# either address family fails independently. Core tier: needs only NIOS
-# Grid Manager API credentials, same as its IPv4 sibling.
-UPTEST_MANIFESTS_NETWORK_V6 := examples/network/network-v6.yaml,examples/network/network-v6-namespaced.yaml
-UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
-UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
-# IPv4SharedNetwork's `networks` field must reference a real, pre-existing
-# Network object's CIDR, and a Network can belong to only ONE shared
-# network — so its member is a per-run prerequisite, not the general
-# examples/network/network.yaml object (which is independently created and
-# deleted by its own e2e.network run). Prerequisite-bundling: the member
-# Network's manifest is listed BEFORE ipv4-shared-network.yaml's own, so
-# uptest creates it first (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-prereq.yaml,examples/ipv4-shared-network/network-prereq-namespaced.yaml,examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
+# Network's EA-based dynamic allocation path (filterParams + allocatePrefixLen
+# + object) needs an existing parent NetworkContainer to allocate from, the
+# same requirement AllocateNetworkByEA has for FixedAddress/Range's parent
+# Network — see UPTEST_MANIFESTS_FIXED_ADDRESS/UPTEST_MANIFESTS_RANGE above.
+# Prerequisite-bundling: the parent manifest is listed BEFORE the child, so
+# uptest creates it first (IN-ISO-IPAM-PREREQ pattern). No namespaced sibling
+# exists for this pair yet.
+UPTEST_MANIFESTS_NETWORK_ALLOCATE := examples/network/network-allocate-parent.yaml,examples/network/network-allocate.yaml
 # NetworkContainer references NetworkView by name (networkViewRef/Selector
 # also available) but both scoped example manifests above use the Grid's
 # well-known "default" network view inline — same pattern as
@@ -255,25 +253,13 @@ UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-contain
 # on either address family fails independently. Core tier: needs only NIOS
 # Grid Manager API credentials, same as its IPv4 sibling.
 UPTEST_MANIFESTS_NETWORK_CONTAINER_V6 := examples/network-container/network-container-v6.yaml,examples/network-container/network-container-v6-namespaced.yaml
-UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
-# FixedAddress's AllocateIP call unconditionally requires an existing
-# parent Network object covering the address (unlike HostRecord, which
-# bypasses the requirement via configureForDns — see
-# test/e2e/gen-datasource.sh's sub-allocation map comment). Prerequisite-
-# bundling: the parent Network's manifest is listed BEFORE
-# fixed-address.yaml's own, so uptest creates it first (IN-ISO-IPAM-PREREQ;
-# address plan: IN-ISO-IPAM-PLAN).
-# network-view-ref-prereq.yaml, fixed-address-ref-network-prereq.yaml, and
-# fixed-address-ref.yaml are a third, later-added member of this set:
-# fixed-address-ref.yaml exercises the networkViewRef reference path
-# instead of the literal networkView the first two fixed-address examples
-# use, so it needs both its own NetworkView prerequisite AND its own
-# parent Network prerequisite (in that NetworkView) — listed in that order
-# so uptest creates each dependency before the next needs it. Folded into
-# this same variable (not a separate e2e target) so `make e2e.fixed-address`
-# proves both the literal-networkView path (still covered by the first two
-# manifests) AND the reference-resolver path in one run.
-UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,examples/fixed-address/network-prereq-namespaced.yaml,examples/fixed-address/fixed-address.yaml,examples/fixed-address/fixed-address-namespaced.yaml,examples/fixed-address/network-view-ref-prereq.yaml,examples/fixed-address/fixed-address-ref-network-prereq.yaml,examples/fixed-address/fixed-address-ref.yaml
+# IPv6 variant of Network — WAPI resolves this to the ipv6network object
+# type at runtime instead of network. Kept as a separate target (not
+# folded into UPTEST_MANIFESTS_NETWORK/e2e.network) so a regression on
+# either address family fails independently. Core tier: needs only NIOS
+# Grid Manager API credentials, same as its IPv4 sibling.
+UPTEST_MANIFESTS_NETWORK_V6 := examples/network/network-v6.yaml,examples/network/network-v6-namespaced.yaml
+UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,examples/network-view/network-view-namespaced.yaml
 # Range's CreateNetworkRange call, like FixedAddress's AllocateIP,
 # unconditionally requires an existing parent Network object covering the
 # range's address span, even though the example leaves the Range's own
@@ -295,31 +281,45 @@ UPTEST_MANIFESTS_FIXED_ADDRESS := examples/fixed-address/network-prereq.yaml,exa
 # literal-networkView path (still covered by the first two manifests) AND
 # the reference-resolver path in one run.
 UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml,examples/range/network-view-ref-prereq.yaml,examples/range/range-ref-network-prereq.yaml,examples/range/range-ref.yaml
-# IPv6 variant of FixedAddress — WAPI resolves this to the
-# ipv6fixedaddress object type at runtime instead of fixedaddress. Kept as
-# a separate target (not folded into UPTEST_MANIFESTS_FIXED_ADDRESS/
-# e2e.fixed-address) so a regression on either address family fails
-# independently. AllocateIP's parent-network requirement is scoped to
-# (network_view, network), not to a Kubernetes API scope, so — unlike
-# IPv4 FixedAddress's two per-scope prereqs — a SINGLE shared
-# network-prereq-v6.yaml (a per-run /64) covers both
-# fixed-address-v6.yaml and fixed-address-v6-namespaced.yaml. Listed
-# first so uptest creates the parent ipv6network before either resource
-# manifest (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_FIXED_ADDRESS_V6 := examples/fixed-address/network-prereq-v6.yaml,examples/fixed-address/fixed-address-v6.yaml,examples/fixed-address/fixed-address-v6-namespaced.yaml
-UPTEST_MANIFESTS_DTC_SERVER := examples/dtc-server/dtc-server.yaml,examples/dtc-server/dtc-server-namespaced.yaml
-UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF := examples/extensible-attribute-def/extensible-attribute-def.yaml,examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml
-UPTEST_MANIFESTS_DNS_VIEW := examples/dns-view/dns-view.yaml,examples/dns-view/dns-view-namespaced.yaml
-UPTEST_MANIFESTS_DTC_POOL := examples/dtc-pool/dtc-pool.yaml,examples/dtc-pool/dtc-pool-namespaced.yaml
-UPTEST_MANIFESTS_DTC_LBDN := examples/dtc-lbdn/dtc-lbdn.yaml,examples/dtc-lbdn/dtc-lbdn-namespaced.yaml
-# Network's EA-based dynamic allocation path (filterParams + allocatePrefixLen
-# + object) needs an existing parent NetworkContainer to allocate from, the
-# same requirement AllocateNetworkByEA has for FixedAddress/Range's parent
-# Network — see UPTEST_MANIFESTS_FIXED_ADDRESS/UPTEST_MANIFESTS_RANGE above.
-# Prerequisite-bundling: the parent manifest is listed BEFORE the child, so
-# uptest creates it first (IN-ISO-IPAM-PREREQ pattern). No namespaced sibling
-# exists for this pair yet.
-UPTEST_MANIFESTS_NETWORK_ALLOCATE := examples/network/network-allocate-parent.yaml,examples/network/network-allocate.yaml
+UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
+# canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
+# a real ARecord instead of a literal FQDN, but both scoped example
+# manifests above set the literal value directly — same pattern as
+# UPTEST_MANIFESTS_NETWORK above. record-cname-ref.yaml is a third member
+# of this set: it exercises the canonicalRef reference path instead, so it
+# needs its own ARecord prerequisite (arecord-cname-ref-prereq.yaml, listed
+# first so uptest creates it before the reference can resolve). Folded
+# into this same variable (not a separate e2e target) so
+# `make e2e.record-cname` proves both the literal-canonical path (still
+# covered by the first two manifests) AND the reference-resolver path in
+# one run.
+UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml,examples/record-cname/arecord-cname-ref-prereq.yaml,examples/record-cname/record-cname-ref.yaml
+UPTEST_MANIFESTS_RECORD_MX := examples/record-mx/record-mx.yaml,examples/record-mx/record-mx-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_NS := examples/record-ns/record-ns.yaml,examples/record-ns/record-ns-namespaced.yaml
+# record-ptr's two literal-ptrdname examples need no Makefile
+# prerequisite-bundling: their reverse zone is the pre-existing, shared
+# 10.1.1.0/24 zone_auth (view Internal) that test/setup.sh already
+# provisions convergently, not a per-run object. Isolation is per-run HOST
+# offsets drawn from a second, independently-hashed pool within that
+# shared zone (test/e2e/gen-datasource.sh's ptrHost derivation) — a
+# documented exception, not prerequisite-bundling (IN-ISO-IPAM-PREREQ;
+# address plan: IN-ISO-IPAM-PLAN). record-ptr-ref.yaml is a third member
+# of this set: it exercises the ptrdnameRef reference path instead, so it
+# needs its own ARecord prerequisite (arecord-ptr-ref-prereq.yaml, listed
+# first so uptest creates it before the reference can resolve) — same
+# pattern as UPTEST_MANIFESTS_RECORD_CNAME below. Folded into this same
+# variable (not a separate e2e target) so `make e2e.record-ptr` proves
+# both the literal-ptrdname path (still covered by the first two
+# manifests) AND the reference-resolver path in one run.
+UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml,examples/record-ptr/arecord-ptr-ref-prereq.yaml,examples/record-ptr/record-ptr-ref.yaml
+UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/record-srv/record-srv-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
+UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
+UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
+UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 
 # E2E manifest tiers
 # CORE: resources that only need NIOS Grid Manager API credentials
@@ -545,6 +545,57 @@ tools.prefetch: ## Pre-fetch e2e tool binaries with retry (helm, kind, kubectl, 
 	@$(OK) "tools.prefetch: all e2e tool binaries present"
 
 # Per-resource E2E targets
+e2e.dns-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DNS_VIEW)
+e2e.dns-view: e2e
+
+e2e.dtc-lbdn: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_LBDN)
+e2e.dtc-lbdn: e2e
+
+e2e.dtc-pool: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_POOL)
+e2e.dtc-pool: e2e
+
+e2e.dtc-server: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_SERVER)
+e2e.dtc-server: e2e
+
+e2e.extensible-attribute-def: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
+e2e.extensible-attribute-def: e2e
+
+e2e.fixed-address-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS_V6)
+e2e.fixed-address-v6: e2e
+
+e2e.fixed-address: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS)
+e2e.fixed-address: e2e
+
+e2e.host-record: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_HOST_RECORD)
+e2e.host-record: e2e
+
+e2e.ipv4-shared-network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK)
+e2e.ipv4-shared-network: e2e
+
+e2e.network-allocate: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_ALLOCATE)
+e2e.network-allocate: e2e
+
+e2e.network-container-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6)
+e2e.network-container-v6: e2e
+
+e2e.network-container: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER)
+e2e.network-container: e2e
+
+e2e.network-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_V6)
+e2e.network-v6: e2e
+
+e2e.network-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_VIEW)
+e2e.network-view: e2e
+
+e2e.network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK)
+e2e.network: e2e
+
+e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
+e2e.range-template: e2e
+
+e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
+e2e.range: e2e
+
 e2e.record-a: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_A)
 e2e.record-a: e2e
 
@@ -553,15 +604,6 @@ e2e.record-aaaa: e2e
 
 e2e.record-alias: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_ALIAS)
 e2e.record-alias: e2e
-
-e2e.record-ptr: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_PTR)
-e2e.record-ptr: e2e
-
-e2e.record-txt: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_TXT)
-e2e.record-txt: e2e
-
-e2e.zone-delegated: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_DELEGATED)
-e2e.zone-delegated: e2e
 
 e2e.record-cname: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_CNAME)
 e2e.record-cname: e2e
@@ -572,61 +614,23 @@ e2e.record-mx: e2e
 e2e.record-ns: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_NS)
 e2e.record-ns: e2e
 
+e2e.record-ptr: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_PTR)
+e2e.record-ptr: e2e
+
 e2e.record-srv: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_SRV)
 e2e.record-srv: e2e
 
-e2e.network-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_VIEW)
-e2e.network-view: e2e
-e2e.host-record: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_HOST_RECORD)
-e2e.host-record: e2e
-
-e2e.network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK)
-e2e.network: e2e
-
-e2e.network-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_V6)
-e2e.network-v6: e2e
-
-e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
-e2e.range-template: e2e
+e2e.record-txt: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_TXT)
+e2e.record-txt: e2e
 
 e2e.zone-auth: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_AUTH)
 e2e.zone-auth: e2e
 
-e2e.ipv4-shared-network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK)
-e2e.ipv4-shared-network: e2e
-
-e2e.network-container: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER)
-e2e.network-container: e2e
-
-e2e.network-container-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6)
-e2e.network-container-v6: e2e
+e2e.zone-delegated: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_DELEGATED)
+e2e.zone-delegated: e2e
 
 e2e.zone-forward: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_FORWARD)
 e2e.zone-forward: e2e
-
-e2e.fixed-address: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS)
-e2e.fixed-address: e2e
-
-e2e.fixed-address-v6: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_FIXED_ADDRESS_V6)
-e2e.fixed-address-v6: e2e
-e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
-e2e.range: e2e
-
-e2e.network-allocate: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK_ALLOCATE)
-e2e.network-allocate: e2e
-e2e.dtc-server: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_SERVER)
-e2e.dtc-server: e2e
-e2e.extensible-attribute-def: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF)
-e2e.extensible-attribute-def: e2e
-
-e2e.dns-view: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DNS_VIEW)
-e2e.dns-view: e2e
-
-e2e.dtc-pool: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_POOL)
-e2e.dtc-pool: e2e
-
-e2e.dtc-lbdn: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_DTC_LBDN)
-e2e.dtc-lbdn: e2e
 
 # Full E2E: all resource examples (core + namespaced variants)
 e2e-full: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ALL)
@@ -638,7 +642,39 @@ e2e-full: e2e-preflight e2e
 # ordering (not merged prerequisites) is what makes DRC_FILE ready in time.
 local-deploy: e2e-drc local.xpkg.deploy.provider.$(PROJECT_NAME)
 
-.PHONY: local-deploy e2e-preflight e2e.record-a e2e.record-aaaa e2e.record-alias e2e.record-cname e2e.record-mx e2e.record-ns e2e.record-ptr e2e.record-srv e2e.record-txt e2e.zone-delegated e2e.network-view e2e.host-record e2e.network e2e.network-v6 e2e.range-template e2e.zone-auth e2e.ipv4-shared-network e2e.network-container e2e.network-container-v6 e2e.fixed-address e2e.fixed-address-v6 e2e.zone-forward e2e.range e2e.network-allocate e2e.dtc-server e2e.extensible-attribute-def e2e.dns-view e2e.dtc-pool e2e.dtc-lbdn e2e-full
+.PHONY: \
+	e2e-full \
+	e2e-preflight \
+	e2e.dns-view \
+	e2e.dtc-lbdn \
+	e2e.dtc-pool \
+	e2e.dtc-server \
+	e2e.extensible-attribute-def \
+	e2e.fixed-address \
+	e2e.fixed-address-v6 \
+	e2e.host-record \
+	e2e.ipv4-shared-network \
+	e2e.network \
+	e2e.network-allocate \
+	e2e.network-container \
+	e2e.network-container-v6 \
+	e2e.network-v6 \
+	e2e.network-view \
+	e2e.range \
+	e2e.range-template \
+	e2e.record-a \
+	e2e.record-aaaa \
+	e2e.record-alias \
+	e2e.record-cname \
+	e2e.record-mx \
+	e2e.record-ns \
+	e2e.record-ptr \
+	e2e.record-srv \
+	e2e.record-txt \
+	e2e.zone-auth \
+	e2e.zone-delegated \
+	e2e.zone-forward \
+	local-deploy
 
 # ====================================================================================
 # Update-tester standalone targets (per-field update-tester convention)
@@ -657,6 +693,84 @@ local-deploy: e2e-drc local.xpkg.deploy.provider.$(PROJECT_NAME)
 # from the repo root would otherwise resolve against tools/update-tester/.
 UPDATE_TESTER := go -C tools/update-tester tool crossplane-update-tester
 
+update-test.dns-view:
+	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view-namespaced.yaml)
+
+update-test.dtc-lbdn:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
+
+update-test.dtc-pool:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
+
+update-test.dtc-server:
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
+
+update-test.extensible-attribute-def:
+	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
+
+update-test.fixed-address:
+	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
+
+update-test.host-record:
+	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record-namespaced.yaml)
+
+update-test.ipv4-shared-network:
+	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
+
+update-test.network-container:
+	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container-namespaced.yaml)
+
+update-test.network-view:
+	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view-namespaced.yaml)
+
+update-test.network:
+	$(UPDATE_TESTER) converge $(abspath examples/network/network.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network/network.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/network/network-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/network/network-namespaced.yaml)
+
+update-test.range-template:
+	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template-namespaced.yaml)
+
+update-test.range:
+	$(UPDATE_TESTER) converge $(abspath examples/range/range.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range/range.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/range/range-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/range/range-namespaced.yaml)
+
 update-test.record-aaaa:
 	$(UPDATE_TESTER) converge $(abspath examples/record-aaaa/record-aaaa.yaml)
 	$(UPDATE_TESTER) run $(abspath examples/record-aaaa/record-aaaa.yaml)
@@ -668,6 +782,24 @@ update-test.record-alias:
 	$(UPDATE_TESTER) run $(abspath examples/record-alias/record-alias.yaml)
 	$(UPDATE_TESTER) converge $(abspath examples/record-alias/record-alias-namespaced.yaml)
 	$(UPDATE_TESTER) run $(abspath examples/record-alias/record-alias-namespaced.yaml)
+
+update-test.record-cname: ## Update test for CNAMERecord (per-field convergence check)
+	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname-namespaced.yaml)
+
+update-test.record-mx:
+	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx-namespaced.yaml)
+
+update-test.record-ns:
+	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns-namespaced.yaml)
 
 update-test.record-ptr:
 	$(UPDATE_TESTER) converge $(abspath examples/record-ptr/record-ptr.yaml)
@@ -687,11 +819,60 @@ update-test.record-txt:
 	$(UPDATE_TESTER) converge $(abspath examples/record-txt/record-txt-namespaced.yaml)
 	$(UPDATE_TESTER) run $(abspath examples/record-txt/record-txt-namespaced.yaml)
 
-update-test.zone-delegated:
-	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
+# ====================================================================================
+# update-test.validate: annotation-coverage gate (the update-tester validate convention)
+#
+# Runs `update-tester validate` against every example manifest that carries a
+# crossplane.io/update-test annotation, so a field silently dropped from an
+# annotation is caught instead of going unnoticed. Unlike update-test.<resource>
+# above (which exercises the live update behavior against a deployed resource),
+# this is a static, offline check — it only reads the example YAML and the
+# generated Go types, so it belongs in the fast local dev loop.
+#
+# The --types-file for each manifest is resolved from its apiVersion: the
+# first dot-separated segment of the API group is both the apis/<scope>/<seg>
+# directory name and the <seg>_types.go file prefix. The scope is namespaced
+# when the API group ends in ".m.crossplane.io" (the "m" marker is a fixed
+# group suffix, not tied to a fixed segment position — e.g.
+# recordcname.infobloxnios.m.crossplane.io) and cluster otherwise (e.g.
+# recordcname.infobloxnios.crossplane.io). A self-check cross-references the
+# manifest filename convention (*-namespaced.yaml) against the resolved scope
+# so a future naming drift fails loudly instead of silently validating
+# against the wrong types file.
+update-test.validate:
+	@fail=0; \
+	for f in $$(grep -rl 'crossplane.io/update-test' examples --include='*.yaml' | sort); do \
+	  av=$$(awk '/^apiVersion:/ {print $$2; exit}' "$$f"); \
+	  grp=$$(echo "$$av" | cut -d/ -f1); \
+	  seg1=$$(echo "$$grp" | cut -d. -f1); \
+	  case "$$grp" in \
+	    *.m.crossplane.io) scope=namespaced ;; \
+	    *) scope=cluster ;; \
+	  esac; \
+	  case "$$f" in \
+	    *-namespaced.yaml) \
+	      if [ "$$scope" != "namespaced" ]; then \
+	        echo "FAIL: $$f looks namespaced by filename but resolved scope=$$scope from apiVersion=$$av"; \
+	        fail=1; \
+	        continue; \
+	      fi ;; \
+	    *) \
+	      if [ "$$scope" != "cluster" ]; then \
+	        echo "FAIL: $$f looks cluster-scoped by filename but resolved scope=$$scope from apiVersion=$$av"; \
+	        fail=1; \
+	        continue; \
+	      fi ;; \
+	  esac; \
+	  types="apis/$$scope/$$seg1/v1alpha1/$${seg1}_types.go"; \
+	  if [ ! -f "$$types" ]; then \
+	    echo "SKIP: $$f — no types file at $$types (apiVersion=$$av)"; \
+	    fail=1; \
+	    continue; \
+	  fi; \
+	  echo "=== $$f ($$types) ==="; \
+	  $(UPDATE_TESTER) validate --types-file "$$PWD/$$types" "$$PWD/$$f" || fail=1; \
+	done; \
+	exit $$fail
 
 update-test.zone-auth:
 	$(UPDATE_TESTER) converge $(abspath examples/zone-auth/zone-auth.yaml)
@@ -699,68 +880,11 @@ update-test.zone-auth:
 	$(UPDATE_TESTER) converge $(abspath examples/zone-auth/zone-auth-namespaced.yaml)
 	$(UPDATE_TESTER) run $(abspath examples/zone-auth/zone-auth-namespaced.yaml)
 
-update-test.ipv4-shared-network:
-	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml)
-
-.PHONY: update-test.record-aaaa update-test.record-alias update-test.record-ns update-test.record-ptr update-test.record-srv update-test.record-txt update-test.zone-auth update-test.zone-delegated update-test.ipv4-shared-network update-test.dtc-server update-test.extensible-attribute-def
-update-test.record-ns:
-	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/record-ns/record-ns-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-ns/record-ns-namespaced.yaml)
-
-update-test.dtc-server:
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-server/dtc-server-namespaced.yaml)
-
-update-test.extensible-attribute-def:
-	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/extensible-attribute-def/extensible-attribute-def-namespaced.yaml)
-
-
-update-test.network-view:
-	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/network-view/network-view-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network-view/network-view-namespaced.yaml)
-
-.PHONY: update-test.network-view
-update-test.host-record:
-	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/host-record/host-record-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/host-record/host-record-namespaced.yaml)
-
-update-test.network:
-	$(UPDATE_TESTER) converge $(abspath examples/network/network.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network/network.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/network/network-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network/network-namespaced.yaml)
-
-update-test.range-template:
-	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/range-template/range-template-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/range-template/range-template-namespaced.yaml)
-
-update-test.network-container:
-	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/network-container/network-container-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/network-container/network-container-namespaced.yaml)
-
-update-test.fixed-address:
-	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/fixed-address/fixed-address-namespaced.yaml)
+update-test.zone-delegated:
+	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated.yaml)
+	$(UPDATE_TESTER) converge $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
+	$(UPDATE_TESTER) run $(abspath examples/zone-delegated/zone-delegated-namespaced.yaml)
 
 update-test.zone-forward:
 	$(UPDATE_TESTER) converge $(abspath examples/zone-forward/zone-forward.yaml)
@@ -768,37 +892,32 @@ update-test.zone-forward:
 	$(UPDATE_TESTER) converge $(abspath examples/zone-forward/zone-forward-namespaced.yaml)
 	$(UPDATE_TESTER) run $(abspath examples/zone-forward/zone-forward-namespaced.yaml)
 
-update-test.range:
-	$(UPDATE_TESTER) converge $(abspath examples/range/range.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/range/range.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/range/range-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/range/range-namespaced.yaml)
-
-.PHONY: update-test.record-aaaa update-test.record-ptr update-test.record-txt update-test.zone-delegated update-test.host-record update-test.network update-test.range-template update-test.network-container update-test.fixed-address update-test.zone-forward update-test.range
-
-update-test.dns-view:
-	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/dns-view/dns-view-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dns-view/dns-view-namespaced.yaml)
-
-.PHONY: update-test.dns-view
-
-update-test.dtc-pool:
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-pool/dtc-pool-namespaced.yaml)
-
-.PHONY: update-test.dtc-pool
-
-update-test.dtc-lbdn:
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/dtc-lbdn/dtc-lbdn-namespaced.yaml)
-
-.PHONY: update-test.dtc-lbdn
+.PHONY: \
+	update-test.dns-view \
+	update-test.dtc-lbdn \
+	update-test.dtc-pool \
+	update-test.dtc-server \
+	update-test.extensible-attribute-def \
+	update-test.fixed-address \
+	update-test.host-record \
+	update-test.ipv4-shared-network \
+	update-test.network \
+	update-test.network-container \
+	update-test.network-view \
+	update-test.range \
+	update-test.range-template \
+	update-test.record-aaaa \
+	update-test.record-alias \
+	update-test.record-cname \
+	update-test.record-mx \
+	update-test.record-ns \
+	update-test.record-ptr \
+	update-test.record-srv \
+	update-test.record-txt \
+	update-test.validate \
+	update-test.zone-auth \
+	update-test.zone-delegated \
+	update-test.zone-forward
 
 # ====================================================================================
 # test.tools: unit tests for standalone tool modules, root-module tools/
@@ -974,76 +1093,3 @@ crossplane.help:
 help-special: crossplane.help
 
 .PHONY: crossplane.help help-special
-
-update-test.record-cname: ## Update test for CNAMERecord (per-field convergence check)
-	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/record-cname/record-cname-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-cname/record-cname-namespaced.yaml)
-
-.PHONY: update-test.record-cname
-
-update-test.record-mx:
-	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx.yaml)
-	$(UPDATE_TESTER) converge $(abspath examples/record-mx/record-mx-namespaced.yaml)
-	$(UPDATE_TESTER) run $(abspath examples/record-mx/record-mx-namespaced.yaml)
-
-.PHONY: update-test.record-mx
-
-# ====================================================================================
-# update-test.validate: annotation-coverage gate (the update-tester validate convention)
-#
-# Runs `update-tester validate` against every example manifest that carries a
-# crossplane.io/update-test annotation, so a field silently dropped from an
-# annotation is caught instead of going unnoticed. Unlike update-test.<resource>
-# above (which exercises the live update behavior against a deployed resource),
-# this is a static, offline check — it only reads the example YAML and the
-# generated Go types, so it belongs in the fast local dev loop.
-#
-# The --types-file for each manifest is resolved from its apiVersion: the
-# first dot-separated segment of the API group is both the apis/<scope>/<seg>
-# directory name and the <seg>_types.go file prefix. The scope is namespaced
-# when the API group ends in ".m.crossplane.io" (the "m" marker is a fixed
-# group suffix, not tied to a fixed segment position — e.g.
-# recordcname.infobloxnios.m.crossplane.io) and cluster otherwise (e.g.
-# recordcname.infobloxnios.crossplane.io). A self-check cross-references the
-# manifest filename convention (*-namespaced.yaml) against the resolved scope
-# so a future naming drift fails loudly instead of silently validating
-# against the wrong types file.
-update-test.validate:
-	@fail=0; \
-	for f in $$(grep -rl 'crossplane.io/update-test' examples --include='*.yaml' | sort); do \
-	  av=$$(awk '/^apiVersion:/ {print $$2; exit}' "$$f"); \
-	  grp=$$(echo "$$av" | cut -d/ -f1); \
-	  seg1=$$(echo "$$grp" | cut -d. -f1); \
-	  case "$$grp" in \
-	    *.m.crossplane.io) scope=namespaced ;; \
-	    *) scope=cluster ;; \
-	  esac; \
-	  case "$$f" in \
-	    *-namespaced.yaml) \
-	      if [ "$$scope" != "namespaced" ]; then \
-	        echo "FAIL: $$f looks namespaced by filename but resolved scope=$$scope from apiVersion=$$av"; \
-	        fail=1; \
-	        continue; \
-	      fi ;; \
-	    *) \
-	      if [ "$$scope" != "cluster" ]; then \
-	        echo "FAIL: $$f looks cluster-scoped by filename but resolved scope=$$scope from apiVersion=$$av"; \
-	        fail=1; \
-	        continue; \
-	      fi ;; \
-	  esac; \
-	  types="apis/$$scope/$$seg1/v1alpha1/$${seg1}_types.go"; \
-	  if [ ! -f "$$types" ]; then \
-	    echo "SKIP: $$f — no types file at $$types (apiVersion=$$av)"; \
-	    fail=1; \
-	    continue; \
-	  fi; \
-	  echo "=== $$f ($$types) ==="; \
-	  $(UPDATE_TESTER) validate --types-file "$$PWD/$$types" "$$PWD/$$f" || fail=1; \
-	done; \
-	exit $$fail
-
-.PHONY: update-test.validate
