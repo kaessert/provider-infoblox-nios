@@ -99,6 +99,7 @@ const (
 	keyNetAllocParentCluster        = "netAllocParentCluster"
 	keyNetPtrHostCluster            = "netPtrHostCluster"
 	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
+	keyNetPtrHostRefCluster         = "netPtrHostRefCluster"
 	keyNetV6NetworkCluster          = "netV6NetworkCluster"
 	keyNetV6NetworkNamespaced       = "netV6NetworkNamespaced"
 	keyNetV6ContainerCluster        = "netV6ContainerCluster"
@@ -135,6 +136,7 @@ var requiredKeys = []string{
 	keyNetAllocParentCluster,
 	keyNetPtrHostCluster,
 	keyNetPtrHostNamespaced,
+	keyNetPtrHostRefCluster,
 	keyNetV6NetworkCluster,
 	keyNetV6NetworkNamespaced,
 	keyNetV6ContainerCluster,
@@ -400,8 +402,9 @@ func assertHostInsideCIDR(t *testing.T, values map[string]string, hostKey, cidrK
 // TestGenDatasourcePtrHostWithinReverseZone asserts record-ptr's
 // documented exception: its host offsets are drawn from the pre-existing
 // shared 10.1.1.0/24 reverse zone (NOT netPrefix, which has no reverse
-// zone), split into two fixed, non-overlapping halves so the cluster and
-// namespaced examples of the same run never collide with each other.
+// zone), split into three fixed, non-overlapping thirds so the cluster,
+// namespaced, and reference-path examples of the same run never collide
+// with each other.
 func TestGenDatasourcePtrHostWithinReverseZone(t *testing.T) {
 	values := runGenDatasource(t, "TestGenDatasourcePtrHostWithinReverseZone-seed")
 	_, reverseZone, err := net.ParseCIDR("10.1.1.0/24")
@@ -411,8 +414,9 @@ func TestGenDatasourcePtrHostWithinReverseZone(t *testing.T) {
 
 	cluster := net.ParseIP(values[keyNetPtrHostCluster])
 	namespaced := net.ParseIP(values[keyNetPtrHostNamespaced])
-	if cluster == nil || namespaced == nil {
-		t.Fatalf("netPtrHostCluster=%q netPtrHostNamespaced=%q must both be valid IPs", values[keyNetPtrHostCluster], values[keyNetPtrHostNamespaced])
+	refCluster := net.ParseIP(values[keyNetPtrHostRefCluster])
+	if cluster == nil || namespaced == nil || refCluster == nil {
+		t.Fatalf("netPtrHostCluster=%q netPtrHostNamespaced=%q netPtrHostRefCluster=%q must all be valid IPs", values[keyNetPtrHostCluster], values[keyNetPtrHostNamespaced], values[keyNetPtrHostRefCluster])
 	}
 	if !reverseZone.Contains(cluster) {
 		t.Errorf("netPtrHostCluster=%s is not inside the 10.1.1.0/24 reverse zone", cluster)
@@ -420,17 +424,35 @@ func TestGenDatasourcePtrHostWithinReverseZone(t *testing.T) {
 	if !reverseZone.Contains(namespaced) {
 		t.Errorf("netPtrHostNamespaced=%s is not inside the 10.1.1.0/24 reverse zone", namespaced)
 	}
-	if cluster.Equal(namespaced) {
-		t.Errorf("netPtrHostCluster and netPtrHostNamespaced must never be equal: both are %s", cluster)
+	if !reverseZone.Contains(refCluster) {
+		t.Errorf("netPtrHostRefCluster=%s is not inside the 10.1.1.0/24 reverse zone", refCluster)
+	}
+
+	pairs := []struct {
+		aName, bName string
+		a, b         net.IP
+	}{
+		{keyNetPtrHostCluster, keyNetPtrHostNamespaced, cluster, namespaced},
+		{keyNetPtrHostCluster, keyNetPtrHostRefCluster, cluster, refCluster},
+		{keyNetPtrHostNamespaced, keyNetPtrHostRefCluster, namespaced, refCluster},
+	}
+	for _, p := range pairs {
+		if p.a.Equal(p.b) {
+			t.Errorf("%s and %s must never be equal: both are %s", p.aName, p.bName, p.a)
+		}
 	}
 
 	clusterLast := cluster.To4()[3]
 	namespacedLast := namespaced.To4()[3]
-	if clusterLast < 2 || clusterLast > 127 {
-		t.Errorf("netPtrHostCluster last octet %d out of documented range [2,127]", clusterLast)
+	refClusterLast := refCluster.To4()[3]
+	if clusterLast < 2 || clusterLast > 85 {
+		t.Errorf("netPtrHostCluster last octet %d out of documented range [2,85]", clusterLast)
 	}
-	if namespacedLast < 129 || namespacedLast > 254 {
-		t.Errorf("netPtrHostNamespaced last octet %d out of documented range [129,254]", namespacedLast)
+	if namespacedLast < 86 || namespacedLast > 169 {
+		t.Errorf("netPtrHostNamespaced last octet %d out of documented range [86,169]", namespacedLast)
+	}
+	if refClusterLast < 170 || refClusterLast > 253 {
+		t.Errorf("netPtrHostRefCluster last octet %d out of documented range [170,253]", refClusterLast)
 	}
 }
 

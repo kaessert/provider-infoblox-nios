@@ -236,14 +236,23 @@
 #               existing shared 10.1.1.0/24 from a second, independent byte
 #               of the seed hash (PTR_OCTET, HASH[12:14]) — kept separate
 #               from BLOCK_INDEX so the two draws are independent rather
-#               than perfectly correlated. The 254-address pool is split
-#               into two fixed, non-overlapping halves so the cluster and
-#               namespaced examples of the SAME run never collide with each
-#               other by construction:
-#                 netPtrHostCluster:    10.1.1.<2 + PTR_OCTET % 126>    (range 2-127)
-#                 netPtrHostNamespaced: 10.1.1.<129 + PTR_OCTET % 126>  (range 129-254)
+#               than perfectly correlated. The usable pool (10.1.1.2 -
+#               10.1.1.253, 252 addresses — .1 and .254 stay reserved
+#               headroom, unchanged from before this was a three-way split)
+#               is split into THREE fixed, non-overlapping 84-address
+#               thirds so the cluster, namespaced, AND reference-path
+#               examples of the SAME run never collide with each other by
+#               construction:
+#                 netPtrHostCluster:    10.1.1.<2 + PTR_OCTET % 84>    (range 2-85)
+#                 netPtrHostNamespaced: 10.1.1.<86 + PTR_OCTET % 84>   (range 86-169)
+#                 netPtrHostRefCluster: 10.1.1.<170 + PTR_OCTET % 84>  (range 170-253)
+#               netPtrHostRefCluster backs record-ptr's ptrdnameRef
+#               reference-path example (cluster-scoped only — no namespaced
+#               sibling exists for this pair yet, the same shape
+#               netContainerRefCluster and netAllocParentCluster already
+#               use above).
 #               This is a documented, explicitly accepted exception: the
-#               collision pool here (126 values per scope) is smaller than
+#               collision pool here (84 values per scope) is smaller than
 #               netPrefix's 256-block pool, because it is bounded by the
 #               size of the one pre-existing reverse zone rather than by a
 #               dedicated /16 reserved for this mechanism. Expanding it
@@ -331,10 +340,13 @@ NET_V6_FIXEDADDR_HOST_NAMESPACED="2001:db8:${NET_V6_HEX}:5::51"
 
 # ptrHost — record-ptr's separate, independently-drawn shared-pool
 # exception. PTR_OCTET is a second, independent byte of the hash so this
-# draw is not perfectly correlated with BLOCK_INDEX.
+# draw is not perfectly correlated with BLOCK_INDEX. Three fixed,
+# non-overlapping 84-address thirds — see the header comment's ptrHost
+# section for the full range table and rationale.
 PTR_OCTET=$(( 16#${HASH:12:2} ))
-NET_PTRHOST_CLUSTER="10.1.1.$(( 2 + (PTR_OCTET % 126) ))"
-NET_PTRHOST_NAMESPACED="10.1.1.$(( 129 + (PTR_OCTET % 126) ))"
+NET_PTRHOST_CLUSTER="10.1.1.$(( 2 + (PTR_OCTET % 84) ))"
+NET_PTRHOST_NAMESPACED="10.1.1.$(( 86 + (PTR_OCTET % 84) ))"
+NET_PTRHOST_REF_CLUSTER="10.1.1.$(( 170 + (PTR_OCTET % 84) ))"
 
 mkdir -p "$(dirname "${OUT}")"
 cat > "${OUT}" <<DATASOURCE
@@ -371,6 +383,7 @@ netV6FixedAddrHostCluster: "${NET_V6_FIXEDADDR_HOST_CLUSTER}"
 netV6FixedAddrHostNamespaced: "${NET_V6_FIXEDADDR_HOST_NAMESPACED}"
 netPtrHostCluster: "${NET_PTRHOST_CLUSTER}"
 netPtrHostNamespaced: "${NET_PTRHOST_NAMESPACED}"
+netPtrHostRefCluster: "${NET_PTRHOST_REF_CLUSTER}"
 DATASOURCE
 
 echo "==> Wrote per-run uptest datasource to ${OUT}"
