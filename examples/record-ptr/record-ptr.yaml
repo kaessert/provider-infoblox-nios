@@ -48,8 +48,9 @@
 # existing 10.1.1.0/24 reverse zone's address pool (see
 # test/e2e/gen-datasource.sh's header comment for the full derivation and
 # the documented, accepted collision-probability tradeoff versus
-# netPrefix's larger pool). record-ptr-namespaced.yaml uses the disjoint
-# ${data.netPtrHostNamespaced} half of that same pool.
+# netPrefix's larger pool). That pool is split into three disjoint thirds;
+# record-ptr-namespaced.yaml uses the ${data.netPtrHostNamespaced} third of
+# it — see gen-datasource.sh's header for the exact ranges.
 apiVersion: recordptr.infobloxnios.crossplane.io/v1alpha1
 kind: PTRRecord
 metadata:
