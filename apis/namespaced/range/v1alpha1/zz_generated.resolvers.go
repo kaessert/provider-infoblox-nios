@@ -9,6 +9,7 @@ package v1alpha1
 import (
 	"context"
 
+	referencehelpers "github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers"
 	v1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/networkview/v1alpha1"
 	reference "github.com/crossplane/crossplane-runtime/v2/pkg/reference"
 	errors "github.com/pkg/errors"
@@ -24,7 +25,7 @@ func (mg *Range) ResolveReferences(ctx context.Context, c client.Reader) error {
 
 	rsp, err = r.Resolve(ctx, reference.NamespacedResolutionRequest{
 		CurrentValue: reference.FromPtrValue(mg.Spec.ForProvider.NetworkView),
-		Extract:      reference.ExternalName(),
+		Extract:      referencehelpers.ExtractField("spec.forProvider.name"),
 		Namespace:    mg.GetNamespace(),
 		Reference:    mg.Spec.ForProvider.NetworkViewRef,
 		Selector:     mg.Spec.ForProvider.NetworkViewSelector,

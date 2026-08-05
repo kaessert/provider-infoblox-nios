@@ -52,10 +52,11 @@ package catalog
 //
 // Cross-resource reference: `networkView` identifies a NetworkView by name
 // (the target's Name field is stable, unlike its `_ref` which changes on
-// rename). The default reference extractor (reference.ExternalName(),
-// reading the target's crossplane.io/external-name annotation) is used per
-// this provider's cross-resource reference convention — same choice made
-// for NetworkContainer's networkView field.
+// rename). WAPI's network_view field requires the view NAME, not the
+// target's server-assigned external-name (the WAPI `_ref`) — the
+// field-path extractor resolves against the target's spec.forProvider.name
+// instead of the default external-name extractor — same choice made for
+// NetworkContainer's networkView field.
 func fixedAddress() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "FixedAddress",
@@ -95,6 +96,7 @@ func fixedAddress() ResourceDescriptor {
 					TargetKind:  "NetworkView",
 					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
+					Extractor:   extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{

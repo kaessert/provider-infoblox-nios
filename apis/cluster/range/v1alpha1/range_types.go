@@ -19,6 +19,7 @@ type RangeParameters struct {
 	EndAddr *string `json:"endAddr"`
 	// Name of the network view the range belongs to. Referenced by name (not _ref), since NetworkView's name is stable across most operations while its _ref changes on rename.
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
 	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`

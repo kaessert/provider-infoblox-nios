@@ -1372,3 +1372,46 @@ func TestDNSViewIsDefaultImmutableResponseOnly(t *testing.T) {
 		t.Errorf("DNSView descriptor missing Name field")
 	}
 }
+
+// wantNetworkViewExtractor is the field-path extractor every cross-resource
+// reference field targeting NetworkView must carry. NetworkView's
+// server-assigned external-name is the WAPI `_ref`, but every WAPI
+// `network_view` field requires the view's NAME instead — the default
+// reference.ExternalName() extractor resolves to the wrong value and 404s
+// at the backend (this exact defect shipped across NetworkContainer,
+// Network, FixedAddress, HostRecord, and Range before this test existed).
+// referencehelpers.ExtractField resolves against the target's
+// spec.forProvider.name field instead.
+var wantNetworkViewExtractor = extractFieldFuncPath + `("spec.forProvider.name")`
+
+// TestNetworkViewReferencesUseFieldExtractor is a derived, catalog-wide
+// regression guard: for EVERY cataloged resource, every field whose
+// cross-resource Reference targets NetworkView must carry the
+// spec.forProvider.name field-path extractor, never the default
+// reference.ExternalName() extractor. Fields are enumerated from the
+// catalog rather than a hardcoded resource/field list, so a future
+// resource that adds a networkView-style reference to NetworkView is
+// covered automatically — no generator or test change required, and a
+// regeneration that silently drops the marker (e.g. from an accidental
+// catalog edit) fails loudly here instead of surfacing as a live 404.
+func TestNetworkViewReferencesUseFieldExtractor(t *testing.T) {
+	var checked int
+	for _, rd := range All() {
+		for _, f := range rd.Fields {
+			if f.Reference == nil || f.Reference.TargetKind != kindNetworkView {
+				continue
+			}
+			checked++
+			if f.Reference.Extractor != wantNetworkViewExtractor {
+				t.Errorf("%s.%s: Reference.Extractor = %q, want %q (NetworkView's WAPI network_view field requires the view NAME, not its server-assigned external-name)",
+					rd.Kind, f.JSONName, f.Reference.Extractor, wantNetworkViewExtractor)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no cataloged field references NetworkView — expected at least the networkView fields on NetworkContainer, Network, FixedAddress, HostRecord, and Range")
+	}
+	if checked < 5 {
+		t.Errorf("only %d cataloged field(s) reference NetworkView, want at least 5 (NetworkContainer, Network, FixedAddress, HostRecord, Range)", checked)
+	}
+}

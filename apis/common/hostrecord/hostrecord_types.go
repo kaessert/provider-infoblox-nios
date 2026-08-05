@@ -50,6 +50,7 @@ type HostRecordParameters struct {
 	// Network view the host record resides in. Immutable after creation (live-verified: supports=rws, no u — corrects Phase 1 inventory).
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
 	NetworkViewRef *xpv2.Reference `json:"networkViewRef,omitempty"`

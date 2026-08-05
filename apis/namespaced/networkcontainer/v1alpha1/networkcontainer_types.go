@@ -16,6 +16,7 @@ type NetworkContainerParameters struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf || oldSelf == ''",message="networkView is immutable after creation"
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	NetworkView *string `json:"networkView"`
 	// +optional
 	NetworkViewRef *xpv2.NamespacedReference `json:"networkViewRef,omitempty"`

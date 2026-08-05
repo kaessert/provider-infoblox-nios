@@ -64,6 +64,7 @@ type FixedAddressParameters struct {
 	MAC *string `json:"mac,omitempty"`
 	// Network view the fixed address belongs to. Defaults to "default" when unset. Identifies a NetworkView by name.
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1.NetworkView
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	NetworkView *string `json:"networkView,omitempty"`
 	// +optional
 	NetworkViewRef *xpv2.NamespacedReference `json:"networkViewRef,omitempty"`
