@@ -1,0 +1,58 @@
+# record-ptr-ref.yaml — PTRRecord created via the ptrdnameRef cross-resource
+# reference, instead of the literal ptrdname field record-ptr.yaml/
+# record-ptr-namespaced.yaml use. See record-ptr.yaml for the full field
+# documentation — this file only documents what's specific to the
+# reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end, mirroring
+# examples/record-cname/record-cname-ref.yaml. WAPI's own FQDN validation
+# is what caught the bug this example guards against: the default
+# reference.ExternalName() extractor used to resolve ptrdnameRef to the
+# referenced ARecord's opaque WAPI _ref string instead of its documented
+# FQDN name, and WAPI rejected the result outright ("AdmConDataError: A
+# domain label is longer than 63 characters."). This manifest sets
+# ptrdnameRef and leaves ptrdname at "" in spec, so whatever value ends up
+# on the live object can only have come from the resolver, never from the
+# manifest — the same technique record-cname-ref.yaml uses for
+# canonicalRef.
+#
+# ptrdname must still be present in spec ("" here) because it is a
+# schema-required field — "required" only means the key must be present,
+# not non-empty, so the empty string satisfies it and is overwritten by
+# the resolver's first write on Create.
+#
+# ptrdnameRef.name: the metadata.name of arecord-ptr-ref-prereq.yaml's
+# ARecord object (a Kubernetes object name, not the ARecord's WAPI _ref or
+# its own spec.forProvider.name) — Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_RECORD_PTR) applies arecord-ptr-ref-prereq.yaml first
+# so the reference has something to resolve against.
+#
+# ipv4Addr: a THIRD isolated host offset inside the shared 10.1.1.0/24
+# reverse zone, disjoint from record-ptr.yaml's ${data.netPtrHostCluster}
+# and record-ptr-namespaced.yaml's ${data.netPtrHostNamespaced} — see
+# test/e2e/gen-datasource.sh's header comment for the pool layout. Uses
+# view "Internal" for the same reverse-zone-availability reason
+# record-ptr.yaml documents.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — per-field update coverage
+# already exists on record-ptr.yaml/record-ptr-namespaced.yaml, and
+# exercising it a second time here adds no new coverage while doubling
+# this target's runtime.
+apiVersion: recordptr.infobloxnios.crossplane.io/v1alpha1
+kind: PTRRecord
+metadata:
+  name: example-ptrrecord-ref
+  annotations:
+    meta.upbound.io/example-id: recordptr/v1alpha1/ptrrecord
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    ptrdname: ""
+    ptrdnameRef:
+      name: example-record-ptr-ref-target
+    ipv4Addr: ${data.netPtrHostRefCluster}
+    view: Internal
+    comment: "Managed by Crossplane (ptrdnameRef reference path)"
+  providerConfigRef:
+    name: default

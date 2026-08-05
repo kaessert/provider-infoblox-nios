@@ -168,14 +168,22 @@ space := $(empty) $(empty)
 UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
-# record-ptr needs no Makefile prerequisite-bundling: its reverse zone is
-# the pre-existing, shared 10.1.1.0/24 zone_auth (view Internal) that
-# test/setup.sh already provisions convergently, not a per-run object.
-# Isolation is per-run HOST offsets drawn from a second, independently-
-# hashed pool within that shared zone (test/e2e/gen-datasource.sh's
-# ptrHost derivation) — a documented exception, not prerequisite-bundling
-# (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
-UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml
+# record-ptr's two literal-ptrdname examples need no Makefile
+# prerequisite-bundling: their reverse zone is the pre-existing, shared
+# 10.1.1.0/24 zone_auth (view Internal) that test/setup.sh already
+# provisions convergently, not a per-run object. Isolation is per-run HOST
+# offsets drawn from a second, independently-hashed pool within that
+# shared zone (test/e2e/gen-datasource.sh's ptrHost derivation) — a
+# documented exception, not prerequisite-bundling (IN-ISO-IPAM-PREREQ;
+# address plan: IN-ISO-IPAM-PLAN). record-ptr-ref.yaml is a third member
+# of this set: it exercises the ptrdnameRef reference path instead, so it
+# needs its own ARecord prerequisite (arecord-ptr-ref-prereq.yaml, listed
+# first so uptest creates it before the reference can resolve) — same
+# pattern as UPTEST_MANIFESTS_RECORD_CNAME below. Folded into this same
+# variable (not a separate e2e target) so `make e2e.record-ptr` proves
+# both the literal-ptrdname path (still covered by the first two
+# manifests) AND the reference-resolver path in one run.
+UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml,examples/record-ptr/arecord-ptr-ref-prereq.yaml,examples/record-ptr/record-ptr-ref.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
 # canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
