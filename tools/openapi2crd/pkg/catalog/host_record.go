@@ -16,7 +16,9 @@ package catalog
 // name/view) and never settable.
 //
 // Cross-resource references: `networkView` → NetworkView (cluster-scoped,
-// external-name extractor). This is an immutable create-time reference.
+// field-path extractor resolving against the target's spec.forProvider.name
+// — WAPI's network_view field requires the view NAME, not the target's
+// server-assigned external-name). This is an immutable create-time reference.
 //
 // ForProvider nested types:
 //   - HostIpv4Addr: IPv4 address entry with optional MAC/DHCP config
@@ -83,6 +85,7 @@ func hostRecord() ResourceDescriptor {
 					TargetKind:  kindNetworkView,
 					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
+					Extractor:   extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{

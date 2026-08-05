@@ -10,6 +10,7 @@ import (
 	"context"
 
 	v1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/networkview/v1alpha1"
+	referencehelpers "github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers"
 	reference "github.com/crossplane/crossplane-runtime/v2/pkg/reference"
 	errors "github.com/pkg/errors"
 	client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,7 +25,7 @@ func (mg *Network) ResolveReferences(ctx context.Context, c client.Reader) error
 
 	rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
 		CurrentValue: reference.FromPtrValue(mg.Spec.ForProvider.NetworkView),
-		Extract:      reference.ExternalName(),
+		Extract:      referencehelpers.ExtractField("spec.forProvider.name"),
 		Namespace:    mg.GetNamespace(),
 		Reference:    mg.Spec.ForProvider.NetworkViewRef,
 		Selector:     mg.Spec.ForProvider.NetworkViewSelector,

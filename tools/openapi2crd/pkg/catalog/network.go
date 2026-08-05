@@ -31,7 +31,10 @@ package catalog
 // stable across most operations). The NetworkView managed resource is now
 // generated (cluster-scoped: apis/cluster/networkview/v1alpha1), so the
 // field carries the standard three-field reference pattern (value + Ref +
-// Selector).
+// Selector). WAPI's network_view field requires the view NAME, not the
+// target's server-assigned external-name (the WAPI `_ref`) — the
+// field-path extractor resolves against the target's spec.forProvider.name
+// instead of the default external-name extractor.
 //
 // `members` is populated on read but is not a CreateNetwork/UpdateNetwork
 // parameter via the ObjectManager wrapper (the generic WAPI Connector is
@@ -77,6 +80,7 @@ func network() ResourceDescriptor {
 					TargetKind:  kindNetworkView,
 					TargetSlug:  slugNetworkView,
 					TargetScope: "cluster",
+					Extractor:   extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{

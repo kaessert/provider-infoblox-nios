@@ -28,10 +28,12 @@ package catalog
 //
 // Cross-resource references: `networkView` identifies the owning
 // NetworkView by name (NetworkView's Name field is stable across most
-// operations, unlike its `_ref` which changes on rename), resolved via the
-// default reference.ExternalName() extractor against the cluster-scoped
-// NetworkView (or namespaced NetworkView for the namespaced Range variant)
-// — see blueprint.md §7.17.
+// operations, unlike its `_ref` which changes on rename). WAPI's
+// network_view field requires the view NAME, not the target's
+// server-assigned external-name (the WAPI `_ref`) — the field-path
+// extractor resolves against the target's spec.forProvider.name instead of
+// the default external-name extractor, against the cluster-scoped
+// NetworkView (or namespaced NetworkView for the namespaced Range variant).
 func rangeResource() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "Range",
@@ -65,6 +67,7 @@ func rangeResource() ResourceDescriptor {
 				Reference: &ReferenceDescriptor{
 					TargetKind: kindNetworkView,
 					TargetSlug: slugNetworkView,
+					Extractor:  extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{

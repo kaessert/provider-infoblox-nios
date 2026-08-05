@@ -202,10 +202,17 @@ UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-au
 # uptest creates it first (IN-ISO-IPAM-PREREQ; address plan: IN-ISO-IPAM-PLAN).
 UPTEST_MANIFESTS_IPV4_SHARED_NETWORK := examples/ipv4-shared-network/network-prereq.yaml,examples/ipv4-shared-network/network-prereq-namespaced.yaml,examples/ipv4-shared-network/ipv4-shared-network.yaml,examples/ipv4-shared-network/ipv4-shared-network-namespaced.yaml
 # NetworkContainer references NetworkView by name (networkViewRef/Selector
-# also available) but both example manifests use the Grid's well-known
-# "default" network view inline, so no NetworkView prerequisite manifest is
-# prepended here — same pattern as UPTEST_MANIFESTS_NETWORK above.
-UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml
+# also available) but both scoped example manifests above use the Grid's
+# well-known "default" network view inline — same pattern as
+# UPTEST_MANIFESTS_NETWORK above. network-container-ref.yaml is the third
+# member of this set: it exercises the networkViewRef reference path
+# instead, so it needs its own NetworkView prerequisite
+# (network-view-ref-prereq.yaml, listed first so uptest creates it before
+# the reference can resolve). Folded into this same variable (not a
+# separate e2e target) so `make e2e.network-container` proves both the
+# literal-networkView path (still covered by the first two manifests) AND
+# the reference-resolver path in one run.
+UPTEST_MANIFESTS_NETWORK_CONTAINER := examples/network-container/network-container.yaml,examples/network-container/network-container-namespaced.yaml,examples/network-container/network-view-ref-prereq.yaml,examples/network-container/network-container-ref.yaml
 # IPv6 variant of NetworkContainer — WAPI resolves this to the
 # ipv6networkcontainer object type at runtime instead of networkcontainer.
 # Kept as a separate target (not folded into

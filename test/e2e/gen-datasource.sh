@@ -104,7 +104,10 @@
 #                 .224/27  netAllocParentCluster         (prerequisite parent NetworkContainer for the EA-based
 #                                                          dynamic-allocation Network example, cluster only — no
 #                                                          namespaced sibling exists for this pair yet)
-#                 .130-.159 reserved / unused — room to grow
+#                 .144/28  netContainerRefCluster        (NetworkContainer, networkViewRef reference-path
+#                                                          example, cluster only — no namespaced sibling exists
+#                                                          for this pair yet)
+#                 .130-.143 reserved / unused — room to grow
 #
 #               netAllocParentCluster arithmetic: the allocate example
 #               requests a /28 (16 addresses) via allocatePrefixLen, so the
@@ -303,6 +306,7 @@ NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
 NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
 NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
 NET_ALLOC_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.224/27"
+NET_CONTAINER_REF_CLUSTER="100.64.${BLOCK_INDEX}.144/28"
 
 # netV6Network{Cluster,Namespaced} — Network's IPv6 (ipv6network) variant,
 # see the header comment's netV6 section. Reuses BLOCK_INDEX (same byte
@@ -357,6 +361,7 @@ netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
 netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
 netAllocParentCluster: "${NET_ALLOC_PARENT_CLUSTER}"
+netContainerRefCluster: "${NET_CONTAINER_REF_CLUSTER}"
 netV6NetworkCluster: "${NET_V6_NETWORK_CLUSTER}"
 netV6NetworkNamespaced: "${NET_V6_NETWORK_NAMESPACED}"
 netV6ContainerCluster: "${NET_V6_CONTAINER_CLUSTER}"
