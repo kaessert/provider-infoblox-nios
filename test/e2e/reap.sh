@@ -444,6 +444,16 @@ wapi_search() {
 is_denied() {
   local otype="$1" obj="$2"
   case "${otype}" in
+    network)
+      local net nv
+      net="$(jq -r '.network // empty' <<<"${obj}")"
+      nv="$(jq -r '.network_view // empty' <<<"${obj}")"
+      case "${net}" in
+        "10.0.0.0/24"|"203.0.113.0/25"|"203.0.113.128/25")
+          [ "${nv}" = "default" ] && return 0
+          ;;
+      esac
+      ;;
     zone_auth)
       local fqdn view
       fqdn="$(jq -r '.fqdn // empty' <<<"${obj}")"
@@ -458,16 +468,6 @@ is_denied() {
       # cannot afford to lose", not "only what setup.sh itself creates".
       [ "${fqdn}" = "example.com" ] && return 0
       [ "${fqdn}" = "peatestinglab.com" ] && [ "${view}" = "Internal" ] && return 0
-      ;;
-    network)
-      local net nv
-      net="$(jq -r '.network // empty' <<<"${obj}")"
-      nv="$(jq -r '.network_view // empty' <<<"${obj}")"
-      case "${net}" in
-        "10.0.0.0/24"|"203.0.113.0/25"|"203.0.113.128/25")
-          [ "${nv}" = "default" ] && return 0
-          ;;
-      esac
       ;;
   esac
   return 1
