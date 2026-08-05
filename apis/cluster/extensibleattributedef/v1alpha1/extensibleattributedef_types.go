@@ -62,14 +62,17 @@ type ExtensibleAttributeDefObservation struct {
 	// Name of the Extensible Attribute Definition. Mutable — renaming changes the record's _ref.
 	Name *string `json:"name,omitempty"` // atProvider
 	// Data type of the extensible attribute's value. Immutable — WAPI rejects a change with "Type of extensible attribute definition cannot be modified".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="type is immutable after creation"
 	Type *string `json:"type,omitempty"` // atProvider
 	// Comment for the Extensible Attribute Definition; maximum 256 characters. Mutable.
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Default value used to pre-populate the attribute value in the GUI. For email, URL, and string types, a string with a maximum of 256 characters. For an integer, an integer from -2147483648 through 2147483647. For a date, the number of seconds elapsed since January 1st, 1970 UTC. Mutable.
 	DefaultValue *string `json:"defaultValue,omitempty"` // atProvider
 	// Minimum allowed value of the extensible attribute. Applicable if type=INTEGER. Immutable — WAPI rejects a change with "Minimum value cannot be modified".
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="min is immutable after creation"
 	Min *uint32 `json:"min,omitempty"` // atProvider
 	// Maximum allowed value of the extensible attribute. Applicable if type=INTEGER. Immutable — same family as min, rejected by WAPI on update.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="max is immutable after creation"
 	Max *uint32 `json:"max,omitempty"` // atProvider
 	// Extensible attribute flags. Possible letters, most-significant first: (A)udited, (C)loud API, Cloud (G)master, (I)nheritable, (L)isted, (M)andatory value, MGM (P)rivate, (R)ead Only, (S)ort enum values, Multiple (V)alues. If there are two or more flags they must be listed in the order shown above (e.g. "CR" is valid, "RC" is not). Mutable.
 	Flags *string `json:"flags,omitempty"` // atProvider
