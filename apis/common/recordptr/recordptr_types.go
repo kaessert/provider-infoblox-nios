@@ -277,6 +277,7 @@ type PTRRecordParameters struct {
 	// Domain name this PTR record points to, in FQDN format. Changing it updates the record's _ref (best-effort target — WAPI does not verify that the referenced A/AAAA record exists).
 	// +kubebuilder:validation:Required
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1.ARecord
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	Ptrdname *string `json:"ptrdname"`
 	// +optional
 	PtrdnameRef *xpv2.Reference `json:"ptrdnameRef,omitempty"`

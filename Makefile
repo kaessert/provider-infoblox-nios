@@ -178,7 +178,18 @@ UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,example
 UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml
+# canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
+# a real ARecord instead of a literal FQDN, but both scoped example
+# manifests above set the literal value directly — same pattern as
+# UPTEST_MANIFESTS_NETWORK above. record-cname-ref.yaml is a third member
+# of this set: it exercises the canonicalRef reference path instead, so it
+# needs its own ARecord prerequisite (arecord-cname-ref-prereq.yaml, listed
+# first so uptest creates it before the reference can resolve). Folded
+# into this same variable (not a separate e2e target) so
+# `make e2e.record-cname` proves both the literal-canonical path (still
+# covered by the first two manifests) AND the reference-resolver path in
+# one run.
+UPTEST_MANIFESTS_RECORD_CNAME := examples/record-cname/record-cname.yaml,examples/record-cname/record-cname-namespaced.yaml,examples/record-cname/arecord-cname-ref-prereq.yaml,examples/record-cname/record-cname-ref.yaml
 UPTEST_MANIFESTS_RECORD_MX := examples/record-mx/record-mx.yaml,examples/record-mx/record-mx-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_NS := examples/record-ns/record-ns.yaml,examples/record-ns/record-ns-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/record-srv/record-srv-namespaced.yaml

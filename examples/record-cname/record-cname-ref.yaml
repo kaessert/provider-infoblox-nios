@@ -1,0 +1,55 @@
+# record-cname-ref.yaml — CNAMERecord created via the canonicalRef
+# cross-resource reference, instead of the literal canonical field
+# record-cname.yaml/record-cname-namespaced.yaml use. See record-cname.yaml
+# for the full field documentation — this file only documents what's
+# specific to the reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end. WAPI's own FQDN
+# validation is what caught the bug this example guards against: the
+# default reference.ExternalName() extractor used to resolve canonicalRef
+# to the referenced ARecord's opaque WAPI _ref string instead of its
+# documented FQDN name, and WAPI rejected the result outright
+# ("AdmConDataError: A domain label is longer than 63 characters."). This
+# manifest sets canonicalRef and leaves canonical at "" in spec, so
+# whatever value ends up on the live object can only have come from the
+# resolver, never from the manifest — the same technique
+# examples/network-container/network-container-ref.yaml uses for
+# networkViewRef.
+#
+# canonical must still be present in spec ("" here) because it is a
+# schema-required field — "required" only means the key must be present,
+# not non-empty, so the empty string satisfies it and is overwritten by
+# the resolver's first write on Create.
+#
+# canonicalRef.name: the metadata.name of arecord-cname-ref-prereq.yaml's
+# ARecord object (a Kubernetes object name, not the ARecord's WAPI _ref or
+# its own spec.forProvider.name) — Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_RECORD_CNAME) applies arecord-cname-ref-prereq.yaml
+# first so the reference has something to resolve against.
+#
+# name: a distinct alias from this directory's own literal example
+# (record-cname.yaml's "alias-${data.runToken}.example.com") so the two
+# don't collide with each other within the same e2e.record-cname run
+# despite sharing the same runToken.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — per-field update coverage
+# already exists on record-cname.yaml, and exercising it a second time
+# here adds no new coverage while doubling this target's runtime.
+apiVersion: recordcname.infobloxnios.crossplane.io/v1alpha1
+kind: CNAMERecord
+metadata:
+  name: example-cnamerecord-ref
+  annotations:
+    meta.upbound.io/example-id: recordcname/v1alpha1/cnamerecord
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: alias-ref-${data.runToken}.example.com
+    canonical: ""
+    canonicalRef:
+      name: example-record-cname-ref-target
+    view: default
+    comment: "Managed by Crossplane (canonicalRef reference path)"
+  providerConfigRef:
+    name: default
