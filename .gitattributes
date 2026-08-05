@@ -1,0 +1,4 @@
+apis/**/zz_generated.*.go                      factory-regenerable
+apis/zz_generated_register.go                  factory-regenerable
+internal/controller/zz_generated_register.go   factory-regenerable
+package/crds/*.yaml                            factory-regenerable
