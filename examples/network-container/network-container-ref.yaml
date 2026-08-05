@@ -1,0 +1,58 @@
+# network-container-ref.yaml — NetworkContainer created via the
+# networkViewRef cross-resource reference, instead of the literal
+# networkView field network-container.yaml/network-container-namespaced.yaml
+# use. See network-container.yaml for the full field documentation — this
+# file only documents what's specific to the reference path.
+#
+# Purpose: prove the reference RESOLVER wiring end-to-end. The CEL
+# immutability rule on networkView is deliberately tolerant of an
+# empty-to-populated first write ("self == oldSelf || oldSelf == ''")
+# specifically so the resolver can write the resolved name into
+# spec.forProvider.networkView post-admission — this is the one example in
+# this repo that actually exercises that write. Every other networkViewRef
+# match anywhere else in examples/ is a crossplane.io/update-test skip
+# entry paired with a literal networkView value; this manifest sets
+# networkViewRef and leaves networkView at "" in spec, so whatever value
+# ends up on the live object can only have come from the resolver, never
+# from the manifest.
+#
+# networkView must still be present in spec ("" here) because it is a
+# schema-required field (one of network, parentCidr, or filterParams is
+# independently required too, and is satisfied below by `network`) — the
+# empty string is exactly the "oldSelf == ''" case the CEL rule above
+# tolerates, letting the resolver's first write through on Create.
+#
+# networkViewRef.name: the metadata.name of network-view-ref-prereq.yaml's
+# NetworkView object (a Kubernetes object name, not the NetworkView's WAPI
+# _ref or its own spec.forProvider.name) — Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_NETWORK_CONTAINER) applies network-view-ref-prereq.yaml
+# first so the reference has something to resolve against.
+#
+# ${data.netContainerRefCluster}: a per-run /28 disjoint from every other
+# addressed example's sub-block, including this directory's own
+# ${data.netContainerCluster}/${data.netContainerNamespaced} (see
+# test/e2e/gen-datasource.sh's sub-allocation map) — required because this
+# manifest runs in the SAME e2e.network-container invocation as both of
+# those, not a separate target.
+#
+# No update-test annotation and no post-assert-hook: this manifest's sole
+# purpose is proving the reference resolves — comment's per-field update
+# coverage already exists on network-container.yaml, and exercising it a
+# second time here adds no new coverage while doubling this target's
+# runtime.
+apiVersion: networkcontainer.infobloxnios.crossplane.io/v1alpha1
+kind: NetworkContainer
+metadata:
+  name: example-network-container-ref
+  annotations:
+    meta.upbound.io/example-id: networkcontainer/v1alpha1/networkcontainer
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    networkView: ""
+    networkViewRef:
+      name: example-network-container-ref-view
+    network: ${data.netContainerRefCluster}
+    comment: "Managed by Crossplane (networkViewRef reference path)"
+  providerConfigRef:
+    name: default
