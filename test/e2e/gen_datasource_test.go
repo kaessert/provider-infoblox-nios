@@ -76,43 +76,45 @@ func parseDatasource(t *testing.T, content string) map[string]string {
 // constants so goconst doesn't flag the repetition and so a rename only
 // needs to happen in one place.
 const (
-	keyRunToken                     = "runToken"
-	keyNetPrefix                    = "netPrefix"
-	keyNetNetworkCluster            = "netNetworkCluster"
-	keyNetNetworkNamespaced         = "netNetworkNamespaced"
-	keyNetContainerCluster          = "netContainerCluster"
-	keyNetContainerNamespaced       = "netContainerNamespaced"
-	keyNetSharedMemberCluster       = "netSharedMemberCluster"
-	keyNetSharedMemberNamespaced    = "netSharedMemberNamespaced"
-	keyNetFixedAddrParentCluster    = "netFixedAddrParentCluster"
-	keyNetFixedAddrHostCluster      = "netFixedAddrHostCluster"
-	keyNetFixedAddrParentNamespaced = "netFixedAddrParentNamespaced"
-	keyNetFixedAddrHostNamespaced   = "netFixedAddrHostNamespaced"
-	keyNetHostRecordCluster         = "netHostRecordCluster"
-	keyNetHostRecordNamespaced      = "netHostRecordNamespaced"
-	keyNetRangeParentCluster        = "netRangeParentCluster"
-	keyNetRangeStartCluster         = "netRangeStartCluster"
-	keyNetRangeEndCluster           = "netRangeEndCluster"
-	keyNetRangeParentNamespaced     = "netRangeParentNamespaced"
-	keyNetRangeStartNamespaced      = "netRangeStartNamespaced"
-	keyNetRangeEndNamespaced        = "netRangeEndNamespaced"
-	keyNetAllocParentCluster        = "netAllocParentCluster"
-	keyNetPtrHostCluster            = "netPtrHostCluster"
-	keyNetPtrHostNamespaced         = "netPtrHostNamespaced"
-	keyNetPtrHostRefCluster         = "netPtrHostRefCluster"
-	keyNetV6NetworkCluster          = "netV6NetworkCluster"
-	keyNetV6NetworkNamespaced       = "netV6NetworkNamespaced"
-	keyNetV6ContainerCluster        = "netV6ContainerCluster"
-	keyNetV6ContainerNamespaced     = "netV6ContainerNamespaced"
-	keyNetV6FixedAddrParent         = "netV6FixedAddrParent"
-	keyNetV6FixedAddrHostCluster    = "netV6FixedAddrHostCluster"
-	keyNetV6FixedAddrHostNamespaced = "netV6FixedAddrHostNamespaced"
-	keyNetNetworkRefCluster         = "netNetworkRefCluster"
-	keyNetFixedAddrRefParentCluster = "netFixedAddrRefParentCluster"
-	keyNetFixedAddrRefHostCluster   = "netFixedAddrRefHostCluster"
-	keyNetRangeRefParentCluster     = "netRangeRefParentCluster"
-	keyNetRangeRefStartCluster      = "netRangeRefStartCluster"
-	keyNetRangeRefEndCluster        = "netRangeRefEndCluster"
+	keyRunToken                      = "runToken"
+	keyNetPrefix                     = "netPrefix"
+	keyNetNetworkCluster             = "netNetworkCluster"
+	keyNetNetworkNamespaced          = "netNetworkNamespaced"
+	keyNetContainerCluster           = "netContainerCluster"
+	keyNetContainerNamespaced        = "netContainerNamespaced"
+	keyNetSharedMemberCluster        = "netSharedMemberCluster"
+	keyNetSharedMemberNamespaced     = "netSharedMemberNamespaced"
+	keyNetFixedAddrParentCluster     = "netFixedAddrParentCluster"
+	keyNetFixedAddrHostCluster       = "netFixedAddrHostCluster"
+	keyNetFixedAddrParentNamespaced  = "netFixedAddrParentNamespaced"
+	keyNetFixedAddrHostNamespaced    = "netFixedAddrHostNamespaced"
+	keyNetHostRecordCluster          = "netHostRecordCluster"
+	keyNetHostRecordNamespaced       = "netHostRecordNamespaced"
+	keyNetRangeParentCluster         = "netRangeParentCluster"
+	keyNetRangeStartCluster          = "netRangeStartCluster"
+	keyNetRangeEndCluster            = "netRangeEndCluster"
+	keyNetRangeParentNamespaced      = "netRangeParentNamespaced"
+	keyNetRangeStartNamespaced       = "netRangeStartNamespaced"
+	keyNetRangeEndNamespaced         = "netRangeEndNamespaced"
+	keyNetAllocParentCluster         = "netAllocParentCluster"
+	keyNetPtrHostCluster             = "netPtrHostCluster"
+	keyNetPtrHostNamespaced          = "netPtrHostNamespaced"
+	keyNetPtrHostRefCluster          = "netPtrHostRefCluster"
+	keyNetV6NetworkCluster           = "netV6NetworkCluster"
+	keyNetV6NetworkNamespaced        = "netV6NetworkNamespaced"
+	keyNetV6ContainerCluster         = "netV6ContainerCluster"
+	keyNetV6ContainerNamespaced      = "netV6ContainerNamespaced"
+	keyNetV6FixedAddrParent          = "netV6FixedAddrParent"
+	keyNetV6FixedAddrHostCluster     = "netV6FixedAddrHostCluster"
+	keyNetV6FixedAddrHostNamespaced  = "netV6FixedAddrHostNamespaced"
+	keyNetNetworkRefCluster          = "netNetworkRefCluster"
+	keyNetFixedAddrRefParentCluster  = "netFixedAddrRefParentCluster"
+	keyNetFixedAddrRefHostCluster    = "netFixedAddrRefHostCluster"
+	keyNetRangeRefParentCluster      = "netRangeRefParentCluster"
+	keyNetRangeRefStartCluster       = "netRangeRefStartCluster"
+	keyNetRangeRefEndCluster         = "netRangeRefEndCluster"
+	keyNetHostRecordRefParentCluster = "netHostRecordRefParentCluster"
+	keyNetHostRecordRefHostCluster   = "netHostRecordRefHostCluster"
 )
 
 // requiredKeys is every key gen-datasource.sh's sub-allocation map
@@ -156,6 +158,8 @@ var requiredKeys = []string{
 	keyNetRangeRefParentCluster,
 	keyNetRangeRefStartCluster,
 	keyNetRangeRefEndCluster,
+	keyNetHostRecordRefParentCluster,
+	keyNetHostRecordRefHostCluster,
 }
 
 func TestGenDatasourceEmitsAllKeys(t *testing.T) {
@@ -268,6 +272,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 		keyNetAllocParentCluster,
 		keyNetNetworkRefCluster, keyNetFixedAddrRefParentCluster, keyNetRangeRefParentCluster,
+		keyNetHostRecordRefParentCluster,
 	}
 	for _, key := range cidrKeys {
 		ip, _, err := net.ParseCIDR(values[key])
@@ -286,6 +291,7 @@ func TestGenDatasourceSubBlocksShareBlockIndex(t *testing.T) {
 		keyNetRangeStartCluster, keyNetRangeEndCluster,
 		keyNetRangeStartNamespaced, keyNetRangeEndNamespaced,
 		keyNetFixedAddrRefHostCluster, keyNetRangeRefStartCluster, keyNetRangeRefEndCluster,
+		keyNetHostRecordRefHostCluster,
 	}
 	for _, key := range hostKeys {
 		ip := net.ParseIP(values[key])
@@ -322,6 +328,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		keyNetRangeParentCluster, keyNetRangeParentNamespaced,
 		keyNetAllocParentCluster,
 		keyNetNetworkRefCluster, keyNetFixedAddrRefParentCluster, keyNetRangeRefParentCluster,
+		keyNetHostRecordRefParentCluster,
 	}
 	// Range is a contiguous [start, end] address span, not a CIDR.
 	rangeSpans := [][2]string{
@@ -329,7 +336,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		{keyNetRangeStartNamespaced, keyNetRangeEndNamespaced},
 	}
 	// Single-host consumers.
-	hostKeys := []string{keyNetFixedAddrHostCluster, keyNetFixedAddrHostNamespaced, keyNetHostRecordCluster, keyNetHostRecordNamespaced, keyNetFixedAddrRefHostCluster}
+	hostKeys := []string{keyNetFixedAddrHostCluster, keyNetFixedAddrHostNamespaced, keyNetHostRecordCluster, keyNetHostRecordNamespaced, keyNetFixedAddrRefHostCluster, keyNetHostRecordRefHostCluster}
 
 	spans := make([]span, 0, len(cidrKeys)+len(rangeSpans)+len(hostKeys))
 	for _, key := range cidrKeys {
@@ -378,6 +385,14 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 	// nested inside their own parent blocks (see the assertions below) —
 	// those relationships are excluded from the blanket pairwise-disjoint
 	// sweep, everything else must not overlap with anything else.
+	// netHostRecordRefParentCluster (.128/30) deliberately overlaps
+	// netHostRecordCluster (.128) and netHostRecordNamespaced (.129) —
+	// the parent Network prerequisite for HostRecord's networkViewRef
+	// reference-path example lives only inside that example's own
+	// per-run custom NetworkView, never in "default" where
+	// netHostRecordCluster/netHostRecordNamespaced's HostRecords live, so
+	// the numeric overlap is not a real collision (independent NIOS
+	// address realms).
 	allowedOverlap := map[[2]string]bool{
 		{keyNetFixedAddrParentCluster, keyNetFixedAddrHostCluster}:                                  true,
 		{keyNetFixedAddrParentNamespaced, keyNetFixedAddrHostNamespaced}:                            true,
@@ -385,6 +400,9 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 		{keyNetRangeParentNamespaced, keyNetRangeStartNamespaced + ".." + keyNetRangeEndNamespaced}: true,
 		{keyNetFixedAddrRefParentCluster, keyNetFixedAddrRefHostCluster}:                            true,
 		{keyNetRangeRefParentCluster, refRangeSpanName}:                                             true,
+		{keyNetHostRecordRefParentCluster, keyNetHostRecordRefHostCluster}:                          true,
+		{keyNetHostRecordRefParentCluster, keyNetHostRecordCluster}:                                 true,
+		{keyNetHostRecordRefParentCluster, keyNetHostRecordNamespaced}:                              true,
 	}
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
@@ -405,6 +423,7 @@ func TestGenDatasourceSubBlocksAreDisjoint(t *testing.T) {
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostCluster, keyNetFixedAddrParentCluster)
 	assertHostInsideCIDR(t, values, keyNetFixedAddrHostNamespaced, keyNetFixedAddrParentNamespaced)
 	assertHostInsideCIDR(t, values, keyNetFixedAddrRefHostCluster, keyNetFixedAddrRefParentCluster)
+	assertHostInsideCIDR(t, values, keyNetHostRecordRefHostCluster, keyNetHostRecordRefParentCluster)
 
 	// Range's [start,end] span MUST fall entirely inside its own parent
 	// block — CreateNetworkRange requires an existing parent Network
@@ -809,6 +828,7 @@ func TestGenDatasourceFixedAddressHostNotNetworkOrBroadcast(t *testing.T) {
 		{keyNetFixedAddrRefHostCluster, keyNetFixedAddrRefParentCluster},
 		{keyNetRangeRefStartCluster, keyNetRangeRefParentCluster},
 		{keyNetRangeRefEndCluster, keyNetRangeRefParentCluster},
+		{keyNetHostRecordRefHostCluster, keyNetHostRecordRefParentCluster},
 	} {
 		host := net.ParseIP(values[pair[0]])
 		_, cidr, err := net.ParseCIDR(values[pair[1]])

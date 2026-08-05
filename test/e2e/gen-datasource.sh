@@ -127,14 +127,12 @@
 #                                                          own per-run NetworkView, for HostRecord's
 #                                                          networkViewRef reference-path example, cluster only
 #                                                          — overlaps netHostRecordCluster/netHostRecordNamespaced
-#                                                          below by decimal value only; see the paragraph below
+#                                                          above by decimal value only; see the paragraph below
 #                                                          for why that is not a collision)
 #                 .130     netHostRecordRefHostCluster   (HostRecord ipv4Addr, networkViewRef reference-path
 #                                                          example, cluster only — inside the block above,
 #                                                          avoiding the .128 network and .131 broadcast
 #                                                          addresses of its /30 parent)
-#                 .128     netHostRecordCluster          (HostRecord ipv4Addr, cluster)
-#                 .129     netHostRecordNamespaced       (HostRecord ipv4Addr, namespaced)
 #
 #               netHostRecordRefParentCluster (.128/30) numerically overlaps
 #               netHostRecordCluster (.128) and netHostRecordNamespaced (.129)
