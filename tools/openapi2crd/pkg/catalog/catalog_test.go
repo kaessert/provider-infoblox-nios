@@ -715,6 +715,13 @@ func TestPTRRecordFieldCounts(t *testing.T) {
 // empty so the generator mirrors the PTRRecord variant's own scope
 // (cluster PTRRecord references cluster ARecord; namespaced PTRRecord
 // references namespaced ARecord) rather than pinning to a single scope.
+//
+// The extractor is NOT the default reference.ExternalName(): live WAPI
+// probing (record:ptr POST against a real NIOS Grid Manager appliance)
+// confirmed that feeding the referenced ARecord's `_ref` into `ptrdname`
+// is rejected outright ("A domain label is longer than 63 characters."),
+// since WAPI validates `ptrdname` as an FQDN. The extractor resolves
+// against the referenced ARecord's `spec.forProvider.name` instead.
 func TestPTRRecordPtrdnameHasReference(t *testing.T) {
 	rd, ok := FindResource("recordptr")
 	if !ok {
@@ -737,12 +744,56 @@ func TestPTRRecordPtrdnameHasReference(t *testing.T) {
 		if f.Reference.TargetScope != "" {
 			t.Errorf("Ptrdname.Reference.TargetScope = %q, want empty (mirrors source PTRRecord scope)", f.Reference.TargetScope)
 		}
-		if f.Reference.Extractor != "" {
-			t.Errorf("Ptrdname.Reference.Extractor = %q, want empty (default reference.ExternalName())", f.Reference.Extractor)
+		wantExtractor := extractFieldFuncPath + `("spec.forProvider.name")`
+		if f.Reference.Extractor != wantExtractor {
+			t.Errorf("Ptrdname.Reference.Extractor = %q, want %q (live WAPI probing confirmed the default reference.ExternalName() extractor produces an invalid FQDN)", f.Reference.Extractor, wantExtractor)
 		}
 		return
 	}
 	t.Errorf("PTRRecord descriptor has no Ptrdname field")
+}
+
+// TestCNAMERecordCanonicalHasReference verifies canonical is cataloged with
+// a Reference descriptor targeting ARecord, using the same
+// referencehelpers.ExtractField("spec.forProvider.name") extractor as
+// PTRRecord.ptrdname (see TestPTRRecordPtrdnameHasReference) rather than
+// the default reference.ExternalName().
+//
+// Live WAPI probing (record:cname POST against a real NIOS Grid Manager
+// appliance) confirmed that feeding the referenced ARecord's `_ref` (what
+// the default extractor would resolve to) into `canonical` is rejected
+// outright — "AdmConDataError: A domain label is longer than 63
+// characters." — since WAPI validates `canonical` as an FQDN and a `_ref`
+// is not one. Feeding the ARecord's `name` field succeeds.
+func TestCNAMERecordCanonicalHasReference(t *testing.T) {
+	rd, ok := FindResource("recordcname")
+	if !ok {
+		t.Fatalf("FindResource(%q): expected found", "recordcname")
+	}
+
+	for _, f := range rd.Fields {
+		if f.Name != "Canonical" {
+			continue
+		}
+		if f.Reference == nil {
+			t.Fatalf("Canonical.Reference = nil, want a ReferenceDescriptor targeting ARecord")
+		}
+		if f.Reference.TargetKind != "ARecord" {
+			t.Errorf("Canonical.Reference.TargetKind = %q, want ARecord", f.Reference.TargetKind)
+		}
+		if f.Reference.TargetSlug != "recorda" {
+			t.Errorf("Canonical.Reference.TargetSlug = %q, want recorda", f.Reference.TargetSlug)
+		}
+		if f.Reference.TargetScope != "" {
+			t.Errorf("Canonical.Reference.TargetScope = %q, want empty (mirrors source CNAMERecord scope)", f.Reference.TargetScope)
+		}
+		wantExtractor := extractFieldFuncPath + `("spec.forProvider.name")`
+		if f.Reference.Extractor != wantExtractor {
+			t.Errorf("Canonical.Reference.Extractor = %q, want %q (live WAPI probing confirmed the default reference.ExternalName() extractor produces an invalid FQDN)", f.Reference.Extractor, wantExtractor)
+		}
+		return
+	}
+	t.Errorf("CNAMERecord descriptor has no Canonical field")
 }
 
 // TestFindResourceSRVRecord verifies FindResource returns the SRVRecord

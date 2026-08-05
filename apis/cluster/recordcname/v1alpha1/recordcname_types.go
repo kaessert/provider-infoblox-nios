@@ -17,6 +17,7 @@ type CNAMERecordParameters struct {
 	// Canonical (target) name in FQDN format. WAPI does not require the target to exist, so canonicalRef/canonicalSelector are optional convenience for resolving an ARecord's FQDN — this field may also be set directly as a plain FQDN string.
 	// +kubebuilder:validation:Required
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1.ARecord
+	// +crossplane:generate:reference:extractor=github.com/crossplane-contrib/provider-infoblox-nios/apis/common/referencehelpers.ExtractField("spec.forProvider.name")
 	Canonical *string `json:"canonical"`
 	// +optional
 	CanonicalRef *xpv2.Reference `json:"canonicalRef,omitempty"`

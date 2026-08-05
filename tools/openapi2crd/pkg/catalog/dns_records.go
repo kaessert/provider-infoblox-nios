@@ -545,6 +545,16 @@ func aliasRecord() ResourceDescriptor {
 // CNAMERecord references cluster ARecord; namespaced CNAMERecord references
 // namespaced ARecord) rather than pinning to a single scope, since ARecord
 // itself is dual-scope.
+//
+// The extractor is NOT the default reference.ExternalName(): live WAPI
+// probing (record:cname POST against a real NIOS Grid Manager appliance)
+// confirmed that feeding the referenced ARecord's `_ref` (what the default
+// extractor would resolve to) into `canonical` is rejected outright —
+// "AdmConDataError: A domain label is longer than 63 characters." — since
+// WAPI validates `canonical` as an FQDN, and a `_ref` is not one. Feeding
+// the ARecord's `name` field succeeds. The extractor therefore uses
+// referencehelpers.ExtractField("spec.forProvider.name") to resolve against
+// the referenced ARecord's name instead of its external name.
 func cnameRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "CNAMERecord",
@@ -571,6 +581,7 @@ func cnameRecord() ResourceDescriptor {
 				Reference: &ReferenceDescriptor{
 					TargetKind: "ARecord",
 					TargetSlug: "recorda",
+					Extractor:  extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{
@@ -1080,6 +1091,17 @@ func nsRecord() ResourceDescriptor {
 // PTRRecord references cluster ARecord; namespaced PTRRecord references
 // namespaced ARecord) rather than pinning to a single scope, since ARecord
 // itself is dual-scope.
+//
+// The extractor is NOT the default reference.ExternalName(): live WAPI
+// probing (record:ptr POST against a real NIOS Grid Manager appliance)
+// confirmed that feeding the referenced ARecord's `_ref` (what the default
+// extractor would resolve to) into `ptrdname` is rejected outright —
+// "AdmConDataError: A domain label is longer than 63 characters." — the
+// same failure mode observed for CNAMERecord.canonical, since WAPI
+// validates `ptrdname` as an FQDN and a `_ref` is not one. Feeding the
+// ARecord's `name` field succeeds. The extractor therefore uses
+// referencehelpers.ExtractField("spec.forProvider.name") to resolve
+// against the referenced ARecord's name instead of its external name.
 func ptrRecord() ResourceDescriptor {
 	return ResourceDescriptor{
 		Kind:                 "PTRRecord",
@@ -1098,6 +1120,7 @@ func ptrRecord() ResourceDescriptor {
 				Reference: &ReferenceDescriptor{
 					TargetKind: "ARecord",
 					TargetSlug: "recorda",
+					Extractor:  extractFieldFuncPath + `("spec.forProvider.name")`,
 				},
 			},
 			{
