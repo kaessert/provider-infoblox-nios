@@ -23,6 +23,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
 
 const clusterControllerName = "cluster-fixedaddress.infobloxnios.crossplane.io"
@@ -368,10 +369,10 @@ func setupClusterFixedAddress(mgr ctrl.Manager, o controller.Options) error {
 	}
 
 	opts := []managed.ReconcilerOption{
-		managed.WithTypedExternalConnector[*clusterv1alpha1.FixedAddress](&clusterConnector{
+		managed.WithTypedExternalConnector[*clusterv1alpha1.FixedAddress](driftdetection.WrapConnector[*clusterv1alpha1.FixedAddress](&clusterConnector{
 			kube:  mgr.GetClient(),
 			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-		}),
+		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.

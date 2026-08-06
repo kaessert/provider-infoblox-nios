@@ -1,0 +1,51 @@
+# ARecord — spec.driftDetection ignore scenario (cluster-scoped).
+#
+# Dedicated to proving driftDetection's ignore semantics (scenario 1, "ignore
+# holds") and the write path (scenario 2, "an ignored field survives a
+# sibling field's update") end to end against the live NIOS Grid — kept
+# separate from examples/record-a/record-a.yaml (the baseline example, left
+# unmodified) so the two do not collide: the baseline's own update-test
+# converges comment to a new value, while this manifest ignores comment and
+# asserts it is NEVER converged from spec once tampered out of band.
+#
+# `comment` is the ignored (externally-owned) field. `ttl` (with useTtl
+# enabled so it is actually compared) is the sibling field patched
+# afterwards to prove the write path: every WAPI update on this provider is
+# a whole-object PUT, so patching ttl alone still sends comment on the same
+# request — exactly the shape where a compare-only ("skip the field, don't
+# substitute") implementation would visibly revert the tampered comment the
+# moment ttl changes.
+#
+# No crossplane.io/update-test annotation: the generic update-tester tool
+# proves fields DO converge, which is the opposite of what this manifest
+# tests. Verification is entirely in the dedicated post-assert hook below,
+# which tampers the live Grid directly over WAPI (bypassing the controller)
+# and asserts the CR does not revert it.
+#
+# ${data.runToken}: see record-a.yaml — same per-run isolation token, so
+# concurrent E2E runs never request the same (view, zone, name) WAPI
+# identity.
+apiVersion: recorda.infobloxnios.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord-drift-ignore
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord-drift-ignore
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-drift-ignore.sh
+spec:
+  driftDetection:
+    ignore:
+      - paths:
+          - forProvider.comment
+  forProvider:
+    name: drift-ignore-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.30
+    view: default
+    # Seed value only — comment is on the ignore list, so this is sent once
+    # at create and never compared or written again.
+    comment: Managed by Crossplane (drift-ignore seed)
+    useTtl: true
+    ttl: 300
+  providerConfigRef:
+    name: default

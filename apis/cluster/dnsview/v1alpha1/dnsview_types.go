@@ -7,6 +7,8 @@ package v1alpha1
 import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/crossplane-contrib/provider-infoblox-nios/apis/common/driftdetection"
 )
 
 // DNSViewNameServer describes one customized root name server entry (mirrors the SDK's NameServer struct).
@@ -583,6 +585,13 @@ type DNSViewObservation struct {
 // DNSViewSpec defines the desired state of DNSView.
 type DNSViewSpec struct {
 	xpv2.ClusterManagedResourceSpec `json:",inline"`
+
+	// DriftDetection configures which forProvider fields are owned
+	// outside Crossplane and how drift in those fields is detected and
+	// corrected. Absent configuration means drift detection is enabled
+	// with no ignored paths -- today's behaviour.
+	// +optional
+	DriftDetection *driftdetection.DriftDetection `json:"driftDetection,omitempty"`
 
 	// ForProvider holds the user-supplied parameters for this DNSView.
 	// +kubebuilder:validation:Required

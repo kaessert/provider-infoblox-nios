@@ -20,6 +20,7 @@ import (
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
 
 const namespacedControllerName = "namespaced-recordns.infobloxnios.m.crossplane.io"
@@ -302,10 +303,10 @@ func setupNamespacedNSRecord(mgr ctrl.Manager, o controller.Options) error {
 	}
 
 	opts := []managed.ReconcilerOption{
-		managed.WithTypedExternalConnector[*namespacedv1alpha1.NSRecord](&namespacedConnector{
+		managed.WithTypedExternalConnector[*namespacedv1alpha1.NSRecord](driftdetection.WrapConnector[*namespacedv1alpha1.NSRecord](&namespacedConnector{
 			kube:  mgr.GetClient(),
 			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-		}),
+		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.

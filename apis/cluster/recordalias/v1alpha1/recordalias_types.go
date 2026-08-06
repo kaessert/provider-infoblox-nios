@@ -7,6 +7,8 @@ package v1alpha1
 import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/crossplane-contrib/provider-infoblox-nios/apis/common/driftdetection"
 )
 
 // AliasRecordParameters are the configurable fields of a AliasRecord.
@@ -82,6 +84,13 @@ type AliasRecordObservation struct {
 // AliasRecordSpec defines the desired state of AliasRecord.
 type AliasRecordSpec struct {
 	xpv2.ClusterManagedResourceSpec `json:",inline"`
+
+	// DriftDetection configures which forProvider fields are owned
+	// outside Crossplane and how drift in those fields is detected and
+	// corrected. Absent configuration means drift detection is enabled
+	// with no ignored paths -- today's behaviour.
+	// +optional
+	DriftDetection *driftdetection.DriftDetection `json:"driftDetection,omitempty"`
 
 	// ForProvider holds the user-supplied parameters for this AliasRecord.
 	// +kubebuilder:validation:Required

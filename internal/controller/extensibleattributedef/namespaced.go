@@ -21,6 +21,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
 
 const namespacedControllerName = "namespaced-extensibleattributedef.infobloxnios.m.crossplane.io"
@@ -317,10 +318,10 @@ func setupNamespacedExtensibleAttributeDef(mgr ctrl.Manager, o controller.Option
 	}
 
 	opts := []managed.ReconcilerOption{
-		managed.WithTypedExternalConnector[*namespacedv1alpha1.ExtensibleAttributeDef](&namespacedConnector{
+		managed.WithTypedExternalConnector[*namespacedv1alpha1.ExtensibleAttributeDef](driftdetection.WrapConnector[*namespacedv1alpha1.ExtensibleAttributeDef](&namespacedConnector{
 			kube:  mgr.GetClient(),
 			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-		}),
+		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.

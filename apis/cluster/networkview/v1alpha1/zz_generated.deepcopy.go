@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	"github.com/crossplane-contrib/provider-infoblox-nios/apis/common/driftdetection"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -149,6 +150,11 @@ func (in *NetworkViewParameters) DeepCopy() *NetworkViewParameters {
 func (in *NetworkViewSpec) DeepCopyInto(out *NetworkViewSpec) {
 	*out = *in
 	in.ClusterManagedResourceSpec.DeepCopyInto(&out.ClusterManagedResourceSpec)
+	if in.DriftDetection != nil {
+		in, out := &in.DriftDetection, &out.DriftDetection
+		*out = new(driftdetection.DriftDetection)
+		(*in).DeepCopyInto(*out)
+	}
 	in.ForProvider.DeepCopyInto(&out.ForProvider)
 }
 

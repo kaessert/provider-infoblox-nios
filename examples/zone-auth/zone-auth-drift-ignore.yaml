@@ -1,0 +1,40 @@
+# ZoneAuth — spec.driftDetection ignore scenario (cluster-scoped).
+#
+# Repeats record-a-drift-ignore.yaml's scenarios 1+2 on a second resource of
+# a different shape — a zone rather than a DNS record, addressed by fqdn
+# rather than (view, zone, name) — to confirm the drift ownership mechanism
+# is not record-specific. See record-a-drift-ignore.yaml for the full
+# rationale.
+#
+# `comment` is the ignored (externally-owned) field; `disable` is the
+# sibling field patched afterwards to prove the write path. As with every
+# resource on this provider, ZoneAuth updates via a whole-object PUT, so
+# patching disable alone still sends comment on the same request.
+#
+# No crossplane.io/update-test annotation: verification is entirely in the
+# dedicated post-assert hook below.
+#
+# ${data.runToken}: see zone-auth.yaml — same per-run isolation token, so
+# concurrent E2E runs never request the same fqdn.
+apiVersion: zoneauth.infobloxnios.crossplane.io/v1alpha1
+kind: ZoneAuth
+metadata:
+  name: example-zoneauth-drift-ignore
+  annotations:
+    meta.upbound.io/example-id: zoneauth/v1alpha1/zoneauth-drift-ignore
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-auth-drift-ignore.sh
+spec:
+  driftDetection:
+    ignore:
+      - paths:
+          - forProvider.comment
+  forProvider:
+    fqdn: zoneauth-drift-${data.runToken}.com
+    view: default
+    # Seed value only — comment is on the ignore list, so this is sent once
+    # at create and never compared or written again.
+    comment: Managed by Crossplane (drift-ignore seed)
+    disable: false
+  providerConfigRef:
+    name: default

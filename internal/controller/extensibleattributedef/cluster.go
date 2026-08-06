@@ -22,6 +22,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/staleref"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
 
 const clusterControllerName = "cluster-extensibleattributedef.infobloxnios.crossplane.io"
@@ -297,10 +298,10 @@ func setupClusterExtensibleAttributeDef(mgr ctrl.Manager, o controller.Options) 
 	}
 
 	opts := []managed.ReconcilerOption{
-		managed.WithTypedExternalConnector[*clusterv1alpha1.ExtensibleAttributeDef](&clusterConnector{
+		managed.WithTypedExternalConnector[*clusterv1alpha1.ExtensibleAttributeDef](driftdetection.WrapConnector[*clusterv1alpha1.ExtensibleAttributeDef](&clusterConnector{
 			kube:  mgr.GetClient(),
 			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-		}),
+		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.

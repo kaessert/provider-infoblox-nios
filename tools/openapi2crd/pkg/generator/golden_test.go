@@ -101,3 +101,17 @@ func TestGoldenRegisterARecordNamespaced(t *testing.T) {
 	}
 	compareGolden(t, "recorda_namespaced_register.go.golden", src)
 }
+
+// TestGoldenDriftDetectionPackage pins the exact rendered output of
+// apis/common/driftdetection/driftdetection_types.go — the shared
+// spec.driftDetection type embedded (by pointer) in every generated MR
+// Spec, both scopes. Unlike the per-resource apis/common/<slug> packages,
+// this file takes no per-resource data: it is identical for every catalog
+// resource, rendered once per generate run.
+func TestGoldenDriftDetectionPackage(t *testing.T) {
+	src, err := RenderDriftDetectionPackage()
+	if err != nil {
+		t.Fatalf("RenderDriftDetectionPackage: %v", err)
+	}
+	compareGolden(t, "driftdetection_common_types.go.golden", src)
+}

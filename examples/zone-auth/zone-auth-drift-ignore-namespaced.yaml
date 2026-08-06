@@ -1,0 +1,30 @@
+# ZoneAuth — namespace-scoped variant of zone-auth-drift-ignore.yaml. See
+# that file for the full scenario rationale — this file only documents what
+# differs.
+#
+# Distinct identity: both the CR name and the fqdn below differ from
+# zone-auth-drift-ignore.yaml's so both examples can be applied to the same
+# NIOS Grid Manager at once without colliding on the same fqdn WAPI
+# identity.
+apiVersion: zoneauth.infobloxnios.m.crossplane.io/v1alpha1
+kind: ZoneAuth
+metadata:
+  name: example-zoneauth-drift-ignore-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: zoneauth/v1alpha1/zoneauth-drift-ignore
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-zone-auth-drift-ignore-namespaced.sh
+spec:
+  driftDetection:
+    ignore:
+      - paths:
+          - forProvider.comment
+  forProvider:
+    fqdn: zoneauth-drift-ns-${data.runToken}.com
+    view: default
+    comment: Managed by Crossplane (drift-ignore seed, namespaced)
+    disable: false
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

@@ -1,0 +1,36 @@
+# ARecord — spec.driftDetection warn mode scenario (cluster-scoped).
+#
+# Proves driftDetection's warn mode end to end against the live NIOS Grid
+# (scenario 3): tamper any field out of band and confirm the provider
+# reports drift (DriftDetected condition, reason Drifted) WITHOUT correcting
+# it.
+#
+# Deliberately no `ignore` list on this manifest — warn suppresses
+# correction for ANY detected drift, not just listed paths (see
+# internal/driftdetection's Observe, case ModeWarn), so tampering the
+# comment field is a sufficient probe.
+#
+# No crossplane.io/update-test annotation: verification is entirely in the
+# dedicated post-assert hook below, which needs to tamper the live Grid
+# directly over WAPI between assertions — the generic update-tester tool has
+# no such step.
+#
+# ${data.runToken}: see record-a.yaml — same per-run isolation token.
+apiVersion: recorda.infobloxnios.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord-drift-warn
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord-drift-warn
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-drift-warn.sh
+spec:
+  driftDetection:
+    mode: warn
+  forProvider:
+    name: drift-warn-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.40
+    view: default
+    comment: Managed by Crossplane (drift-warn seed)
+  providerConfigRef:
+    name: default

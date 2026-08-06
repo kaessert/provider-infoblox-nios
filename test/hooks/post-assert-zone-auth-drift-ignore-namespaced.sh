@@ -1,0 +1,1 @@
+post-assert-zone-auth-drift-ignore.sh
