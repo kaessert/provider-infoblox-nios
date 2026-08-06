@@ -69,7 +69,7 @@ FAIL=0
 TAMPERED_COMMENT="drift-owner-set-$(date +%s)"
 
 # --- Step 1: confirm the seed reached the Grid. ---
-API_COMMENT="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT="$(drift_wapi_get_field "$REF" '.comment' 'comment,disable')"
 echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): seed comment spec='${SEED_COMMENT}' wapi='${API_COMMENT}'"
 if [ "$API_COMMENT" != "$SEED_COMMENT" ]; then
     echo "ERROR: post-assert-zone-auth-drift-ignore (${SCOPE}): seed comment never reached the Grid (spec='${SEED_COMMENT}', wapi='${API_COMMENT}')" >&2
@@ -86,7 +86,7 @@ drift_sleep_reconciles 4
 ATPROVIDER_COMMENT="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
 SYNCED_STATUS="$(drift_condition_status "$RESOURCE" "$NAME" Synced "${NS_ARGS[@]}")"
 DRIFT_REASON="$(drift_condition_reason "$RESOURCE" "$NAME" DriftDetected "${NS_ARGS[@]}")"
-API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment' 'comment,disable')"
 
 echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): after tamper — atProvider.comment='${ATPROVIDER_COMMENT}' Synced='${SYNCED_STATUS}' DriftDetected.reason='${DRIFT_REASON}' wapi.comment='${API_COMMENT_AFTER}'"
 
@@ -116,8 +116,8 @@ drift_sleep_reconciles 6
 
 ATPROVIDER_DISABLE="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.disable' "${NS_ARGS[@]}")"
 ATPROVIDER_COMMENT_FINAL="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
-API_DISABLE_FINAL="$(drift_wapi_get_field "$REF" '.disable')"
-API_COMMENT_FINAL="$(drift_wapi_get_field "$REF" '.comment')"
+API_DISABLE_FINAL="$(drift_wapi_get_field "$REF" '.disable' 'comment,disable')"
+API_COMMENT_FINAL="$(drift_wapi_get_field "$REF" '.comment' 'comment,disable')"
 
 echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): after write-path patch — atProvider.disable='${ATPROVIDER_DISABLE}' atProvider.comment='${ATPROVIDER_COMMENT_FINAL}' wapi.disable='${API_DISABLE_FINAL}' wapi.comment='${API_COMMENT_FINAL}'"
 

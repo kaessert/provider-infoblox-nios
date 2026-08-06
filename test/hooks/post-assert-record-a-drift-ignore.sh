@@ -74,7 +74,7 @@ FAIL=0
 TAMPERED_COMMENT="drift-owner-set-$(date +%s)"
 
 # --- Step 1: confirm the seed reached the Grid. ---
-API_COMMENT="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT="$(drift_wapi_get_field "$REF" '.comment' 'comment,ttl')"
 echo "==> post-assert-record-a-drift-ignore (${SCOPE}): seed comment spec='${SEED_COMMENT}' wapi='${API_COMMENT}'"
 if [ "$API_COMMENT" != "$SEED_COMMENT" ]; then
     echo "ERROR: post-assert-record-a-drift-ignore (${SCOPE}): seed comment never reached the Grid (spec='${SEED_COMMENT}', wapi='${API_COMMENT}')" >&2
@@ -91,7 +91,7 @@ drift_sleep_reconciles 4
 ATPROVIDER_COMMENT="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
 SYNCED_STATUS="$(drift_condition_status "$RESOURCE" "$NAME" Synced "${NS_ARGS[@]}")"
 DRIFT_REASON="$(drift_condition_reason "$RESOURCE" "$NAME" DriftDetected "${NS_ARGS[@]}")"
-API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment' 'comment,ttl')"
 
 echo "==> post-assert-record-a-drift-ignore (${SCOPE}): after tamper — atProvider.comment='${ATPROVIDER_COMMENT}' Synced='${SYNCED_STATUS}' DriftDetected.reason='${DRIFT_REASON}' wapi.comment='${API_COMMENT_AFTER}'"
 
@@ -125,8 +125,8 @@ drift_sleep_reconciles 6
 
 ATPROVIDER_TTL="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.ttl' "${NS_ARGS[@]}")"
 ATPROVIDER_COMMENT_FINAL="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
-API_TTL_FINAL="$(drift_wapi_get_field "$REF" '.ttl')"
-API_COMMENT_FINAL="$(drift_wapi_get_field "$REF" '.comment')"
+API_TTL_FINAL="$(drift_wapi_get_field "$REF" '.ttl' 'comment,ttl')"
+API_COMMENT_FINAL="$(drift_wapi_get_field "$REF" '.comment' 'comment,ttl')"
 
 echo "==> post-assert-record-a-drift-ignore (${SCOPE}): after write-path patch — atProvider.ttl='${ATPROVIDER_TTL}' atProvider.comment='${ATPROVIDER_COMMENT_FINAL}' wapi.ttl='${API_TTL_FINAL}' wapi.comment='${API_COMMENT_FINAL}'"
 

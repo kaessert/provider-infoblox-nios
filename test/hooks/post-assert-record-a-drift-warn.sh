@@ -64,7 +64,7 @@ fi
 FAIL=0
 TAMPERED_COMMENT="drift-owner-set-$(date +%s)"
 
-API_COMMENT="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT="$(drift_wapi_get_field "$REF" '.comment' 'comment')"
 echo "==> post-assert-record-a-drift-warn (${SCOPE}): seed comment spec='${SEED_COMMENT}' wapi='${API_COMMENT}'"
 if [ "$API_COMMENT" != "$SEED_COMMENT" ]; then
     echo "ERROR: post-assert-record-a-drift-warn (${SCOPE}): seed comment never reached the Grid (spec='${SEED_COMMENT}', wapi='${API_COMMENT}')" >&2
@@ -79,7 +79,7 @@ drift_sleep_reconciles 4
 ATPROVIDER_COMMENT="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
 SYNCED_STATUS="$(drift_condition_status "$RESOURCE" "$NAME" Synced "${NS_ARGS[@]}")"
 DRIFT_REASON="$(drift_condition_reason "$RESOURCE" "$NAME" DriftDetected "${NS_ARGS[@]}")"
-API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment')"
+API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment' 'comment')"
 
 echo "==> post-assert-record-a-drift-warn (${SCOPE}): after tamper — atProvider.comment='${ATPROVIDER_COMMENT}' Synced='${SYNCED_STATUS}' DriftDetected.reason='${DRIFT_REASON}' wapi.comment='${API_COMMENT_AFTER}'"
 

@@ -61,12 +61,20 @@ drift_wapi_creds() {
 
 # drift_wapi_get_json GETs a WAPI object by its _ref (the same string stored
 # in the crossplane.io/external-name annotation) and prints the raw JSON
-# body. Retries a bounded number of times on a transient 5xx, mirroring
-# test/setup.sh's tolerance of a flaky Grid Manager response.
+# body. WAPI omits every field from a GET response unless it is explicitly
+# named in _return_fields (confirmed elsewhere in this repo — see
+# internal/controller/zonedelegated's controller_test.go and
+# test/e2e/reap.sh's build_return_fields) — _ref itself is the only
+# exception, always returned by default. $2, if given, is a comma-separated
+# list of extra fields to request (e.g. "comment,ttl"). Retries a bounded
+# number of times on a transient 5xx, mirroring test/setup.sh's tolerance of
+# a flaky Grid Manager response.
 drift_wapi_get_json() {
-    local ref="$1" tries=5 attempt status body
+    local ref="$1" fields="${2:-}" tries=5 attempt status body url
+    url="${DRIFT_WAPI_BASE}/${ref}"
+    [ -n "$fields" ] && url="${url}?_return_fields=${fields}"
     for ((attempt = 1; attempt <= tries; attempt++)); do
-        body="$(curl -sk -u "${DRIFT_WAPI_USER}:${DRIFT_WAPI_PASS}" -w $'\n%{http_code}' "${DRIFT_WAPI_BASE}/${ref}")"
+        body="$(curl -sk -u "${DRIFT_WAPI_USER}:${DRIFT_WAPI_PASS}" -w $'\n%{http_code}' "$url")"
         status="${body##*$'\n'}"
         body="${body%$'\n'*}"
         if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
@@ -82,11 +90,13 @@ drift_wapi_get_json() {
     done
 }
 
-# drift_wapi_get_field GETs a WAPI object by ref and extracts one field with
-# jq (e.g. '.comment', '.ttl').
+# drift_wapi_get_field GETs a WAPI object by ref, requesting $3 (comma-joined
+# field list — pass at least the field(s) $2 reads, since WAPI omits
+# anything not explicitly requested) and extracts one field with jq (e.g.
+# '.comment', '.ttl').
 drift_wapi_get_field() {
-    local ref="$1" field="$2"
-    drift_wapi_get_json "$ref" | jq -r "$field"
+    local ref="$1" jq_filter="$2" fields="$3"
+    drift_wapi_get_json "$ref" "$fields" | jq -r "$jq_filter"
 }
 
 # drift_wapi_put mutates a WAPI object directly, bypassing the controller —
