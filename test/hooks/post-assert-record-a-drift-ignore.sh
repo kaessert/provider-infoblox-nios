@@ -193,17 +193,27 @@ EOF
             sleep 5
         done
 
-        EXTNAME="$(drift_get "$RESOURCE" "$REJECT_NAME" '.metadata.annotations.crossplane\.io/external-name')"
-
         if [ "$REJECTED" -ne 1 ]; then
             echo "ERROR: post-assert-record-a-drift-ignore: forProvider.${FIELD} under ignore was NOT refused — Synced='${SYNCED}' message='${MSG}'" >&2
             FAIL=1
         else
             echo "==> post-assert-record-a-drift-ignore: forProvider.${FIELD} correctly refused — Synced='${SYNCED}' message='${MSG}'"
         fi
-        if [ -n "$EXTNAME" ]; then
-            echo "ERROR: post-assert-record-a-drift-ignore: forProvider.${FIELD}: external-name='${EXTNAME}' was set — a WAPI object was created despite the ineligible ignore path" >&2
+
+        # Confirm no WAPI write by searching the Grid directly, rather than
+        # trusting the CR's crossplane.io/external-name annotation: that
+        # annotation is defaulted to the CR's own metadata.name by
+        # crossplane-runtime's NameAsExternalName initializer, which runs
+        # BEFORE Connect/Observe/Create on every reconcile regardless of
+        # whether driftDetection ever validates — so its presence proves
+        # nothing about whether a WAPI object exists.
+        WAPI_MATCHES="$(curl -sk -u "${DRIFT_WAPI_USER}:${DRIFT_WAPI_PASS}" -G "${DRIFT_WAPI_BASE}/record:a" \
+            --data-urlencode "name=reject-${FIELD}.example.com" --data-urlencode "view=default" | jq -r 'length')"
+        if [ "$WAPI_MATCHES" != "0" ]; then
+            echo "ERROR: post-assert-record-a-drift-ignore: forProvider.${FIELD}: found ${WAPI_MATCHES} WAPI record:a object(s) named reject-${FIELD}.example.com — a WAPI object was created despite the ineligible ignore path" >&2
             FAIL=1
+        else
+            echo "==> post-assert-record-a-drift-ignore: forProvider.${FIELD}: confirmed via direct WAPI search — no record:a object named reject-${FIELD}.example.com exists"
         fi
 
         "${KUBECTL}" delete "$RESOURCE" "$REJECT_NAME" --wait=true --timeout=60s 2>/dev/null || true
