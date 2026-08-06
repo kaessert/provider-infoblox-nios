@@ -7,6 +7,8 @@ package v1alpha1
 import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/crossplane-contrib/provider-infoblox-nios/apis/common/driftdetection"
 )
 
 // DTCLBDNPoolLink identifies one DTCPool member of a DTCLBDN along with its match priority ratio (mirrors the SDK's DtcPoolLink struct).
@@ -134,6 +136,13 @@ type DTCLBDNObservation struct {
 // DTCLBDNSpec defines the desired state of DTCLBDN.
 type DTCLBDNSpec struct {
 	xpv2.ClusterManagedResourceSpec `json:",inline"`
+
+	// DriftDetection configures which forProvider fields are owned
+	// outside Crossplane and how drift in those fields is detected and
+	// corrected. Absent configuration means drift detection is enabled
+	// with no ignored paths -- today's behaviour.
+	// +optional
+	DriftDetection *driftdetection.DriftDetection `json:"driftDetection,omitempty"`
 
 	// ForProvider holds the user-supplied parameters for this DTCLBDN.
 	// +kubebuilder:validation:Required

@@ -9,6 +9,7 @@
 package v1alpha1
 
 import (
+	"github.com/crossplane-contrib/provider-infoblox-nios/apis/common/driftdetection"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -1512,6 +1513,11 @@ func (in *DNSViewSortlistEntry) DeepCopy() *DNSViewSortlistEntry {
 func (in *DNSViewSpec) DeepCopyInto(out *DNSViewSpec) {
 	*out = *in
 	in.ClusterManagedResourceSpec.DeepCopyInto(&out.ClusterManagedResourceSpec)
+	if in.DriftDetection != nil {
+		in, out := &in.DriftDetection, &out.DriftDetection
+		*out = new(driftdetection.DriftDetection)
+		(*in).DeepCopyInto(*out)
+	}
 	in.ForProvider.DeepCopyInto(&out.ForProvider)
 }
 

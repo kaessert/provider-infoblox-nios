@@ -83,6 +83,15 @@ func runGenerate(args []string) error {
 		fmt.Fprintf(os.Stdout, "openapi2crd: generated types for %s in %s\n", rd.Kind, root) //nolint:errcheck
 	}
 
+	// apis/common/driftdetection/driftdetection_types.go is provider-wide,
+	// not per-resource — every scope package's Spec imports it, so it is
+	// (re)written unconditionally, even when --resource narrows the run to
+	// a single catalog entry.
+	if err := generator.GenerateDriftDetectionPackage(root); err != nil {
+		return fmt.Errorf("generate driftdetection package: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "openapi2crd: generated driftdetection package in %s\n", root) //nolint:errcheck
+
 	// apis/common/referencehelpers/zz_referencehelpers.go is a single,
 	// static, non-resource-specific file (the generic ExtractField
 	// cross-resource reference extractor) — rewrite it unconditionally on
