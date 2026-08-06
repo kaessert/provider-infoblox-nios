@@ -1025,6 +1025,33 @@ check-conventions: ## Detect convention violations (test names, error wrapping, 
 
 .PHONY: check-conventions
 
+# ====================================================================================
+# Publishing
+#
+# The crossplane/build xpkg machinery publishes via `crossplane xpkg push`,
+# which authenticates through the Docker keychain (~/.docker/config.json). We
+# publish with the `up` CLI instead so CI can authenticate with an Upbound API
+# token -- the same UP_API_TOKEN / UP_ORG wiring the Upbound configuration
+# packages use, and because `up xpkg push --create` will create the registry
+# repository on first push.
+#
+# NOTE: the `up login` performed by upbound/action-up is NOT what authenticates
+# the push. UP_API_TOKEN is a robot token, and up's RegistryKeychain falls back
+# to the Docker keychain for robot tokens ("robot tokens cannot be used for
+# registry login 401 Unauthorized"), so CI must additionally `docker login`
+# to xpkg.upbound.io with UP_ROBOT_ID as the username. See the "Login to xpkg
+# with robot" step in .github/workflows/publish-provider-package.yaml.
+UP ?= up
+
+xpkg.push.up: ## Push the built xpkg to xpkg.upbound.io using the up CLI.
+	@$(INFO) Pushing package $(XPKG_REG_ORGS)/$(PROJECT_NAME):$(VERSION)
+	@$(UP) xpkg push --create \
+		$(foreach p,$(XPKG_LINUX_PLATFORMS),-f $(XPKG_OUTPUT_DIR)/$(p)/$(PROJECT_NAME)-$(VERSION).xpkg) \
+		$(XPKG_REG_ORGS)/$(PROJECT_NAME):$(VERSION) || $(FAIL)
+	@$(OK) Pushed package $(XPKG_REG_ORGS)/$(PROJECT_NAME):$(VERSION)
+
+.PHONY: xpkg.push.up
+
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration
 # override lets common.mk's no-op e2e.run apply, so `make e2e.<resource>`
