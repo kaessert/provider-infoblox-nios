@@ -3,7 +3,6 @@
 /_output
 cover.out
 cov.out
-.golangci-cache/
 /provider
 /vendor
 /.vendor-new
@@ -18,3 +17,10 @@ cov.out
 # Scratch artifacts from test/e2e/identity-prereq-live-probe.sh
 *.go.orig
 identity-prereq-probe*.kubeconfig
+
+# Per-worktree golangci-lint issue cache. Never committed: convention 0105
+# isolates it inside each ant's own worktree, but a caller that skips the
+# isolation export (a human running `make lint` by hand, or the V.C75
+# fallback with WORKTREE unset) writes it here instead.
+.golangci-lint-cache/
+.golangci-lint-cache-verify/
