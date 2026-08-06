@@ -33,13 +33,13 @@
 // resolves identity from its own natural key: name, view, and nameserver
 // are now all immutable for the object's lifetime (CEL self==oldSelf on
 // all three). name and view were always server-enforced immutable
-// (live-verified ADR-IN-0004: `supports=rws`, no `u` — WAPI itself
+// (verified against the live API: `supports=rws`, no `u` — WAPI itself
 // rejects a PUT that changes either); nameserver is provider-imposed
 // immutable — WAPI genuinely allows updating it in place, but it was the
 // one mutable component of the tuple, so freezing it at the CRD/CEL layer
 // was what closed this resource's ownership-verification gap. Those same
 // three fields are exactly the tuple WAPI computes the object's `_ref`
-// from (live-verified ADR-IN-0004). Because none of the three can be
+// from (verified against the live API). Because none of the three can be
 // mutated into matching a different object's tuple, a Grid object that
 // matches this resource's (name, view, nameserver) IS this resource's
 // object, not merely an object that currently happens to look like it —

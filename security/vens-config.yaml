@@ -1,5 +1,4 @@
 # vens configuration — contextual risk scoring for supply chain security
-# Convention 0104: Supply Chain Security Artifacts
 #
 # This file describes the provider's deployment context so vens can score
 # CVEs using OWASP Risk Rating instead of just generic CVSS.

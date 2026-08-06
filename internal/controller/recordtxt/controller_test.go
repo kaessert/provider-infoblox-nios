@@ -868,7 +868,7 @@ func TestClusterUpdateSuccess(t *testing.T) {
 	}
 }
 
-// TestClusterUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// TestClusterUpdatePrerequisiteAutoCreates verifies the
 // unconditional Update guard: when the identity extensible attribute
 // definition is absent but the configured credential can create one, the
 // probe auto-creates it before the mutating PUT, and the update proceeds
@@ -910,8 +910,8 @@ func TestClusterUpdatePrerequisiteAutoCreates(t *testing.T) {
 	}
 }
 
-// TestClusterUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
-// §6's unconditional Update guard on the refusal side: when the identity
+// TestClusterUpdatePrerequisiteRefusesUncreatable verifies the
+// unconditional Update guard on the refusal side: when the identity
 // extensible attribute definition is absent and the configured credential
 // cannot create one, Update returns the typed PrerequisiteError (not a raw
 // wrapped WAPI 400) and issues no mutating call — the object is left
@@ -1542,7 +1542,7 @@ func TestNamespacedUpdateSuccess(t *testing.T) {
 	}
 }
 
-// TestNamespacedUpdatePrerequisiteAutoCreates verifies ADR-IN-0006 §6's
+// TestNamespacedUpdatePrerequisiteAutoCreates verifies the
 // unconditional Update guard: when the identity extensible attribute
 // definition is absent but the configured credential can create one, the
 // probe auto-creates it before the mutating PUT, and the update proceeds
@@ -1584,8 +1584,8 @@ func TestNamespacedUpdatePrerequisiteAutoCreates(t *testing.T) {
 	}
 }
 
-// TestNamespacedUpdatePrerequisiteRefusesUncreatable verifies ADR-IN-0006
-// §6's unconditional Update guard on the refusal side: when the identity
+// TestNamespacedUpdatePrerequisiteRefusesUncreatable verifies the
+// unconditional Update guard on the refusal side: when the identity
 // extensible attribute definition is absent and the configured credential
 // cannot create one, Update returns the typed PrerequisiteError (not a raw
 // wrapped WAPI 400) and issues no mutating call — the object is left

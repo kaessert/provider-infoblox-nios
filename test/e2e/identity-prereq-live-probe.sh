@@ -19,8 +19,8 @@
 #   4. Recreating the definition clears the refusal on the next reconcile,
 #      within the provider's cached-verdict TTL, with no pod restart.
 #
-# It additionally exercises the two remaining call sites from
-# ADR-IN-0006 §4 that the four properties above never happen to reach:
+# It additionally exercises the two remaining call sites in the identity
+# ladder that the four properties above never happen to reach:
 #
 #   5. Create()'s unconditional guard (cluster.go:199 / namespaced.go)
 #      refusing a brand-new object. This is NOT reachable by simply
@@ -628,8 +628,8 @@ wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" clu
 wait_synced arecord.recorda.infobloxnios.m.crossplane.io "idp-s1-ns-${RUN_TOKEN}" namespaced True
 
 # Pause both objects the moment they converge. Update() calls
-# ensureIdentityPrerequisite unconditionally on every reconcile (ADR-
-# IN-0006 §4), so an unpaused, still-reconciling object keeps refreshing
+# ensureIdentityPrerequisite unconditionally on every reconcile, so an
+# unpaused, still-reconciling object keeps refreshing
 # the shared Prober's cached POSITIVE verdict on every poll interval —
 # live-verified: a fixed sleep timed from "scenario 1 converged" was not
 # long enough to observe the cache actually expire, because these objects
@@ -728,8 +728,8 @@ curl -sk -u "${INFOBLOX_USER}:${INFOBLOX_PASS}" "${WAPI_BASE}/record:a?${raw}" -
 # The part that is NOT safe, live-verified in the same run this scenario
 # performs: once the definition is recreated (below), the identity-EA
 # search starts succeeding again but matches zero objects, because
-# deleting the definition also wiped every object's stamp (ADR-IN-0006
-# §4) — recreating the definition does not restore old stamp values.
+# deleting the definition also wiped every object's stamp —
+# recreating the definition does not restore old stamp values.
 # Observe() reads that zero-match search as "genuinely absent" (no
 # error), so the reconciler's WasDeleted branch skips Delete() entirely
 # and removes the finalizer — the Kubernetes object disappears cleanly,
@@ -747,7 +747,7 @@ deletion_ts="$(${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-
 wait_synced arecord.recorda.infobloxnios.crossplane.io "idp-s1-${RUN_TOKEN}" cluster False 60
 assert_condition_prefix "scenario 6 (in-flight delete, blocked by Observe)" "${LAST_SYNCED_MESSAGE}" "observe failed: "
 ${KUBECTL} get arecord.recorda.infobloxnios.crossplane.io/idp-s1-${RUN_TOKEN} >/dev/null 2>&1 || {
-  echo "FATAL: idp-s1 disappeared from Kubernetes despite Observe() refusing — this would mean the delete completed (or the finalizer was dropped) without ever proving ownership, exactly the silent-loss failure mode ADR-IN-0006 §5 exists to close" >&2
+  echo "FATAL: idp-s1 disappeared from Kubernetes despite Observe() refusing — this would mean the delete completed (or the finalizer was dropped) without ever proving ownership, exactly the silent-loss failure mode the identity ladder exists to close" >&2
   exit 1
 }
 found="$(curl_wapi "${INFOBLOX_USER}" "${INFOBLOX_PASS}" GET "record:a?name=idp-s1-${RUN_TOKEN}.example.com")"
