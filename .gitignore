@@ -2,6 +2,9 @@
 /.work
 /_output
 cover.out
+cov.out
+.golangci-cache/
+/provider
 /vendor
 /.vendor-new
 .vscode
