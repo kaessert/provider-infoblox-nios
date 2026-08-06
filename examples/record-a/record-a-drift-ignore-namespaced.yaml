@@ -1,0 +1,37 @@
+# ARecord — namespace-scoped variant of record-a-drift-ignore.yaml. See that
+# file for the full scenario rationale — this file only documents what
+# differs.
+#
+# Distinct identity: both the CR name and the record name below differ from
+# record-a-drift-ignore.yaml's so both examples can be applied to the same
+# NIOS Grid Manager at once without colliding on the same (view, zone, name)
+# WAPI identity.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+apiVersion: recorda.infobloxnios.m.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord-drift-ignore-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord-drift-ignore
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-drift-ignore-namespaced.sh
+spec:
+  driftDetection:
+    ignore:
+      - paths:
+          - forProvider.comment
+  forProvider:
+    name: drift-ignore-ns-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.31
+    view: default
+    comment: Managed by Crossplane (drift-ignore seed, namespaced)
+    useTtl: true
+    ttl: 300
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

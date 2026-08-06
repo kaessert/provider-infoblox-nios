@@ -1,0 +1,28 @@
+# ARecord — namespace-scoped variant of record-a-drift-warn.yaml. See that
+# file for the full scenario rationale — this file only documents what
+# differs.
+#
+# Distinct identity: both the CR name and the record name below differ from
+# record-a-drift-warn.yaml's so both examples can be applied to the same
+# NIOS Grid Manager at once without colliding on the same (view, zone, name)
+# WAPI identity.
+apiVersion: recorda.infobloxnios.m.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord-drift-warn-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord-drift-warn
+    uptest.upbound.io/timeout: "120"
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-drift-warn-namespaced.sh
+spec:
+  driftDetection:
+    mode: warn
+  forProvider:
+    name: drift-warn-ns-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.41
+    view: default
+    comment: Managed by Crossplane (drift-warn seed, namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
