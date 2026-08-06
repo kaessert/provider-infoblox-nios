@@ -978,6 +978,53 @@ test.tools: ## Run unit tests for tools/*/ modules, root-module tools/ packages,
 # blocks review the same way a broken provider test does.
 reviewable: test.tools
 
+# Fold check-conventions into the documented DoD gate so a convention
+# violation blocks review the same way a failing test does.
+reviewable: check-conventions
+
+# ====================================================================================
+# Convention Checks (test naming, kubectl env override, and error-wrapping
+# style — enforced here so a violation fails the build, not just review)
+
+check-conventions: ## Detect convention violations (test names, error wrapping, kubectl usage)
+	@# PascalCase test names: no underscores after "Test"
+	@! grep -rn 'func Test.*_' --include='*_test.go' . 2>/dev/null || \
+	  (echo "FAIL: test names must use PascalCase (no underscores)" && exit 1)
+	@# KUBECTL env var: test scripts must use $${KUBECTL:-kubectl}, never a bare
+	@# `kubectl` invocation. Three passes over each test script keep this to
+	@# genuine invocations: comment lines are blanked (not deleted, so line
+	@# numbers stay accurate), double-quoted string literals are stripped (so
+	@# prose inside a quoted message like `assert_true "... kubectl" "$$rc"`
+	@# can't match), and a word boundary is required before `kubectl` (so
+	@# `_kubectl` inside a longer identifier, e.g. `__stub_kubectl_empty`,
+	@# doesn't match). A `KUBECTL:-kubectl` backstop catches the one shape
+	@# quote-stripping and the word boundary both miss: an unquoted
+	@# `KUBECTL=$${KUBECTL:-kubectl}` assignment.
+	@bad=0; \
+	for f in $$(find test/ -name '*.sh' 2>/dev/null); do \
+	  m=$$(sed -E 's/^[[:space:]]*#.*$$//' "$$f" | sed -E 's/"[^"]*"//g' \
+	    | grep -nE '(^|[^[:alnum:]_$$])kubectl' | grep -v 'KUBECTL:-kubectl'); \
+	  [ -z "$$m" ] && continue; \
+	  for ln in $$(echo "$$m" | cut -d: -f1); do \
+	    echo "$$f:$$ln:$$(sed -n "$${ln}p" "$$f")"; \
+	    bad=1; \
+	  done; \
+	done; \
+	if [ "$$bad" -eq 1 ]; then echo "FAIL: use \$${KUBECTL:-kubectl} instead of bare kubectl"; exit 1; fi
+	@# Error wrapping: no fmt.Errorf in production code. Comment lines are
+	@# filtered out so the controllers' own "never fmt.Errorf" doc comments
+	@# do not trip the check that documents them.
+	@! grep -rn 'fmt\.Errorf' internal/ --include='*.go' 2>/dev/null \
+	    | grep -v '_test.go' \
+	    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || \
+	  (echo "FAIL: use errors.Wrap/Errorf from crossplane-runtime, not fmt.Errorf" && exit 1)
+	@# No bare stdlib "errors" import (match import lines only, not JSON struct tags).
+	@! grep -rn '^\s*"errors"\s*$$' internal/ --include='*.go' 2>/dev/null | grep -v '_test.go' || \
+	  (echo "FAIL: use crossplane-runtime/v2/pkg/errors, not stdlib \"errors\"" && exit 1)
+	@echo "check-conventions: all checks passed"
+
+.PHONY: check-conventions
+
 # Legacy integration tests (disabled — the provider now uses uptest/chainsaw
 # for E2E via uptest.mk, above). Removing the e2e.run: test-integration
 # override lets common.mk's no-op e2e.run apply, so `make e2e.<resource>`

@@ -9,130 +9,107 @@ on:
   workflow_dispatch: {}
 
 env:
-  # Common versions
-  GO_VERSION: '1.25.12'
+  # Keep in sync with GOLANGCILINT_VERSION in the Makefile.
   GOLANGCI_VERSION: 'v2.12.2'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
 
-  # Common users. We can't run a step 'if secrets.XXX != ""' but we can run a
-  # step 'if env.XXX' != ""', so we copy these to succinctly test whether
-  # credentials have been provided before trying to run steps that need them.
-  UPBOUND_MARKETPLACE_PUSH_ROBOT_USR: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-  UP_ORG: ${{ secrets.UP_ORG }}
 jobs:
   detect-noop:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     outputs:
       noop: ${{ steps.noop.outputs.should_skip }}
     steps:
+      # NOTE: no github_token here, deliberately. Passing one makes the action
+      # call the API for duplicate detection, which fails with "Resource not
+      # accessible by integration" under a restricted GITHUB_TOKEN -- notably
+      # on Dependabot PRs, where it took down every downstream job. This
+      # matches provider-upjet-aws, which omits the token for the same reason.
       - name: Detect No-op Changes
         id: noop
-        uses: fkirc/skip-duplicate-actions@v5.3.1
+        uses: fkirc/skip-duplicate-actions@f75f66ce1886f00957d99748a42c724f4330bdcf # v5.3.1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
           paths_ignore: '["**.md", "**.png", "**.jpg"]'
           do_not_skip: '["workflow_dispatch", "schedule", "push"]'
 
-
   lint:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: true
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-lint-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-lint-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
+      - name: Vendor Dependencies
+        run: make vendor vendor.check
 
       # We could run 'make lint' but we prefer this action because it leaves
       # 'annotations' (i.e. it comments on PRs to point out linter violations).
       - name: Lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_VERSION }}
 
   check-diff:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: true
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-check-diff-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-check-diff-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
+      - name: Vendor Dependencies
+        run: make vendor vendor.check
 
       - name: Check Diff
         id: check-diff
         run: |
-          mkdir _output
+          mkdir -p _output
           make check-diff
 
       - name: Show diff
         if: failure() && steps.check-diff.outcome == 'failure'
         run: git diff
 
-  unit-tests:
-    runs-on: ubuntu-22.04
+  check-conventions:
+    runs-on: ubuntu-latest
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          submodules: true
+
+      # Repo-specific static checks from AGENTS.md (test naming, KUBECTL usage,
+      # error wrapping, stdlib errors import). Pure grep -- no toolchain needed.
+      - name: Check Conventions
+        run: make check-conventions
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: detect-noop
+    if: needs.detect-noop.outputs.noop != 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: true
 
@@ -140,76 +117,48 @@ jobs:
         run: git fetch --prune --unshallow
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-unit-tests-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-unit-tests-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
+      - name: Vendor Dependencies
+        run: make vendor vendor.check
 
       - name: Run Unit Tests
         run: make -j2 test
 
       - name: Run Tool Module Tests
-        # Modules under tools/ carry their own go.mod and sit outside
-        # GO_SUBDIRS, so `make test` above never reaches them. This step is
-        # DELIBERATE, not template drift -- do not delete it during a
-        # re-stamp. `make reviewable` depends on test.tools for the same
-        # reason, so a broken tool-module test blocks review the same way a
-        # broken provider test does.
         run: make test.tools
 
-      - name: Publish Unit Test Coverage
-        uses: codecov/codecov-action@v3
-        with:
-          flags: unittests
-          file: _output/tests/linux_amd64/coverage.txt
-
-  publish-artifacts:
-    runs-on: ubuntu-22.04
+  # Builds the provider xpkg and installs it into a kind cluster. This proves
+  # the provider is buildable and deployable on every PR *without* talking to
+  # the Infobloxnios API. Live E2E is gated behind the /test-examples comment trigger
+  # in uptest-trigger.yaml, because it creates billable Infobloxnios resources.
+  local-deploy:
+    runs-on: ubuntu-latest
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
+      - name: Cleanup Disk
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          large-packages: false
+          swap-storage: false
+
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
         with:
           platforms: all
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
         with:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
           install: true
 
-      - name: Login to Upbound
-        uses: docker/login-action@v1
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
-        with:
-          registry: xpkg.upbound.io
-          username: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-          password: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_PSW }}
-
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: true
 
@@ -217,44 +166,32 @@ jobs:
         run: git fetch --prune --unshallow
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-publish-artifacts-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-publish-artifacts-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
+      - name: Vendor Dependencies
+        run: make vendor vendor.check
 
       - name: Build Artifacts
-        run: make -j2 build.all
+        run: make -j2 build
         env:
           # We're using docker buildx, which doesn't actually load the images it
           # builds by default. Specifying --load does so.
           BUILD_ARGS: "--load"
 
-      - name: Publish Artifacts to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: output
-          path: _output/**
+      # `local-deploy` on its own only deploys the xpkg -- it is the
+      # UPTEST_LOCAL_DEPLOY_TARGET hook -- so bring the control plane up first.
+      - name: Deploy Locally Built Provider Package
+        run: make controlplane.up local-deploy
 
-      - name: Publish Artifacts
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
-        run: make publish BRANCH_NAME=${GITHUB_REF##*/}
+      - name: Collect Cluster Dump
+        if: failure()
+        run: make controlplane.dump
+
+      - name: Upload Cluster Dump
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: controlplane-dump-local-deploy
+          path: ./_output/controlplane-dump
