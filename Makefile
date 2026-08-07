@@ -337,7 +337,13 @@ UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/reco
 # per-run-token fqdn in the built-in "default" view, distinct from both the
 # baseline zone-auth.yaml zone and the "example.com" parent zone
 # test/setup.sh pre-provisions for the DNS record examples.
-UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml,examples/zone-auth/zone-auth-drift-ignore.yaml,examples/zone-auth/zone-auth-drift-ignore-namespaced.yaml
+# UPTEST_MANIFESTS_ZONE_AUTH_BASE is the baseline pair only (no drift
+# fixtures) — kept separate so other targets that bundle ZoneAuth in as a
+# prerequisite (e.g. e2e.range-template below) pull in only what they
+# actually need, instead of inheriting drift-detection coverage that
+# belongs to ZoneAuth itself.
+UPTEST_MANIFESTS_ZONE_AUTH_BASE := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
+UPTEST_MANIFESTS_ZONE_AUTH := $(UPTEST_MANIFESTS_ZONE_AUTH_BASE),examples/zone-auth/zone-auth-drift-ignore.yaml,examples/zone-auth/zone-auth-drift-ignore-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 
@@ -610,7 +616,7 @@ e2e.network-view: e2e
 e2e.network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK)
 e2e.network: e2e
 
-e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
+e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH_BASE)
 e2e.range-template: e2e
 
 e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
