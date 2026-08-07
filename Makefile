@@ -1060,7 +1060,7 @@ check-conventions: ## Detect convention violations (test names, error wrapping, 
 # to the Docker keychain for robot tokens ("robot tokens cannot be used for
 # registry login 401 Unauthorized"), so CI must additionally `docker login`
 # to xpkg.upbound.io with UP_ROBOT_ID as the username. See the "Login to xpkg
-# with robot" step in .github/workflows/publish-provider-package.yaml.
+# with robot" step in .github/workflows/release.yaml.
 UP ?= up
 
 xpkg.push.up: ## Push the built xpkg to xpkg.upbound.io using the up CLI.
