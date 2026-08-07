@@ -282,7 +282,18 @@ UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,example
 # the reference-resolver path in one run.
 UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml,examples/range/network-view-ref-prereq.yaml,examples/range/range-ref-network-prereq.yaml,examples/range/range-ref.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
-UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml
+# The four drift-detection variants (drift-ignore, drift-ignore-namespaced,
+# drift-warn, drift-warn-namespaced) prove spec.driftDetection's ignore and
+# warn modes end to end against the live NIOS Grid — a dedicated post-assert
+# hook per variant tampers the Grid directly over WAPI and asserts the
+# controller's convergence behavior, which the generic update-tester tool
+# cannot exercise. Folded into this same variable (not a separate e2e
+# target) so `make e2e.record-a` proves both the baseline CRUD path (the
+# first two manifests) and drift convergence in one run. No prerequisite
+# bundling needed: each variant uses the built-in "default" view and a
+# per-run isolation token, so it needs nothing test/setup.sh doesn't already
+# provision for the baseline pair.
+UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml,examples/record-a/record-a-drift-ignore.yaml,examples/record-a/record-a-drift-ignore-namespaced.yaml,examples/record-a/record-a-drift-warn.yaml,examples/record-a/record-a-drift-warn-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
 # canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
@@ -317,7 +328,16 @@ UPTEST_MANIFESTS_RECORD_NS := examples/record-ns/record-ns.yaml,examples/record-
 UPTEST_MANIFESTS_RECORD_PTR := examples/record-ptr/record-ptr.yaml,examples/record-ptr/record-ptr-namespaced.yaml,examples/record-ptr/arecord-ptr-ref-prereq.yaml,examples/record-ptr/record-ptr-ref.yaml
 UPTEST_MANIFESTS_RECORD_SRV := examples/record-srv/record-srv.yaml,examples/record-srv/record-srv-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/record-txt/record-txt-namespaced.yaml
-UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
+# The two drift-ignore variants prove spec.driftDetection's ignore mode end
+# to end on a second resource shape (a zone rather than a DNS record) —
+# see the UPTEST_MANIFESTS_RECORD_A comment above for the full rationale.
+# No zone-auth drift-warn variant exists: warn mode is already proven on
+# record-a and repeating it here adds no new coverage of the mode itself.
+# No prerequisite bundling needed: each variant targets its own
+# per-run-token fqdn in the built-in "default" view, distinct from both the
+# baseline zone-auth.yaml zone and the "example.com" parent zone
+# test/setup.sh pre-provisions for the DNS record examples.
+UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml,examples/zone-auth/zone-auth-drift-ignore.yaml,examples/zone-auth/zone-auth-drift-ignore-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 
