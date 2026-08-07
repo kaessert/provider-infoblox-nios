@@ -80,10 +80,15 @@ fi
 echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): PUT ${REF} comment='${TAMPERED_COMMENT}' (out of band)"
 drift_wapi_put "$REF" "{\"comment\":\"${TAMPERED_COMMENT}\"}"
 
-drift_sleep_reconciles 4
+# Poll the asserted value itself, not a proxy condition plus a fixed sleep:
+# status.atProvider is refreshed by the NEXT Observe after the tamper lands
+# on the Grid, and a single sample taken after a fixed sleep can catch the
+# CR between the tamper landing and that Observe running (see
+# drift_wait_jsonpath_equals doc comment).
+IGNORE_HOLD_POLL_TIMEOUT=90
+ATPROVIDER_COMMENT="$(drift_wait_jsonpath_equals "$RESOURCE" "$NAME" '.status.atProvider.comment' "$TAMPERED_COMMENT" "$IGNORE_HOLD_POLL_TIMEOUT" "${NS_ARGS[@]}")" || true
 
 # --- Step 3 (scenario 1, "ignore holds"): confirm no revert. ---
-ATPROVIDER_COMMENT="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
 SYNCED_STATUS="$(drift_condition_status "$RESOURCE" "$NAME" Synced "${NS_ARGS[@]}")"
 DRIFT_REASON="$(drift_condition_reason "$RESOURCE" "$NAME" DriftDetected "${NS_ARGS[@]}")"
 API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment' 'comment,disable')"
@@ -109,20 +114,35 @@ fi
 
 # --- Step 4 (scenario 2, "write path"): patch a sibling field via the MR
 # spec and confirm it reconciles WITHOUT reverting the ignored one. ---
-echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): patching spec.forProvider.disable=true (a sibling field, not on the ignore list)"
-"${KUBECTL}" patch "$RESOURCE" "$NAME" "${NS_ARGS[@]}" --type=merge -p '{"spec":{"forProvider":{"disable":true}}}'
+NEW_DISABLE=true
+WRITE_PATH_POLL_TIMEOUT=120
+echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): patching spec.forProvider.disable=${NEW_DISABLE} (a sibling field, not on the ignore list)"
+"${KUBECTL}" patch "$RESOURCE" "$NAME" "${NS_ARGS[@]}" --type=merge -p "{\"spec\":{\"forProvider\":{\"disable\":${NEW_DISABLE}}}}"
 
-drift_sleep_reconciles 6
-
-ATPROVIDER_DISABLE="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.disable' "${NS_ARGS[@]}")"
+# Poll the asserted value itself, not a proxy condition: Synced=True can be
+# set right after a successful PUT while status.atProvider still holds the
+# PRECEDING Observe's snapshot, one reconcile behind the write that just
+# landed. Sampling once after a fixed sleep would read that stale snapshot
+# on any run where the write happens to land near the end of the window
+# (see drift_wait_jsonpath_equals doc comment).
+ATPROVIDER_DISABLE="$(drift_wait_jsonpath_equals "$RESOURCE" "$NAME" '.status.atProvider.disable' "$NEW_DISABLE" "$WRITE_PATH_POLL_TIMEOUT" "${NS_ARGS[@]}")" || true
 ATPROVIDER_COMMENT_FINAL="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
 API_DISABLE_FINAL="$(drift_wapi_get_field "$REF" '.disable' 'comment,disable')"
 API_COMMENT_FINAL="$(drift_wapi_get_field "$REF" '.comment' 'comment,disable')"
 
 echo "==> post-assert-zone-auth-drift-ignore (${SCOPE}): after write-path patch — atProvider.disable='${ATPROVIDER_DISABLE}' atProvider.comment='${ATPROVIDER_COMMENT_FINAL}' wapi.disable='${API_DISABLE_FINAL}' wapi.comment='${API_COMMENT_FINAL}'"
 
-if [ "$ATPROVIDER_DISABLE" != "true" ] || [ "$API_DISABLE_FINAL" != "true" ]; then
-    echo "ERROR: post-assert-zone-auth-drift-ignore (${SCOPE}): disable did not reconcile to true (atProvider='${ATPROVIDER_DISABLE}', wapi='${API_DISABLE_FINAL}') — the sibling-field write path itself is broken" >&2
+# The two failure modes are distinct and must be reported differently: a
+# live Grid that never received the write is a real write-path defect; a
+# live Grid that DID receive it, with only the status mirror still stale, is
+# an observation-timing issue — the poll above already gave it
+# WRITE_PATH_POLL_TIMEOUT seconds to catch up, so a mismatch surviving that
+# is worth reporting on its own terms, not as "the write path is broken".
+if [ "$API_DISABLE_FINAL" != "$NEW_DISABLE" ]; then
+    echo "ERROR: post-assert-zone-auth-drift-ignore (${SCOPE}): backend never converged — disable never reached '${NEW_DISABLE}' on the live Grid (wapi='${API_DISABLE_FINAL}', atProvider='${ATPROVIDER_DISABLE}')" >&2
+    FAIL=1
+elif [ "$ATPROVIDER_DISABLE" != "$NEW_DISABLE" ]; then
+    echo "ERROR: post-assert-zone-auth-drift-ignore (${SCOPE}): status mirror lagged — live Grid holds '${NEW_DISABLE}' but status.atProvider.disable still reads '${ATPROVIDER_DISABLE}' after ${WRITE_PATH_POLL_TIMEOUT}s of polling — an observation-timing issue, not a write-path failure" >&2
     FAIL=1
 fi
 if [ "$ATPROVIDER_COMMENT_FINAL" != "$TAMPERED_COMMENT" ]; then
