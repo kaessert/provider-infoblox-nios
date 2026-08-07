@@ -22,6 +22,9 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: AGE
       type: date
+    - jsonPath: .spec.host
+      name: HOST
+      type: string
     - jsonPath: .spec.credentials.secretRef.name
       name: SECRET-NAME
       priority: 1
@@ -110,6 +113,14 @@ spec:
                 required:
                 - source
                 type: object
+              host:
+                description: |-
+                  Host is the NIOS Grid Manager hostname or IP address (e.g.
+                  "gm.example.com"). It is a non-secret connection parameter, so it
+                  lives here rather than in the credentials Secret — the Secret
+                  carries only username and password.
+                minLength: 1
+                type: string
               readEndpoint:
                 description: |-
                   ReadEndpoint configures an optional read-only NIOS endpoint (typically
@@ -151,8 +162,8 @@ spec:
                   credentialsRef:
                     description: |-
                       CredentialsRef references a Secret with the same key format as the
-                      primary credentials (host, username, password). Supports
-                      least-privilege read-only NIOS accounts.
+                      primary credentials (username, password). Supports least-privilege
+                      read-only NIOS accounts.
                     properties:
                       name:
                         description: Name of the secret.
@@ -164,8 +175,17 @@ spec:
                     - name
                     - namespace
                     type: object
+                  host:
+                    description: |-
+                      Host is the read endpoint's own NIOS Grid Manager hostname or IP
+                      address (typically a Grid Master Candidate). It is a non-secret
+                      connection parameter, so it lives here rather than in the
+                      credentials Secret — the Secret carries only username and password.
+                    minLength: 1
+                    type: string
                 required:
                 - credentialsRef
+                - host
                 type: object
               sslVerify:
                 default: true
@@ -177,6 +197,7 @@ spec:
                 type: boolean
             required:
             - credentials
+            - host
             type: object
           status:
             description: A ProviderConfigStatus defines the status of a Provider.
