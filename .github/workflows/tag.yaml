@@ -1,5 +1,21 @@
 name: Tag
 
+# Dispatching this workflow is the single human gate on a release: it creates
+# the tag and then hands off to release.yaml, which gates, builds, publishes,
+# signs and attests without further intervention.
+#
+# The handoff is an explicit workflow_dispatch rather than release.yaml
+# reacting to the tag push. GitHub does not start new workflow runs from events
+# created by GITHUB_TOKEN -- workflow_dispatch and repository_dispatch are the
+# only exceptions -- so the push performed by the Create Tag step below is
+# invisible to a `on: push: tags` trigger. Verified on this repository: tag
+# v0.2.1-rc1 was created by this workflow and produced no release.yaml run.
+#
+# The alternative would be a PAT or GitHub App token on the Create Tag step, so
+# that the push is attributed to a real identity and does trigger. That buys
+# nothing here and costs a credential to store and rotate, so the dispatch is
+# preferred.
+
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +25,10 @@ on:
       message:
         description: 'Tag message'
         required: true
+
+permissions:
+  contents: write   # create the tag
+  actions: write    # dispatch release.yaml
 
 jobs:
   create-tag:
@@ -24,3 +44,17 @@ jobs:
           version: ${{ github.event.inputs.version }}
           message: ${{ github.event.inputs.message }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Hand off to the release pipeline. Dispatched against the default branch
+      # so the workflow definition comes from main; release.yaml checks out the
+      # tag itself for every job, so the ref used here does not affect what is
+      # built.
+      - name: Start Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yaml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f version="${{ github.event.inputs.version }}"
+          echo "Dispatched release.yaml for ${{ github.event.inputs.version }}"

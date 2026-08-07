@@ -12,6 +12,10 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   check-permissions:
     runs-on: ubuntu-latest
@@ -20,11 +24,11 @@ jobs:
     steps:
       - name: Get Commenter Permissions
         id: check-permissions
+        env:
+          REPO: ${{ github.repository }}
+          COMMENTER: ${{ github.event.comment.user.login }}
         run: |
           echo "Trigger keyword: '/test-examples'"
-
-          REPO=${{ github.repository }}
-          COMMENTER=${{ github.event.comment.user.login }}
 
           # Fetch the commenter's repo-level permission grant
           GRANTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -44,20 +48,28 @@ jobs:
       example_hash: ${{ steps.get-example-list-name.outputs.example-hash }}
 
     steps:
-      - name: Checkout
+      - name: Checkout PR
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          submodules: true
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          persist-credentials: false
+          submodules: recursive
 
-      - name: Checkout PR
+      - name: Verify PR Head SHA
         id: checkout-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh pr checkout ${{ github.event.issue.number }}
-          git submodule update --init --recursive
-          OUTPUT=$(git log -1 --format='%H')
-          echo "commit-sha=$OUTPUT" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          CHECKED_OUT_SHA=$(git log -1 --format='%H')
+          API_SHA=$(gh api "/repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          if [ "$CHECKED_OUT_SHA" != "$API_SHA" ]; then
+            echo "::error::Checked-out SHA ($CHECKED_OUT_SHA) does not match the PR head reported by the API ($API_SHA); the PR may have been updated mid-run." >&2
+            exit 1
+          fi
+          echo "commit-sha=$CHECKED_OUT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Prepare The Example List
         env:
@@ -94,12 +106,7 @@ jobs:
           fi
 
           sudo apt-get -y install coreutils
-          COUNT=$(echo "$EXAMPLE_LIST" | grep -o ".yaml" | wc -l)
-          if [ "$COUNT" -gt 1 ]; then
-            EXAMPLE_HASH=$(echo "$EXAMPLE_LIST" | md5sum | cut -f1 -d" ")
-          else
-            EXAMPLE_HASH=$(echo "$EXAMPLE_LIST" | sed 's/.$//')
-          fi
+          EXAMPLE_HASH=$(echo "$EXAMPLE_LIST" | md5sum | cut -f1 -d" ")
 
           echo "Examples: ${EXAMPLE_LIST}"
           echo "Example Hash: ${EXAMPLE_HASH}"
@@ -110,15 +117,19 @@ jobs:
       - name: Create Pending Status Check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ steps.checkout-pr.outputs.commit-sha }}
+          RUN_ID: ${{ github.run_id }}
+          EXAMPLE_HASH: ${{ steps.get-example-list-name.outputs.example-hash }}
         run: |
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/statuses/${{ steps.checkout-pr.outputs.commit-sha }} \
+            "/repos/$REPO/statuses/$COMMIT_SHA" \
             -f state='pending' \
-            -f target_url='https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            -f target_url="https://github.com/$REPO/actions/runs/$RUN_ID" \
             -f description='Running...' \
-            -f context="Uptest-${{ steps.get-example-list-name.outputs.example-hash }}"
+            -f context="Uptest-${EXAMPLE_HASH}"
 
   uptest:
     needs:
@@ -144,20 +155,28 @@ jobs:
           version: 'v0.23.0'
           install: true
 
-      - name: Checkout
+      - name: Checkout PR
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          submodules: true
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          persist-credentials: false
+          submodules: recursive
 
-      - name: Checkout PR
+      - name: Verify PR Head SHA
         id: checkout-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh pr checkout ${{ github.event.issue.number }}
-          git submodule update --init --recursive
-          OUTPUT=$(git log -1 --format='%H')
-          echo "commit-sha=$OUTPUT" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          CHECKED_OUT_SHA=$(git log -1 --format='%H')
+          API_SHA=$(gh api "/repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          if [ "$CHECKED_OUT_SHA" != "$API_SHA" ]; then
+            echo "::error::Checked-out SHA ($CHECKED_OUT_SHA) does not match the PR head reported by the API ($API_SHA); the PR may have been updated mid-run." >&2
+            exit 1
+          fi
+          echo "commit-sha=$CHECKED_OUT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
@@ -182,14 +201,17 @@ jobs:
       - name: Create Successful Status Check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ steps.checkout-pr.outputs.commit-sha }}
+          RUN_ID: ${{ github.run_id }}
           EXAMPLE_HASH: ${{ needs.get-example-list.outputs.example_hash }}
         run: |
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/statuses/${{ steps.checkout-pr.outputs.commit-sha }} \
+            "/repos/$REPO/statuses/$COMMIT_SHA" \
             -f state='success' \
-            -f target_url='https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            -f target_url="https://github.com/$REPO/actions/runs/$RUN_ID" \
             -f description='Passed' \
             -f context="Uptest-${EXAMPLE_HASH}"
 
@@ -206,7 +228,7 @@ jobs:
           path: ./_output/controlplane-dump
 
       # Belt and braces: uptest deletes what it created, but a timeout or a
-      # crashed run can leave billable Vultr resources behind.
+      # crashed run can leave billable Infobloxnios resources behind.
       - name: Cleanup
         if: always()
         run: |
@@ -217,13 +239,16 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ steps.checkout-pr.outputs.commit-sha }}
+          RUN_ID: ${{ github.run_id }}
           EXAMPLE_HASH: ${{ needs.get-example-list.outputs.example_hash }}
         run: |
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/statuses/${{ steps.checkout-pr.outputs.commit-sha }} \
+            "/repos/$REPO/statuses/$COMMIT_SHA" \
             -f state='failure' \
-            -f target_url='https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            -f target_url="https://github.com/$REPO/actions/runs/$RUN_ID" \
             -f description='Failed' \
             -f context="Uptest-${EXAMPLE_HASH}"
