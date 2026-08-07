@@ -120,19 +120,6 @@ drift_wapi_put() {
     done
 }
 
-# drift_sleep_reconciles sleeps long enough to guarantee the controller has
-# had the opportunity to run several reconciles, scaled off the E2E
-# controlplane's own poll interval (Makefile E2E_POLL_INTERVAL, propagated
-# as UPDATE_TESTER_POLL_INTERVAL — see Makefile's
-# `export override UPDATE_TESTER_POLL_INTERVAL = $(E2E_POLL_INTERVAL)`).
-drift_sleep_reconciles() {
-    local cycles="${1:-4}"
-    local poll="${UPDATE_TESTER_POLL_INTERVAL:-10s}"
-    local secs="${poll%s}"
-    [[ "$secs" =~ ^[0-9]+$ ]] || secs=10
-    sleep $((secs * cycles))
-}
-
 # drift_wait_synced_true polls the Synced condition for up to 90s before a
 # hook takes its final snapshot, tolerating a transient Grid Manager
 # hiccup that flips Synced False for exactly one reconcile before the
