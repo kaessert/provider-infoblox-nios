@@ -154,6 +154,67 @@ spec:
       key: credentials
 ```
 
+## Credential extraction
+
+The Grid Manager host (`spec.host` on ProviderConfig/ClusterProviderConfig, and
+`spec.readEndpoint.host` for the optional read endpoint) is a non-secret
+connection parameter, not a Secret key. The credentials Secret carries only
+`username`/`password`. `internal/clients/dualclient.ExtractCredentials` is the
+single shared helper every controller package's `Connect()` calls to combine
+the two into a `dualclient.Credentials` value — it takes the host as an
+explicit parameter and returns an error if it is empty, so a `Credentials`
+value is always either fully populated or absent; no call site can construct
+one with a blank host.
+
+When a controller package still carries its own private `nioCredentials`
+type and `extractCredentials` function instead of calling
+`dualclient.ExtractCredentials`, migrate it with this recipe (each edit is
+in-place, mechanical):
+
+**1. `internal/controller/<pkg>/controller.go`**
+- Delete `type nioCredentials struct { Host, Username, Password string }`.
+- Delete `func extractCredentials(...)`.
+- Delete the error consts that become unused: `errGetSecret`, `errNoSecretRef`,
+  `errUnsupportedCreds`, `errMissingCredKey`. Unused consts do not fail `go
+  build` in Go — grep each name in the package after deleting the function and
+  remove the ones with no remaining reference.
+- `func newObjectManager(creds *nioCredentials, sslVerify bool)` →
+  `func newObjectManager(creds dualclient.Credentials, sslVerify bool)`. Same
+  for `newObjectManagerWithScheme`. Value, not pointer — there is no nil case
+  now.
+- Fix any doc comment claiming the endpoint is "validated non-empty by
+  extractCredentials" — it is now resolved from `pc.Spec.Host`, which the CRD
+  requires with `MinLength=1`.
+
+**2. `cluster.go` — `Connect()`**
+```go
+creds, err := dualclient.ExtractCredentials(ctx, c.kube, pc.Spec.Host,
+    pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
+```
+`endpoint: creds.Host` at the call site is unchanged and still compiles.
+
+**3. `namespaced.go` — `Connect()`**
+Two arms of the existing Kind switch, both edited in place:
+- `case "ProviderConfig"`: `pc.Spec.Host`, fallback namespace `pc.GetNamespace()`.
+- `case "ClusterProviderConfig"`: `cpc.Spec.Host`, fallback namespace `""`.
+
+Change `var creds *nioCredentials` to `var creds dualclient.Credentials` and
+drop the `&` / pointer handling. Do not restructure the switch, the usage
+trackers, or the `errUnsupportedKind` default — the dual-scope shape here is
+unrelated to this migration.
+
+**4. `*_test.go`**
+- Secret fixtures: drop the `host` key from `Data`/`StringData`.
+- Every ProviderConfig / ClusterProviderConfig fixture: set `Spec.Host`.
+- `&nioCredentials{…}` literals → `dualclient.Credentials{…}` (value).
+- A test asserting `errMissingCredKey` when the Secret's `host` key is absent
+  must be deleted, not rewritten. A missing host is now rejected by CRD schema
+  validation, so there is no runtime path left to assert. Keep the
+  missing-username / missing-password cases.
+- A test documenting that the `ssl_verify` Secret key is ignored should be
+  retargeted at `dualclient.ExtractCredentials` — it is still the right
+  assertion, just in a new home.
+
 ## Contributing
 
 ### Code Conventions

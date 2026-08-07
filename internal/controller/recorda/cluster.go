@@ -19,6 +19,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
@@ -58,7 +59,7 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.ARec
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	creds, err := extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
+	creds, err := dualclient.ExtractCredentials(ctx, c.kube, pc.Spec.Host, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
 	if err != nil {
 		return nil, err
 	}

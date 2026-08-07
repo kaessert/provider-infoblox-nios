@@ -25,11 +25,10 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func credentialsSecret(ns, name, host, username, password string) *corev1.Secret {
+func credentialsSecret(ns, name, username, password string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Data: map[string][]byte{
-			"host":     []byte(host),
 			"username": []byte(username),
 			"password": []byte(password),
 		},
@@ -38,10 +37,10 @@ func credentialsSecret(ns, name, host, username, password string) *corev1.Secret
 
 func TestExtractCredentialsSuccess(t *testing.T) {
 	scheme := newTestScheme(t)
-	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
+	secret := credentialsSecret(testNamespace, "primary", "admin", "s3cr3t")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	creds, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+	creds, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
 		SecretReference: xpv2.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
@@ -52,17 +51,34 @@ func TestExtractCredentialsSuccess(t *testing.T) {
 	}
 }
 
+// TestExtractCredentialsEmptyHost pins the fail-loudly contract: an empty
+// host argument is a caller bug or a ProviderConfig that predates the host
+// field, not a malformed Secret, and must be rejected before any Secret
+// lookup happens.
+func TestExtractCredentialsEmptyHost(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret(testNamespace, "primary", "admin", "s3cr3t")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	_, err := ExtractCredentials(context.Background(), kube, "", xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+		SecretReference: xpv2.SecretReference{Name: "primary", Namespace: testNamespace},
+	}, "")
+	if err == nil {
+		t.Fatal("ExtractCredentials: expected an error for an empty host, got nil")
+	}
+}
+
 // TestExtractCredentialsIgnoresSecretSslVerifyKey pins the sslVerify
 // migration: the ssl_verify Secret key is fully ignored — TLS
 // verification is a ProviderConfig-level policy field now, not read from
 // this Secret at all. Credentials carries no SslVerify field to prove it.
 func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	scheme := newTestScheme(t)
-	secret := credentialsSecret(testNamespace, "primary", "grid.example.com", "admin", "s3cr3t")
+	secret := credentialsSecret(testNamespace, "primary", "admin", "s3cr3t")
 	secret.Data["ssl_verify"] = []byte("false")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	creds, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+	creds, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
 		SecretReference: xpv2.SecretReference{Name: "primary", Namespace: testNamespace},
 	}, "")
 	if err != nil {
@@ -76,7 +92,7 @@ func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 func TestExtractCredentialsMissingSecret(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 
-	_, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+	_, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
 		SecretReference: xpv2.SecretReference{Name: "does-not-exist", Namespace: testNamespace},
 	}, "")
 	if err == nil {
@@ -88,11 +104,11 @@ func TestExtractCredentialsMissingKeys(t *testing.T) {
 	scheme := newTestScheme(t)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "incomplete", Namespace: testNamespace},
-		Data:       map[string][]byte{"host": []byte("grid.example.com")}, // missing username/password
+		Data:       map[string][]byte{"username": []byte("admin")}, // missing password
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
 
-	_, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
+	_, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
 		SecretReference: xpv2.SecretReference{Name: "incomplete", Namespace: testNamespace},
 	}, "")
 	if err == nil {
@@ -102,14 +118,14 @@ func TestExtractCredentialsMissingKeys(t *testing.T) {
 
 func TestExtractCredentialsNoSecretRef(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	if _, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, nil, ""); err == nil {
+	if _, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceSecret, nil, ""); err == nil {
 		t.Fatal("expected an error when secretRef is nil, got nil")
 	}
 }
 
 func TestExtractCredentialsUnsupportedSource(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	if _, err := ExtractCredentials(context.Background(), kube, xpv2.CredentialsSourceInjectedIdentity, nil, ""); err == nil {
+	if _, err := ExtractCredentials(context.Background(), kube, "grid.example.com", xpv2.CredentialsSourceInjectedIdentity, nil, ""); err == nil {
 		t.Fatal("expected an error for an unsupported credentials source, got nil")
 	}
 }
