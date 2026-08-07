@@ -337,13 +337,15 @@ UPTEST_MANIFESTS_RECORD_TXT := examples/record-txt/record-txt.yaml,examples/reco
 # per-run-token fqdn in the built-in "default" view, distinct from both the
 # baseline zone-auth.yaml zone and the "example.com" parent zone
 # test/setup.sh pre-provisions for the DNS record examples.
-# UPTEST_MANIFESTS_ZONE_AUTH_BASE is the baseline pair only (no drift
+# UPTEST_MANIFESTS_ZONE_AUTH is the baseline pair only (no drift
 # fixtures) — kept separate so other targets that bundle ZoneAuth in as a
 # prerequisite (e.g. e2e.range-template below) pull in only what they
 # actually need, instead of inheriting drift-detection coverage that
-# belongs to ZoneAuth itself.
-UPTEST_MANIFESTS_ZONE_AUTH_BASE := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
-UPTEST_MANIFESTS_ZONE_AUTH := $(UPTEST_MANIFESTS_ZONE_AUTH_BASE),examples/zone-auth/zone-auth-drift-ignore.yaml,examples/zone-auth/zone-auth-drift-ignore-namespaced.yaml
+# belongs to ZoneAuth itself. The drift-ignore fixtures live in
+# UPTEST_MANIFESTS_ZONE_AUTH_DRIFT below, listed as their own literal set
+# (not a reference to this variable) so both stay independently sorted.
+UPTEST_MANIFESTS_ZONE_AUTH := examples/zone-auth/zone-auth.yaml,examples/zone-auth/zone-auth-namespaced.yaml
+UPTEST_MANIFESTS_ZONE_AUTH_DRIFT := examples/zone-auth/zone-auth-drift-ignore.yaml,examples/zone-auth/zone-auth-drift-ignore-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_DELEGATED := examples/zone-delegated/zone-delegated.yaml,examples/zone-delegated/zone-delegated-namespaced.yaml
 UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,examples/zone-forward/zone-forward-namespaced.yaml
 
@@ -357,7 +359,7 @@ UPTEST_MANIFESTS_ZONE_FORWARD := examples/zone-forward/zone-forward.yaml,example
 # CIDR allocation), DTCServer, DTCPool, DTCLBDN, NSRecord, and
 # ExtensibleAttributeDef. DTCPool and DTCLBDN need no external
 # prerequisites — their `servers`/`pools`/`authZones` fields are optional.
-UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_NETWORK_V6),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_FIXED_ADDRESS_V6),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_NETWORK_ALLOCATE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
+UPTEST_MANIFESTS_CORE = $(UPTEST_MANIFESTS_RECORD_A),$(UPTEST_MANIFESTS_RECORD_AAAA),$(UPTEST_MANIFESTS_RECORD_ALIAS),$(UPTEST_MANIFESTS_RECORD_CNAME),$(UPTEST_MANIFESTS_RECORD_MX),$(UPTEST_MANIFESTS_RECORD_NS),$(UPTEST_MANIFESTS_RECORD_PTR),$(UPTEST_MANIFESTS_RECORD_SRV),$(UPTEST_MANIFESTS_RECORD_TXT),$(UPTEST_MANIFESTS_ZONE_DELEGATED),$(UPTEST_MANIFESTS_NETWORK_VIEW),$(UPTEST_MANIFESTS_HOST_RECORD),$(UPTEST_MANIFESTS_NETWORK),$(UPTEST_MANIFESTS_NETWORK_V6),$(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_ZONE_AUTH_DRIFT),$(UPTEST_MANIFESTS_IPV4_SHARED_NETWORK),$(UPTEST_MANIFESTS_NETWORK_CONTAINER),$(UPTEST_MANIFESTS_NETWORK_CONTAINER_V6),$(UPTEST_MANIFESTS_FIXED_ADDRESS),$(UPTEST_MANIFESTS_FIXED_ADDRESS_V6),$(UPTEST_MANIFESTS_ZONE_FORWARD),$(UPTEST_MANIFESTS_RANGE),$(UPTEST_MANIFESTS_NETWORK_ALLOCATE),$(UPTEST_MANIFESTS_DTC_SERVER),$(UPTEST_MANIFESTS_EXTENSIBLE_ATTRIBUTE_DEF),$(UPTEST_MANIFESTS_DNS_VIEW),$(UPTEST_MANIFESTS_DTC_POOL),$(UPTEST_MANIFESTS_DTC_LBDN)
 
 # UPTEST_MANIFESTS_ALL: discover all resource examples, excluding provider/ config.
 # Produces a comma-separated list for `uptest e2e` (the unified example-manifest convention).
@@ -616,7 +618,7 @@ e2e.network-view: e2e
 e2e.network: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_NETWORK)
 e2e.network: e2e
 
-e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH_BASE)
+e2e.range-template: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE_TEMPLATE),$(UPTEST_MANIFESTS_ZONE_AUTH)
 e2e.range-template: e2e
 
 e2e.range: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RANGE)
@@ -649,7 +651,7 @@ e2e.record-srv: e2e
 e2e.record-txt: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_RECORD_TXT)
 e2e.record-txt: e2e
 
-e2e.zone-auth: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_AUTH)
+e2e.zone-auth: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_AUTH),$(UPTEST_MANIFESTS_ZONE_AUTH_DRIFT)
 e2e.zone-auth: e2e
 
 e2e.zone-delegated: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ZONE_DELEGATED)
