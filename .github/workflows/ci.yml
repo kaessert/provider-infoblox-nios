@@ -8,10 +8,22 @@ on:
   pull_request: {}
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 env:
   # Keep in sync with GOLANGCILINT_VERSION in the Makefile.
   GOLANGCI_VERSION: 'v2.12.2'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
+  # Security tooling versions -- kept identical to release.yaml (convention
+  # 0104) so a PR and a release scan with the same tools. vens is pinned even
+  # though this workflow never installs or runs it (that is release.yaml's
+  # job): the pin exists so the two workflows have both sides to compare for
+  # tool-version parity.
+  GOVULNCHECK_VERSION: v1.6.0
+  CYCLONEDX_GOMOD_VERSION: v1.10.0
+  VENS_VERSION: v0.4.0
+  GRYPE_VERSION: v0.116.1
 
 jobs:
   detect-noop:
@@ -101,6 +113,85 @@ jobs:
       # error wrapping, stdlib errors import). Pure grep -- no toolchain needed.
       - name: Check Conventions
         run: make check-conventions
+
+  # Cheap mirror of the release gate's security checks (convention 0104):
+  # govulncheck and the license check only -- no image build, no attestation,
+  # no vens. Reads the same security/vex-exceptions.openvex.json the release
+  # gate reads, so a PR and a release cannot disagree about what is waived.
+  security-checks:
+    runs-on: ubuntu-latest
+    needs: detect-noop
+    if: needs.detect-noop.outputs.noop != 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          submodules: true
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Vendor Dependencies
+        run: make vendor vendor.check
+
+      - name: Install security tools
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${{ env.CYCLONEDX_GOMOD_VERSION }}
+
+      # Reachable-CVE gate (convention 0103 V.C39). A non-zero exit is not an
+      # automatic failure: every reported GO-YYYY-NNNN ID must have a signed
+      # exception in security/vex-exceptions.openvex.json, or the finding
+      # blocks.
+      - name: "Gate: govulncheck (reachable CVEs)"
+        run: |
+          EXC="security/vex-exceptions.openvex.json"
+          OUT="$(govulncheck ./... 2>&1)"; RC=$?
+          echo "$OUT"
+          if [ "$RC" -eq 0 ]; then
+            echo "PASS: no reachable CVEs"
+            exit 0
+          fi
+          FOUND="$(printf '%s' "$OUT" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u)"
+          if [ -z "$FOUND" ]; then
+            echo "::error::govulncheck exited $RC with no parseable findings (tool error?)"
+            exit 1
+          fi
+          if [ ! -f "$EXC" ]; then
+            echo "::error::reachable CVEs found and no $EXC exists"
+            exit 1
+          fi
+          UNACCEPTED=""
+          for v in $FOUND; do
+            grep -q "\"$v\"" "$EXC" || UNACCEPTED="$UNACCEPTED $v"
+          done
+          if [ -n "$UNACCEPTED" ]; then
+            echo "::error::reachable CVEs without a signed VEX exception:$UNACCEPTED"
+            exit 1
+          fi
+          echo "PASS: all reachable findings covered by $EXC"
+
+      # License gate (convention 0104). cyclonedx-gomod records most licenses
+      # under .evidence.licenses, not .licenses -- reading .licenses alone
+      # finds nothing and passes vacuously, so the zero-total canary below
+      # catches that failure mode as well as an actual GPL-family dependency.
+      - name: "Gate: license compliance"
+        run: |
+          cyclonedx-gomod mod -json -licenses -output /tmp/sbom-licenses.json
+          IDS="$(jq -r '.components[]? | ((.licenses // []) + (.evidence.licenses // [])) | .[] | (.license.id // .license.name // empty)' /tmp/sbom-licenses.json)"
+          TOTAL="$(printf '%s\n' "$IDS" | grep -c . || true)"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::license scan found 0 licenses total -- the extraction expression is broken, not the dependency tree clean"
+            exit 1
+          fi
+          if printf '%s\n' "$IDS" | grep -iE '^(GPL|AGPL|LGPL)'; then
+            echo "::error::GPL-family license detected in dependency tree"
+            exit 1
+          fi
+          echo "PASS: license check passed -- $TOTAL license(s) found, no GPL-family licenses"
 
   unit-tests:
     runs-on: ubuntu-latest
