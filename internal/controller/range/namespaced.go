@@ -157,6 +157,11 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 		Comment:     o.Comment,
 		ExtAttrs:    o.ExtAttrs,
 		Ref:         o.Ref,
+		// Template is a create-time-only allocation hint the WAPI never
+		// echoes back in a GET response — mirrored directly from
+		// ForProvider (informational only) rather than from the observed
+		// Range.
+		Template: p.Template,
 	}
 	// Explicit assignment (rather than folding ID into the struct literal
 	// above) keeps the server-assigned identifier's provenance obvious at

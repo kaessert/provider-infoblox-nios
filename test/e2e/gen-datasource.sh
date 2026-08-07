@@ -99,8 +99,19 @@
 #                 .129     netHostRecordNamespaced       (HostRecord ipv4Addr, namespaced)
 #                 .160/27  netRangeParentCluster         (prerequisite parent Network for Range, cluster)
 #                 .161-181 netRangeStartCluster/netRangeEndCluster          (Range, cluster — 21 addresses, inside the block above)
+#                 .183-187 netRangeTemplateStartCluster/netRangeTemplateEndCluster (Range, template-linked
+#                                                          example, cluster — 5 addresses, inside
+#                                                          netRangeParentCluster's .160/27 above, carved from
+#                                                          the unused remainder after netRangeStartCluster/
+#                                                          netRangeEndCluster's own .161-181 span)
 #                 .192/27  netRangeParentNamespaced      (prerequisite parent Network for Range, namespaced)
 #                 .193-213 netRangeStartNamespaced/netRangeEndNamespaced    (Range, namespaced — 21 addresses, inside the block above)
+#                 .215-219 netRangeTemplateStartNamespaced/netRangeTemplateEndNamespaced (Range, template-linked
+#                                                          example, namespaced — 5 addresses, inside
+#                                                          netRangeParentNamespaced's .192/27 above, carved
+#                                                          from the unused remainder after
+#                                                          netRangeStartNamespaced/netRangeEndNamespaced's own
+#                                                          .193-213 span)
 #                 .224/27  netAllocParentCluster         (prerequisite parent NetworkContainer for the EA-based
 #                                                          dynamic-allocation Network example, cluster only — no
 #                                                          namespaced sibling exists for this pair yet)
@@ -368,6 +379,15 @@ NET_RANGE_PARENT_NAMESPACED="100.64.${BLOCK_INDEX}.192/27"
 NET_RANGE_START_NAMESPACED="100.64.${BLOCK_INDEX}.193"
 NET_RANGE_END_NAMESPACED="100.64.${BLOCK_INDEX}.213"
 NET_ALLOC_PARENT_CLUSTER="100.64.${BLOCK_INDEX}.224/27"
+
+# Range's template-linked example — a disjoint 5-address span carved from
+# the unused remainder of each scope's own NET_RANGE_PARENT_*/27 (see the
+# header comment's sub-allocation map), so it shares its scope's existing
+# parent Network prerequisite instead of needing a new one.
+NET_RANGE_TEMPLATE_START_CLUSTER="100.64.${BLOCK_INDEX}.183"
+NET_RANGE_TEMPLATE_END_CLUSTER="100.64.${BLOCK_INDEX}.187"
+NET_RANGE_TEMPLATE_START_NAMESPACED="100.64.${BLOCK_INDEX}.215"
+NET_RANGE_TEMPLATE_END_NAMESPACED="100.64.${BLOCK_INDEX}.219"
 NET_CONTAINER_REF_CLUSTER="100.64.${BLOCK_INDEX}.144/28"
 
 # networkViewRef reference-path sub-blocks for Network, FixedAddress, and
@@ -446,6 +466,10 @@ netRangeEndCluster: "${NET_RANGE_END_CLUSTER}"
 netRangeParentNamespaced: "${NET_RANGE_PARENT_NAMESPACED}"
 netRangeStartNamespaced: "${NET_RANGE_START_NAMESPACED}"
 netRangeEndNamespaced: "${NET_RANGE_END_NAMESPACED}"
+netRangeTemplateStartCluster: "${NET_RANGE_TEMPLATE_START_CLUSTER}"
+netRangeTemplateEndCluster: "${NET_RANGE_TEMPLATE_END_CLUSTER}"
+netRangeTemplateStartNamespaced: "${NET_RANGE_TEMPLATE_START_NAMESPACED}"
+netRangeTemplateEndNamespaced: "${NET_RANGE_TEMPLATE_END_NAMESPACED}"
 netAllocParentCluster: "${NET_ALLOC_PARENT_CLUSTER}"
 netContainerRefCluster: "${NET_CONTAINER_REF_CLUSTER}"
 netNetworkRefCluster: "${NET_NETWORK_REF_CLUSTER}"

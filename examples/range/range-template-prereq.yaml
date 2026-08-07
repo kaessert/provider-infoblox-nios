@@ -1,0 +1,46 @@
+# range-template-prereq.yaml — prerequisite RangeTemplate for
+# range-template-linked.yaml, the one example in this directory that sets
+# spec.forProvider.template. See examples/range-template/range-template.yaml
+# for the full field documentation of this resource kind — this file only
+# documents what's specific to its role as a prerequisite.
+#
+# Range's `template` field is create-only (CreateNetworkRange accepts it,
+# UpdateNetworkRange does not) and is never echoed back by GetNetworkRange,
+# so status.atProvider.template on range-template-linked.yaml's object is
+# mirrored directly from spec.forProvider.template rather than from the
+# wire — this object is what that mirror needs to observe a real,
+# non-empty value against. Makefile prerequisite-bundling
+# (UPTEST_MANIFESTS_RANGE) applies this manifest before
+# range-template-linked.yaml so the template exists first.
+#
+# This manifest intentionally carries no update-test annotation and no
+# uptest.upbound.io/post-assert-hook annotation: it is not itself a
+# resource under test here — see examples/range-template/range-template.yaml
+# for the general-purpose, independently update-tested RangeTemplate
+# example. offset/numberOfAddresses are not exercised by
+# range-template-linked.yaml (which supplies its own explicit
+# startAddr/endAddr, same as every other Range example in this directory)
+# so their values here are illustrative only.
+#
+# ${data.runToken}: injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) so concurrent E2E runs against the shared
+# NIOS Grid never request the same range template `name`. The
+# "example-range-tmpl-linked-" prefix (distinct from
+# range-template.yaml's own "example-range-template-" prefix) keeps this
+# object from colliding with that one within the same run, even though
+# both draw the same token.
+apiVersion: rangetemplate.infobloxnios.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template-prereq
+  annotations:
+    meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: example-range-tmpl-linked-${data.runToken}
+    numberOfAddresses: 5
+    offset: 5
+    comment: "Prerequisite RangeTemplate for range-template-linked.yaml (E2E mirror coverage)"
+  providerConfigRef:
+    name: default

@@ -54,8 +54,9 @@ func TestRangeFieldCounts(t *testing.T) {
 }
 
 // TestRangeTemplateImmutable verifies template is cataloged as Immutable,
-// FieldScopeRequest (create-only, no AtProvider mirror since the WAPI
-// GetNetworkRange response never echoes it back).
+// FieldScopeRequest (create-only), and mirrored into AtProvider from
+// ForProvider (informational only) since the WAPI GetNetworkRange response
+// never echoes it back.
 func TestRangeTemplateImmutable(t *testing.T) {
 	rd, ok := FindResource("range")
 	if !ok {
@@ -74,8 +75,8 @@ func TestRangeTemplateImmutable(t *testing.T) {
 		if f.Scope != FieldScopeRequest {
 			t.Errorf("Template: expected Scope=FieldScopeRequest, got %v", f.Scope)
 		}
-		if !f.OmitFromObservation {
-			t.Errorf("Template: expected OmitFromObservation=true")
+		if f.OmitFromObservation {
+			t.Errorf("Template: expected OmitFromObservation=false")
 		}
 	}
 	if !found {

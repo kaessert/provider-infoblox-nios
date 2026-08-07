@@ -280,7 +280,7 @@ UPTEST_MANIFESTS_NETWORK_VIEW := examples/network-view/network-view.yaml,example
 # a separate e2e target) so `make e2e.range` proves both the
 # literal-networkView path (still covered by the first two manifests) AND
 # the reference-resolver path in one run.
-UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml,examples/range/network-view-ref-prereq.yaml,examples/range/range-ref-network-prereq.yaml,examples/range/range-ref.yaml
+UPTEST_MANIFESTS_RANGE := examples/range/network-prereq.yaml,examples/range/network-prereq-namespaced.yaml,examples/range/range-template-prereq.yaml,examples/range/range-template-prereq-namespaced.yaml,examples/range/range-template-linked.yaml,examples/range/range-template-linked-namespaced.yaml,examples/range/range.yaml,examples/range/range-namespaced.yaml,examples/range/network-view-ref-prereq.yaml,examples/range/range-ref-network-prereq.yaml,examples/range/range-ref.yaml
 UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,examples/range-template/range-template-namespaced.yaml
 # The four drift-detection variants (drift-ignore, drift-ignore-namespaced,
 # drift-warn, drift-warn-namespaced) prove spec.driftDetection's ignore and

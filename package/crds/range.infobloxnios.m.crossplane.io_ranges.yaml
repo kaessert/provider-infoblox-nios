@@ -214,8 +214,9 @@ spec:
                       range's settings at creation. CreateNetworkRange accepts it;
                       UpdateNetworkRange does not — the template link is create-only
                       (applies its settings once, then the range is independent).
-                      Not part of the GetNetworkRange response, so it has no AtProvider
-                      mirror.
+                      Not part of the GetNetworkRange response, so the AtProvider
+                      mirror is populated from ForProvider (informational only) rather
+                      than from the observed object.
                     type: string
                     x-kubernetes-validations:
                     - message: template is immutable after creation
@@ -326,6 +327,18 @@ spec:
                   startAddr:
                     description: First address in the DHCP range.
                     type: string
+                  template:
+                    description: Name of the Range Template used to pre-populate this
+                      range's settings at creation. CreateNetworkRange accepts it;
+                      UpdateNetworkRange does not — the template link is create-only
+                      (applies its settings once, then the range is independent).
+                      Not part of the GetNetworkRange response, so the AtProvider
+                      mirror is populated from ForProvider (informational only) rather
+                      than from the observed object.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: template is immutable after creation
+                      rule: self == oldSelf
                 type: object
               conditions:
                 description: Conditions of the resource.

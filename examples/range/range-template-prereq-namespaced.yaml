@@ -1,0 +1,31 @@
+# range-template-prereq-namespaced.yaml — namespace-scoped variant of the
+# prerequisite RangeTemplate for range-template-linked-namespaced.yaml. See
+# range-template-prereq.yaml for the full rationale — this file only
+# documents what differs.
+#
+# Distinct identity: the "example-range-tmpl-linked-ns-" name prefix below
+# differs from range-template-prereq.yaml's "example-range-tmpl-linked-"
+# so both scopes' prerequisites can apply to the same NIOS Grid Manager at
+# once without colliding on the same range template name.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+apiVersion: rangetemplate.infobloxnios.m.crossplane.io/v1alpha1
+kind: RangeTemplate
+metadata:
+  name: example-range-template-prereq-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: rangetemplate/v1alpha1/rangetemplate
+    uptest.upbound.io/timeout: "120"
+spec:
+  forProvider:
+    name: example-range-tmpl-linked-ns-${data.runToken}
+    numberOfAddresses: 5
+    offset: 5
+    comment: "Prerequisite RangeTemplate for range-template-linked-namespaced.yaml (E2E mirror coverage)"
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default

@@ -473,6 +473,157 @@ func TestClusterObserveRefusesOnForeignIdentity(t *testing.T) {
 	}
 }
 
+// ── Template mirror (create-only field, never echoed by the WAPI) ────────
+//
+// ibclient.Range has no Template field at all, so the mock GET response
+// below can never contain one — there is no risk of accidentally sourcing
+// it from the wire. status.atProvider.template must come from
+// spec.forProvider.template alone, and it must never be compared for
+// drift (isUpToDate's signature already excludes it — see
+// TestClusterObserveUpToDateWithTemplateSet /
+// TestNamespacedObserveUpToDateWithTemplateSet below).
+
+func TestClusterObserveMirrorsTemplateFromSpec(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rng)
+
+	cr := newClusterRange("my-range", ref)
+	cr.Spec.ForProvider.Template = stringPtr("golden-template")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cr.Status.AtProvider.Template == nil || *cr.Status.AtProvider.Template != "golden-template" {
+		t.Fatalf("status.atProvider.template = %v, want %q mirrored from spec.forProvider.template (the WAPI GET response never carries it)", cr.Status.AtProvider.Template, "golden-template")
+	}
+}
+
+func TestNamespacedObserveMirrorsTemplateFromSpec(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDNamespaced)
+	ref := m.seed(rng)
+
+	cr := newNamespacedRange("default", "my-range", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Template = stringPtr("golden-template")
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cr.Status.AtProvider.Template == nil || *cr.Status.AtProvider.Template != "golden-template" {
+		t.Fatalf("status.atProvider.template = %v, want %q mirrored from spec.forProvider.template (the WAPI GET response never carries it)", cr.Status.AtProvider.Template, "golden-template")
+	}
+}
+
+func TestClusterObserveTemplateNilWhenSpecUnset(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rng)
+
+	// newClusterRange leaves Template unset.
+	cr := newClusterRange("my-range", ref)
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cr.Status.AtProvider.Template != nil {
+		t.Fatalf("status.atProvider.template = %q, want nil — the mirror must not fabricate a value when spec.forProvider.template is unset", *cr.Status.AtProvider.Template)
+	}
+}
+
+func TestNamespacedObserveTemplateNilWhenSpecUnset(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDNamespaced)
+	ref := m.seed(rng)
+
+	// newNamespacedRange leaves Template unset.
+	cr := newNamespacedRange("default", "my-range", ref, "ProviderConfig")
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cr.Status.AtProvider.Template != nil {
+		t.Fatalf("status.atProvider.template = %q, want nil — the mirror must not fabricate a value when spec.forProvider.template is unset", *cr.Status.AtProvider.Template)
+	}
+}
+
+// TestClusterObserveUpToDateWithTemplateSet is the regression guard named
+// in the ticket: a Range whose spec sets template must still be reported
+// up to date. If Template ever leaks into the drift comparison, this
+// Range enters a perpetual Update loop against a value the Grid will
+// never return.
+func TestClusterObserveUpToDateWithTemplateSet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDCluster)
+	ref := m.seed(rng)
+
+	cr := newClusterRange("my-range", ref)
+	cr.Spec.ForProvider.Template = stringPtr("golden-template")
+	e := &clusterExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceUpToDate {
+		t.Fatal("expected ResourceUpToDate=true — spec.forProvider.template must never be compared for drift; a create-only field the Grid never returns would otherwise force a perpetual Update loop")
+	}
+}
+
+// TestNamespacedObserveUpToDateWithTemplateSet is the namespaced-scope
+// twin of TestClusterObserveUpToDateWithTemplateSet.
+func TestNamespacedObserveUpToDateWithTemplateSet(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+	mc := newTestClient(t, srv)
+
+	rng := &ibclient.Range{StartAddr: stringPtr("10.0.0.10"), EndAddr: stringPtr("10.0.0.20")}
+	rng.Ea = identity.Stamp(nil, testUIDNamespaced)
+	ref := m.seed(rng)
+
+	cr := newNamespacedRange("default", "my-range", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Template = stringPtr("golden-template")
+	e := &namespacedExternal{objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !obs.ResourceUpToDate {
+		t.Fatal("expected ResourceUpToDate=true — spec.forProvider.template must never be compared for drift; a create-only field the Grid never returns would otherwise force a perpetual Update loop")
+	}
+}
+
 // ── Create ───────────────────────────────────────────────────────────────
 
 func TestClusterCreateStampsIdentity(t *testing.T) {

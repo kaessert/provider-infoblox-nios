@@ -1,0 +1,58 @@
+# range-template-linked.yaml — a Range whose spec.forProvider.template is
+# set, proving status.atProvider.template mirrors it live. See range.yaml
+# for the full field documentation of this resource kind — this file only
+# documents what's specific to the template-linked path.
+#
+# Purpose: neither range.yaml nor range-namespaced.yaml sets `template`,
+# so both show an absent mirror — correct behaviour, but it proves nothing
+# about the populated path. This example exists solely to observe
+# status.atProvider.template holding a real value. Comment's per-field
+# update coverage already exists on range.yaml; exercising it again here
+# adds no new coverage, so this manifest carries no update-test annotation
+# and no uptest.upbound.io/post-assert-hook — same reasoning as
+# range-ref.yaml.
+#
+# template: range-template-prereq.yaml's spec.forProvider.name (a WAPI
+# range template name, not a Kubernetes object name — RangeTemplate has no
+# cross-resource reference wiring for this field, so the literal value is
+# repeated here rather than resolved through a *Ref/*Selector pair).
+# Create-only: CreateNetworkRange accepts it, UpdateNetworkRange does not,
+# and it is immutable after creation (CEL: self == oldSelf). Makefile
+# prerequisite-bundling (UPTEST_MANIFESTS_RANGE) applies
+# range-template-prereq.yaml before this manifest so the template exists
+# first.
+#
+# network-prereq.yaml (applied ahead of this manifest by the same
+# prerequisite bundle range.yaml relies on) already provisions the parent
+# Network CreateNetworkRange requires — see range.yaml's field docs for
+# why an explicit spec.forProvider.network is unnecessary. This example's
+# address span nests inside that SAME parent, disjoint from range.yaml's
+# own span within it (see the next paragraph), so both Ranges coexist
+# under one parent Network without a second prerequisite object.
+#
+# ${data.netRangeTemplateStartCluster} / ${data.netRangeTemplateEndCluster}:
+# injected by uptest from the --data-source file (see
+# test/e2e/gen-datasource.sh) — a 5-address span (100.64.<BLOCK_INDEX>.183
+# through .187) carved from the unused remainder of
+# network-prereq.yaml's .160/27 parent, after range.yaml's own 21-address
+# .161-.181 span (see the sub-allocation map in gen-datasource.sh's header
+# comment). Disjoint from every other addressed example's sub-block,
+# including range.yaml's, so concurrent E2E runs and the two Ranges within
+# the same run never collide on the (startAddr, endAddr, networkView) WAPI
+# identity.
+apiVersion: range.infobloxnios.crossplane.io/v1alpha1
+kind: Range
+metadata:
+  name: example-range-template-linked
+  annotations:
+    meta.upbound.io/example-id: range/v1alpha1/range
+    uptest.upbound.io/timeout: "300"
+spec:
+  forProvider:
+    startAddr: ${data.netRangeTemplateStartCluster}
+    endAddr: ${data.netRangeTemplateEndCluster}
+    networkView: default
+    template: example-range-tmpl-linked-${data.runToken}
+    comment: Managed by Crossplane (template-linked)
+  providerConfigRef:
+    name: default
