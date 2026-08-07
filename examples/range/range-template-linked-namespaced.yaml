@@ -27,6 +27,10 @@ metadata:
   annotations:
     meta.upbound.io/example-id: range/v1alpha1/range
     uptest.upbound.io/timeout: "300"
+    # Proves status.atProvider.template mirrors spec.forProvider.template —
+    # see range-template-linked.yaml's header comment and
+    # test/hooks/post-assert-range-template-linked.sh.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template-linked-namespaced.sh
 spec:
   forProvider:
     startAddr: ${data.netRangeTemplateStartNamespaced}

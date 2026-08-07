@@ -6,11 +6,11 @@
 # Purpose: neither range.yaml nor range-namespaced.yaml sets `template`,
 # so both show an absent mirror — correct behaviour, but it proves nothing
 # about the populated path. This example exists solely to observe
-# status.atProvider.template holding a real value. Comment's per-field
-# update coverage already exists on range.yaml; exercising it again here
-# adds no new coverage, so this manifest carries no update-test annotation
-# and no uptest.upbound.io/post-assert-hook — same reasoning as
-# range-ref.yaml.
+# status.atProvider.template holding a real value, which the post-assert
+# hook below checks directly. Comment's per-field update coverage already
+# exists on range.yaml; exercising it again here adds no new coverage, so
+# this manifest carries no update-test annotation and no crossplane.io/
+# update-test — same reasoning as range-ref.yaml.
 #
 # template: range-template-prereq.yaml's spec.forProvider.name (a WAPI
 # range template name, not a Kubernetes object name — RangeTemplate has no
@@ -47,6 +47,11 @@ metadata:
   annotations:
     meta.upbound.io/example-id: range/v1alpha1/range
     uptest.upbound.io/timeout: "300"
+    # Proves status.atProvider.template mirrors spec.forProvider.template —
+    # the whole reason this manifest exists (see the header comment). A
+    # plain field comparison, so the hook only calls kubectl; no live NIOS
+    # Grid probing.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-range-template-linked.sh
 spec:
   forProvider:
     startAddr: ${data.netRangeTemplateStartCluster}
