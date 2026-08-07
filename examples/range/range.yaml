@@ -46,9 +46,11 @@
 #                per-run parent Network ahead of this example (Makefile
 #                prerequisite-bundling, UPTEST_MANIFESTS_RANGE).
 #   template:    name of a RangeTemplate to pre-populate settings from.
-#                Create-only — UpdateNetworkRange does not accept it, so it
-#                has no atProvider mirror and is excluded from drift
-#                comparison.
+#                Create-only — UpdateNetworkRange does not accept it.
+#                GetNetworkRange never echoes it back either, so
+#                status.atProvider.template is mirrored directly from
+#                spec.forProvider.template (informational only) and is
+#                excluded from drift comparison for that reason.
 #
 # Optional mutable fields: comment, extAttrs.
 apiVersion: range.infobloxnios.crossplane.io/v1alpha1
