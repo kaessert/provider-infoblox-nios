@@ -150,3 +150,37 @@ drift_wait_synced_true() {
     done
     return 1
 }
+
+# drift_wait_jsonpath_equals polls a jsonpath field on a live cluster object
+# until it equals the wanted value or timeout_secs elapses, printing the
+# last-seen value either way (success or timeout) so the caller can inspect
+# what was actually observed. Deliberately bounded, mirroring
+# drift_wait_synced_true: a field that never converges is a real failure and
+# must still surface as one once timeout_secs is spent.
+#
+# Exists because a proxy condition (Synced=True) does not guarantee the
+# SPECIFIC field a caller cares about has been re-observed by the reconcile
+# that just landed: crossplane-runtime sets Synced=ReconcileSuccess right
+# after a successful Update()/PUT, but the status.atProvider snapshot
+# alongside it was captured by the PRECEDING Observe — so for one reconcile
+# cycle, Synced can read True while the field of interest is still one write
+# behind. Polling the actual value being asserted, rather than sampling it
+# once after a fixed sleep, removes that race.
+drift_wait_jsonpath_equals() {
+    local resource="$1" name="$2" jsonpath="$3" want="$4" timeout="$5"
+    shift 5
+    local interval=5 waited=0 got
+    while :; do
+        got="$(drift_get "$resource" "$name" "$jsonpath" "$@")"
+        if [ "$got" = "$want" ]; then
+            echo "$got"
+            return 0
+        fi
+        if [ "$waited" -ge "$timeout" ]; then
+            echo "$got"
+            return 1
+        fi
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+}

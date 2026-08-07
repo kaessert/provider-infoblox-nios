@@ -74,9 +74,13 @@ fi
 echo "==> post-assert-record-a-drift-warn (${SCOPE}): PUT ${REF} comment='${TAMPERED_COMMENT}' (out of band)"
 drift_wapi_put "$REF" "{\"comment\":\"${TAMPERED_COMMENT}\"}"
 
-drift_sleep_reconciles 4
-
-ATPROVIDER_COMMENT="$(drift_get "$RESOURCE" "$NAME" '.status.atProvider.comment' "${NS_ARGS[@]}")"
+# Poll the asserted value itself, not a proxy condition plus a fixed sleep:
+# status.atProvider is refreshed by the NEXT Observe after the tamper lands
+# on the Grid, and a single sample taken after a fixed sleep can catch the
+# CR between the tamper landing and that Observe running (see
+# drift_wait_jsonpath_equals doc comment).
+DRIFT_REPORT_POLL_TIMEOUT=90
+ATPROVIDER_COMMENT="$(drift_wait_jsonpath_equals "$RESOURCE" "$NAME" '.status.atProvider.comment' "$TAMPERED_COMMENT" "$DRIFT_REPORT_POLL_TIMEOUT" "${NS_ARGS[@]}")" || true
 SYNCED_STATUS="$(drift_condition_status "$RESOURCE" "$NAME" Synced "${NS_ARGS[@]}")"
 DRIFT_REASON="$(drift_condition_reason "$RESOURCE" "$NAME" DriftDetected "${NS_ARGS[@]}")"
 API_COMMENT_AFTER="$(drift_wapi_get_field "$REF" '.comment' 'comment')"
