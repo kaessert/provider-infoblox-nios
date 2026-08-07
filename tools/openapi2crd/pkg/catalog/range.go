@@ -22,9 +22,10 @@ package catalog
 // parameter — it copies a Range Template's settings once at creation time
 // rather than maintaining a live link, so UpdateNetworkRange does not
 // accept it. It is also absent from the GetNetworkRange response
-// (inventory.md records response=1, i.e. only `_ref`), so it has no
-// AtProvider mirror (OmitFromObservation) — same pattern as ARecord's
-// removeAssociatedPtr (see dns_records.go).
+// (inventory.md records response=1, i.e. only `_ref`), so its AtProvider
+// mirror is populated from ForProvider (informational only) rather than
+// from the observed object — same pattern as ARecord's Cidr/NetworkView
+// (see dns_records.go).
 //
 // Cross-resource references: `networkView` identifies the owning
 // NetworkView by name (NetworkView's Name field is stable across most
@@ -78,13 +79,12 @@ func rangeResource() ResourceDescriptor {
 				Description: "CIDR of the parent network the range belongs to.",
 			},
 			{
-				Name:                "Template",
-				JSONName:            "template",
-				GoType:              goTypeString,
-				Scope:               FieldScopeRequest,
-				Immutable:           true,
-				OmitFromObservation: true,
-				Description:         "Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so it has no AtProvider mirror.",
+				Name:        "Template",
+				JSONName:    "template",
+				GoType:      goTypeString,
+				Scope:       FieldScopeRequest,
+				Immutable:   true,
+				Description: "Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so the AtProvider mirror is populated from ForProvider (informational only) rather than from the observed object.",
 			},
 			{
 				Name:        "Comment",

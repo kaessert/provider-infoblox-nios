@@ -369,9 +369,10 @@ func buildAtProviderFieldData(f catalog.FieldDef) FieldData {
 //
 // All ForProvider fields also appear in AtProvider (full-mirror) to enable
 // Observe-mode import — EXCEPT fields marked catalog.FieldDef.
-// OmitFromObservation, which the API genuinely never echoes back (ARecord's
-// removeAssociatedPtr is the only such field today). Those fields still
-// appear in ForProvider normally; only the AtProvider mirror is skipped.
+// OmitFromObservation, which the API genuinely never echoes back (e.g.
+// ARecord's and AAAARecord's removeAssociatedPtr, ExtensibleAttributeDef's
+// descendantsAction, RangeTemplate's msServer). Those fields still appear
+// in ForProvider normally; only the AtProvider mirror is skipped.
 func BuildFieldSetData(rd catalog.ResourceDescriptor, isCluster bool) FieldSetData {
 	var forProvider, atProvider []FieldData
 	hasReferences := false

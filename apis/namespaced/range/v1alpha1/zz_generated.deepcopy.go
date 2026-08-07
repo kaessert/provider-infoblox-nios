@@ -96,6 +96,11 @@ func (in *RangeObservation) DeepCopyInto(out *RangeObservation) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.Template != nil {
+		in, out := &in.Template, &out.Template
+		*out = new(string)
+		**out = **in
+	}
 	if in.Comment != nil {
 		in, out := &in.Comment, &out.Comment
 		*out = new(string)

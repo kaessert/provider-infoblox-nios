@@ -30,7 +30,7 @@ type RangeParameters struct {
 	NetworkViewSelector *xpv2.Selector `json:"networkViewSelector,omitempty"`
 	// CIDR of the parent network the range belongs to.
 	Network *string `json:"network,omitempty"`
-	// Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so it has no AtProvider mirror.
+	// Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so the AtProvider mirror is populated from ForProvider (informational only) rather than from the observed object.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="template is immutable after creation"
 	Template *string `json:"template,omitempty"`
 	// Comment for the range; maximum 256 characters.
@@ -60,6 +60,9 @@ type RangeObservation struct {
 	NetworkView *string `json:"networkView,omitempty"` // atProvider
 	// CIDR of the parent network the range belongs to.
 	Network *string `json:"network,omitempty"` // atProvider
+	// Name of the Range Template used to pre-populate this range's settings at creation. CreateNetworkRange accepts it; UpdateNetworkRange does not — the template link is create-only (applies its settings once, then the range is independent). Not part of the GetNetworkRange response, so the AtProvider mirror is populated from ForProvider (informational only) rather than from the observed object.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="template is immutable after creation"
+	Template *string `json:"template,omitempty"` // atProvider
 	// Comment for the range; maximum 256 characters.
 	Comment *string `json:"comment,omitempty"` // atProvider
 	// Extensible attributes (arbitrary key/value metadata defined in Grid Manager). The WAPI wire format wraps each value as {"value": ...}; this map is the simplified string-valued CRD representation (the controller translates to/from the SDK's EA map[string]interface{} type).
