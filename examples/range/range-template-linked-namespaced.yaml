@@ -1,0 +1,39 @@
+# range-template-linked-namespaced.yaml — namespace-scoped variant of the
+# template-linked Range. See range-template-linked.yaml for the full
+# rationale — this file only documents what differs.
+#
+# template: range-template-prereq-namespaced.yaml's spec.forProvider.name.
+#
+# Distinct identity: ${data.netRangeTemplateStartNamespaced} /
+# ${data.netRangeTemplateEndNamespaced} (100.64.<BLOCK_INDEX>.215 through
+# .219, carved from the unused remainder of
+# network-prereq-namespaced.yaml's .192/27 parent, after
+# range-namespaced.yaml's own .193-.213 span) are a disjoint 5-address
+# sub-block from range-template-linked.yaml's own
+# ${data.netRangeTemplateStartCluster} / ${data.netRangeTemplateEndCluster}
+# span — see the sub-allocation map in test/e2e/gen-datasource.sh's header
+# comment — so both examples can be applied to the same NIOS Grid Manager
+# at once without colliding.
+#
+# This example references the cluster-scoped ClusterProviderConfig (usable
+# by namespaced resources from any namespace) rather than the
+# namespace-scoped ProviderConfig — see examples/provider/config.yaml for
+# both options.
+apiVersion: range.infobloxnios.m.crossplane.io/v1alpha1
+kind: Range
+metadata:
+  name: example-range-template-linked-ns
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: range/v1alpha1/range
+    uptest.upbound.io/timeout: "300"
+spec:
+  forProvider:
+    startAddr: ${data.netRangeTemplateStartNamespaced}
+    endAddr: ${data.netRangeTemplateEndNamespaced}
+    networkView: default
+    template: example-range-tmpl-linked-ns-${data.runToken}
+    comment: Managed by Crossplane (template-linked, namespaced)
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
