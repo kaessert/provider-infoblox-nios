@@ -36,7 +36,6 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
@@ -49,7 +48,6 @@ const (
 	errGetPC                     = "cannot get ProviderConfig"
 	errGetClusterPC              = "cannot get ClusterProviderConfig"
 	errUnsupportedKind           = "unsupported provider config kind"
-	errNewObjectManager          = "cannot create Infoblox NIOS WAPI object manager"
 	errObserveARecord            = "cannot observe ARecord"
 	errCreateARecord             = "cannot create ARecord"
 	errUpdateARecord             = "cannot update ARecord"
@@ -73,69 +71,10 @@ const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
+// It is used by this package's tests to build mock WAPI request paths —
+// the authenticated connector itself is built by the shared credential
+// bridge (see internal/controller/config), which pins the same version.
 const wapiVersion = "2.9.7"
-
-// ── Credential bridge ───────────────────────────────────────────────────────
-//
-// Credential extraction (host/username/password → dualclient.Credentials)
-// is shared package logic, not something this controller package
-// duplicates — see dualclient.ExtractCredentials. host comes from the
-// owning ProviderConfig's own spec.host field (a non-secret connection
-// parameter); username/password come from the credentials Secret. Both
-// Connect implementations in cluster.go/namespaced.go call
-// dualclient.ExtractCredentials directly.
-
-// newObjectManager constructs an authenticated
-// identity.ManagerAndConnector from the given credentials — the SDK's
-// high-level ObjectManager for the ordinary CRUD calls, and the
-// lower-level Connector the identity ladder needs directly (it operates
-// below ObjectManager's typed methods so it can see search match
-// counts). The Connector performs HTTP Basic Auth on every request and
-// only validates configuration locally — no network round-trip happens
-// until the first Observe/Create/Update/Delete call. sslVerify comes
-// from the ProviderConfig's own spec field (not the credentials Secret)
-// — see the Connect methods in cluster.go/namespaced.go.
-func newObjectManager(creds dualclient.Credentials, sslVerify bool) (identity.ManagerAndConnector, error) {
-	return newObjectManagerWithScheme(creds, sslVerify, "https", "443")
-}
-
-// newObjectManagerWithScheme is the scheme/port-parameterized variant of
-// newObjectManager used by unit tests to point the SDK at a plain-HTTP
-// httptest.Server instead of a real HTTPS Grid Manager.
-func newObjectManagerWithScheme(creds dualclient.Credentials, sslVerify bool, scheme, port string) (identity.ManagerAndConnector, error) {
-	hostConfig := ibclient.HostConfig{
-		Scheme:  scheme,
-		Host:    creds.Host,
-		Version: wapiVersion,
-		Port:    port,
-	}
-	authConfig := ibclient.AuthConfig{
-		Username: creds.Username,
-		Password: creds.Password,
-	}
-	// sslVerify is resolved by the caller from the ProviderConfig's
-	// sslVerify spec field (default: true when nil). Set to false only
-	// when the Grid Manager uses a self-signed certificate whose SAN
-	// does not match the reachable host address.
-	sslVerifyStr := "true"
-	if !sslVerify {
-		sslVerifyStr = "false"
-	}
-	transportConfig := ibclient.NewTransportConfig(sslVerifyStr, 60, 10)
-
-	conn, err := ibclient.NewConnector(
-		hostConfig,
-		authConfig,
-		transportConfig,
-		&ibclient.WapiRequestBuilder{},
-		&ibclient.WapiHttpRequestor{},
-	)
-	if err != nil {
-		return identity.ManagerAndConnector{}, errors.Wrap(err, errNewObjectManager)
-	}
-
-	return identity.NewManagerAndConnector(conn), nil
-}
 
 // ── SDK <-> CRD field translation helpers (shared by both scopes) ──────────
 
@@ -520,7 +459,7 @@ func deleteARecord(objMgr ibclient.IBObjectManager, ref string) error {
 // search fallback (see the doc on those functions for why the guard is
 // reactive — only exercised on the search's own failure — instead of an
 // unconditional probe on every call). Not wired into Connect(), which
-// must stay network-lazy — see newObjectManager's doc.
+// must stay network-lazy — see config.BuildConnector's doc.
 
 // ensureIdentityPrerequisite probes the Grid for the identity extensible
 // attribute definition before any call that stamps identity onto a new

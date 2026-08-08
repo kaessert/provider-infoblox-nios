@@ -34,6 +34,7 @@ import (
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -602,7 +603,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) identity.ManagerAn
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	mgrConn, err := newObjectManagerWithScheme(dualclient.Credentials{
+	conn, err := config.BuildConnector(dualclient.Credentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
@@ -610,7 +611,7 @@ func newTestObjectManager(t *testing.T, srv *httptest.Server) identity.ManagerAn
 	if err != nil {
 		t.Fatalf("cannot build test object manager: %v", err)
 	}
-	return mgrConn
+	return identity.NewManagerAndConnector(conn)
 }
 
 // ── cluster: Observe ────────────────────────────────────────────────────
@@ -2174,9 +2175,9 @@ func TestClusterConnectProviderConfigNotFound(t *testing.T) {
 // TestClusterConnectSslVerifyVariants exercises the cluster-scoped
 // ProviderConfig's SSLVerify resolution branch in Connect: true, false, and
 // omitted (nil, which must default to secure — TLS verification enabled).
-// newObjectManagerWithScheme's real TLS-handshake behavior for each boolean
-// is proven separately by TestNewObjectManagerWithSchemeEnforcesTLSVerification;
-// this test proves Connect correctly extracts and defaults the value from
+// config.BuildConnector's real TLS-handshake behavior for each boolean is
+// proven separately by TestBuildConnectorEnforcesTLSVerification; this
+// test proves Connect correctly extracts and defaults the value from
 // pc.Spec.SSLVerify for every branch without erroring.
 func TestClusterConnectSslVerifyVariants(t *testing.T) {
 	cases := map[string]*bool{
@@ -3562,34 +3563,31 @@ func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
 	}
 }
 
-func TestNewObjectManagerWithSchemeUsesConfiguredSslVerify(t *testing.T) {
-	// Regression guard: newObjectManagerWithScheme must not hardcode
-	// sslVerify to "true" — it must honor the sslVerify parameter. Both
-	// branches must construct successfully (transport config validation
-	// happens locally; no network round-trip occurs here).
+func TestBuildConnectorUsesConfiguredSslVerify(t *testing.T) {
+	// Regression guard: config.BuildConnector must not hardcode sslVerify
+	// to "true" — it must honor the sslVerify parameter. Both branches
+	// must construct successfully (transport config validation happens
+	// locally; no network round-trip occurs here).
 	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
 		t.Run(name, func(t *testing.T) {
 			creds := dualclient.Credentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
-			mgrConn, err := newObjectManagerWithScheme(creds, sslVerify, "http", "80")
+			conn, err := config.BuildConnector(creds, sslVerify, "http", "80")
 			if err != nil {
-				t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+				t.Fatalf("BuildConnector: unexpected error: %v", err)
 			}
-			if mgrConn.Manager == nil {
-				t.Fatal("newObjectManagerWithScheme: expected non-nil object manager")
-			}
-			if mgrConn.Connector == nil {
-				t.Fatal("newObjectManagerWithScheme: expected non-nil connector")
+			if conn == nil {
+				t.Fatal("BuildConnector: expected non-nil connector")
 			}
 		})
 	}
 }
 
-// TestNewObjectManagerWithSchemeEnforcesTLSVerification proves — via a real
-// TLS handshake against a self-signed httptest server — that the sslVerify
+// TestBuildConnectorEnforcesTLSVerification proves — via a real TLS
+// handshake against a self-signed httptest server — that the sslVerify
 // boolean genuinely reaches the underlying TransportConfig, not just that
 // construction succeeds either way. sslVerify=true must reject the
 // self-signed certificate; sslVerify=false must accept it.
-func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
+func TestBuildConnectorEnforcesTLSVerification(t *testing.T) {
 	m := newMockWapiServer()
 	srv := httptest.NewTLSServer(m.handler())
 	defer srv.Close()
@@ -3601,11 +3599,11 @@ func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
 	creds := dualclient.Credentials{Host: u.Hostname(), Username: "test-user", Password: "test-pass"}
 
 	t.Run("VerifyEnabledRejectsSelfSignedCert", func(t *testing.T) {
-		mgrConn, err := newObjectManagerWithScheme(creds, true, "https", u.Port())
+		conn, err := config.BuildConnector(creds, true, "https", u.Port())
 		if err != nil {
-			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+			t.Fatalf("BuildConnector: unexpected error: %v", err)
 		}
-		objMgr := mgrConn.Manager
+		objMgr := identity.NewManagerAndConnector(conn).Manager
 		if _, err := objMgr.GetARecordByRef("record:a/does-not-exist"); err == nil {
 			t.Fatal("GetARecordByRef: expected a TLS certificate verification error with sslVerify=true against a self-signed cert, got nil")
 		} else if lower := strings.ToLower(err.Error()); !strings.Contains(lower, "certificate") && !strings.Contains(lower, "x509") {
@@ -3614,11 +3612,11 @@ func TestNewObjectManagerWithSchemeEnforcesTLSVerification(t *testing.T) {
 	})
 
 	t.Run("VerifyDisabledAcceptsSelfSignedCert", func(t *testing.T) {
-		mgrConn, err := newObjectManagerWithScheme(creds, false, "https", u.Port())
+		conn, err := config.BuildConnector(creds, false, "https", u.Port())
 		if err != nil {
-			t.Fatalf("newObjectManagerWithScheme: unexpected error: %v", err)
+			t.Fatalf("BuildConnector: unexpected error: %v", err)
 		}
-		objMgr := mgrConn.Manager
+		objMgr := identity.NewManagerAndConnector(conn).Manager
 		_, err = objMgr.GetARecordByRef("record:a/does-not-exist")
 		if err == nil {
 			t.Fatal("GetARecordByRef: expected a not-found error for a nonexistent record, got nil")

@@ -159,61 +159,102 @@ spec:
 The Grid Manager host (`spec.host` on ProviderConfig/ClusterProviderConfig, and
 `spec.readEndpoint.host` for the optional read endpoint) is a non-secret
 connection parameter, not a Secret key. The credentials Secret carries only
-`username`/`password`. `internal/clients/dualclient.ExtractCredentials` is the
-single shared helper every controller package's `Connect()` calls to combine
-the two into a `dualclient.Credentials` value — it takes the host as an
-explicit parameter and returns an error if it is empty, so a `Credentials`
-value is always either fully populated or absent; no call site can construct
-one with a blank host.
+`username`/`password`.
 
-When a controller package still carries its own private `nioCredentials`
-type and `extractCredentials` function instead of calling
-`dualclient.ExtractCredentials`, migrate it with this recipe (each edit is
-in-place, mechanical):
+`internal/controller/config` is the single place a controller resolves a
+ProviderConfig into an authenticated WAPI connection. It exports:
+
+- `type Conn struct { Connector *ibclient.Connector; Endpoint string }` — a
+  struct, not a bare connector, so a later field addition (read-endpoint
+  routing, a convergence gate) never changes a call-site signature.
+- `func GetLegacy(ctx, kube, pc *clusterv1alpha1.ProviderConfig) (*Conn, error)`
+  — legacy cluster-scoped ProviderConfig, referenced directly by name.
+- `func Get(ctx, kube, pc *namespacedv1alpha1.ProviderConfig) (*Conn, error)`
+  — namespaced ProviderConfig; a `secretRef` with no namespace falls back to
+  the ProviderConfig's own namespace.
+- `func GetCluster(ctx, kube, cpc *namespacedv1alpha1.ClusterProviderConfig) (*Conn, error)`
+  — namespaced ClusterProviderConfig; no namespace fallback, since a
+  cluster-scoped config has none of its own.
+- `func BuildConnector(creds dualclient.Credentials, sslVerify bool, scheme, port string) (*ibclient.Connector, error)`
+  — the test seam. Unit tests call this directly with `scheme: "http"` and an
+  `httptest.Server`'s port instead of a real HTTPS Grid Manager.
+
+Each resolver extracts credentials via `internal/clients/dualclient.ExtractCredentials`,
+applies the `SSLVerify` nil-default (unset → `true`, secure) exactly once, and
+returns a fully authenticated `*Conn`. Both live inside `internal/controller/config`
+and appear nowhere in `internal/controller/<pkg>`.
+
+A controller's whole credential path is three statements:
+
+```go
+pc := &apisv1alpha1.ProviderConfig{}
+if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name}, pc); err != nil {
+    return nil, errors.Wrap(err, errGetPC)
+}
+conn, err := config.GetLegacy(ctx, c.kube, pc)
+if err != nil {
+    return nil, err
+}
+```
+
+(`config.Get`/`config.GetCluster` for the namespaced Kind-switch arms.)
+
+What a package does with `conn.Connector` depends on which of four
+constructor-family shapes it had before the bridge:
+
+| Family | Old private constructor | Returns | Transformation |
+|---|---|---|---|
+| A/B | `newObjectManager`/`newClient` + `…WithScheme` | `identity.ManagerAndConnector` | delete both; call `identity.NewManagerAndConnector(conn.Connector)` at the call site |
+| C | `newConnector` + `…WithScheme` | `ibclient.IBConnector` | delete both; use `conn.Connector` directly |
+| D | `newClients`/`newHostRecordClient` + `…WithScheme` | a package-specific wrapper struct | keep the wrapper constructor, but build it from `conn.Connector` — delete only the credential-resolution half |
+
+Migrating a package off its own private `nioCredentials`/`extractCredentials`/
+`newObjectManager*` plumbing onto this bridge is mechanical:
 
 **1. `internal/controller/<pkg>/controller.go`**
-- Delete `type nioCredentials struct { Host, Username, Password string }`.
-- Delete `func extractCredentials(...)`.
+- Delete `type nioCredentials struct { Host, Username, Password string }`,
+  `func extractCredentials(...)`, and the matching `new*`/`new*WithScheme`
+  constructor pair for whichever family (A–D) the package used.
 - Delete the error consts that become unused: `errGetSecret`, `errNoSecretRef`,
-  `errUnsupportedCreds`, `errMissingCredKey`. Unused consts do not fail `go
-  build` in Go — grep each name in the package after deleting the function and
-  remove the ones with no remaining reference.
-- `func newObjectManager(creds *nioCredentials, sslVerify bool)` →
-  `func newObjectManager(creds dualclient.Credentials, sslVerify bool)`. Same
-  for `newObjectManagerWithScheme`. Value, not pointer — there is no nil case
-  now.
+  `errUnsupportedCreds`, `errMissingCredKey`, `errNewObjectManager` (or the
+  package's equivalent). Unused consts do not fail `go build` in Go — grep
+  each name in the package after deleting the function and remove the ones
+  with no remaining reference.
+- A `wapiVersion` const used only to build test request paths (e.g.
+  `"/wapi/v"+wapiVersion+"/..."`) may stay — `config.BuildConnector` pins the
+  same version internally, so the two never drift.
 - Fix any doc comment claiming the endpoint is "validated non-empty by
   extractCredentials" — it is now resolved from `pc.Spec.Host`, which the CRD
   requires with `MinLength=1`.
 
 **2. `cluster.go` — `Connect()`**
-```go
-creds, err := dualclient.ExtractCredentials(ctx, c.kube, pc.Spec.Host,
-    pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
-```
-`endpoint: creds.Host` at the call site is unchanged and still compiles.
+Replace the credential-extraction + `SSLVerify` nil-default + `new*(creds,
+sslVerify)` block with `config.GetLegacy(ctx, c.kube, pc)`, then build
+whatever this package's family needs from `conn.Connector` (see the table
+above). `endpoint: conn.Endpoint` replaces `endpoint: creds.Host`.
 
 **3. `namespaced.go` — `Connect()`**
-Two arms of the existing Kind switch, both edited in place:
-- `case "ProviderConfig"`: `pc.Spec.Host`, fallback namespace `pc.GetNamespace()`.
-- `case "ClusterProviderConfig"`: `cpc.Spec.Host`, fallback namespace `""`.
-
-Change `var creds *nioCredentials` to `var creds dualclient.Credentials` and
-drop the `&` / pointer handling. Do not restructure the switch, the usage
-trackers, or the `errUnsupportedKind` default — the dual-scope shape here is
-unrelated to this migration.
+Same replacement in both arms of the existing Kind switch — `config.Get(ctx,
+c.kube, pc)` for `"ProviderConfig"`, `config.GetCluster(ctx, c.kube, cpc)` for
+`"ClusterProviderConfig"`. Do not restructure the switch, the usage trackers,
+or the `errUnsupportedKind` default — the dual-scope shape here is unrelated
+to this migration.
 
 **4. `*_test.go`**
-- Secret fixtures: drop the `host` key from `Data`/`StringData`.
+- Secret fixtures: drop the `host` key from `Data`/`StringData`; carry only
+  `username`/`password`.
 - Every ProviderConfig / ClusterProviderConfig fixture: set `Spec.Host`.
-- `&nioCredentials{…}` literals → `dualclient.Credentials{…}` (value).
+- Any call to the package's own `new*WithScheme(creds, sslVerify, scheme,
+  port)` test helper becomes `config.BuildConnector(creds, sslVerify, scheme,
+  port)`, then `identity.NewManagerAndConnector(conn)` (family A/B) or the
+  package's own wrapper (family D) built from the returned `*ibclient.Connector`.
 - A test asserting `errMissingCredKey` when the Secret's `host` key is absent
   must be deleted, not rewritten. A missing host is now rejected by CRD schema
   validation, so there is no runtime path left to assert. Keep the
   missing-username / missing-password cases.
 - A test documenting that the `ssl_verify` Secret key is ignored should be
-  retargeted at `dualclient.ExtractCredentials` — it is still the right
-  assertion, just in a new home.
+  retargeted at the shared credential-extraction helper — it is still the
+  right assertion, just in a new home.
 
 ## Contributing
 
