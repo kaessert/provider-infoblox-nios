@@ -5,6 +5,6 @@ go 1.24.0
 tool github.com/kaessert/crossplane-update-tester
 
 require (
-	github.com/kaessert/crossplane-update-tester v0.1.0 // indirect
+	github.com/kaessert/crossplane-update-tester v0.5.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
