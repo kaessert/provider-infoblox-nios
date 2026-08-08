@@ -382,12 +382,11 @@ type ManagerAndConnector struct {
 }
 
 // NewManagerAndConnector builds an ObjectManager around conn and returns
-// both. Every one of this provider's per-resource newObjectManager
-// functions builds a Connector and returns only
-// ibclient.NewObjectManager(conn, "", ""), dropping conn on the same
-// line. Adopting this helper is a one-line change at each of those call
-// sites — replace that return with NewManagerAndConnector(conn) — rather
-// than a rewrite of the surrounding credential/TLS plumbing.
+// both. Every controller package that needs identity resolution obtains
+// its authenticated *ibclient.Connector from the shared credential bridge
+// in internal/controller/config (GetLegacy/Get/GetCluster), then wraps it
+// here in a single call — NewManagerAndConnector(conn.Connector) — rather
+// than duplicating ObjectManager/Connector construction locally.
 func NewManagerAndConnector(conn ibclient.IBConnector) ManagerAndConnector {
 	return ManagerAndConnector{
 		Manager:   ibclient.NewObjectManager(conn, "", ""),
