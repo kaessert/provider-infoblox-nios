@@ -1,9 +1,10 @@
 // connect.go builds authenticated dual-endpoint Clients from ProviderConfig
 // credentials. It centralizes the WAPI credentials Secret contract
-// (host/username/password[/ssl_verify] keys) and enforces fail-loudly
-// behavior when a readEndpoint is configured but its credentials are
-// missing or invalid — misconfiguration must be visible, never silently
-// downgraded to primary-only routing.
+// (username/password keys only — the Grid Manager host is a
+// ProviderConfig-level connection parameter, not a Secret key) and
+// enforces fail-loudly behavior when a readEndpoint is configured but its
+// credentials are missing or invalid — misconfiguration must be visible,
+// never silently downgraded to primary-only routing.
 package dualclient
 
 import (
@@ -19,30 +20,42 @@ import (
 
 // Error constants — all errors use the crossplane-runtime errors package.
 const (
+	errEmptyHost                 = "host must not be empty: this indicates a caller bug or a ProviderConfig that predates the host field, not a malformed credentials Secret"
 	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
 	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
 	errGetSecret                 = "cannot get credentials secret"
-	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
+	errMissingCredKey            = "credentials secret is missing one of the required username/password keys"
 	errNewPrimaryObjectManager   = "cannot create primary Infoblox NIOS WAPI object manager"
 	errNewCandidateObjectManager = "cannot create candidate (readEndpoint) Infoblox NIOS WAPI object manager: misconfigured readEndpoint must fail loudly, not silently degrade to primary-only"
 )
 
 // Credentials holds the WAPI connection parameters for one endpoint
-// (primary or candidate), extracted from a Kubernetes Secret. TLS
+// (primary or candidate). Host is a ProviderConfig-level connection
+// parameter supplied directly by the caller (see ExtractCredentials);
+// Username/Password are extracted from a Kubernetes Secret. TLS
 // verification is governed by the owning ProviderConfig's sslVerify spec
-// field (passed separately to Connect), not by anything in this Secret.
+// field (passed separately to Connect), not by anything in this struct or
+// its source Secret.
 type Credentials struct {
 	Host     string
 	Username string
 	Password string
 }
 
-// ExtractCredentials reads the host/username/password keys from the
-// Secret referenced by source/secretRef. This is the same Secret shape
+// ExtractCredentials reads the username/password keys from the Secret
+// referenced by source/secretRef and combines them with the caller-supplied
+// host into a fully-populated Credentials. This is the same Secret shape
 // used for a ProviderConfig's primary credentials, reused unchanged for a
-// readEndpoint's credentialsRef. TLS verification is not read from this
+// readEndpoint's credentialsRef. host is a ProviderConfig-level connection
+// parameter (e.g. pc.Spec.Host or pc.Spec.ReadEndpoint.Host) — it is never
+// read from the Secret, and an empty host is rejected rather than returned
+// for the caller to fill in afterward, so a Credentials value is either
+// fully populated or an error. TLS verification is also not read from this
 // Secret — it is a ProviderConfig-level policy field (see Connect).
-func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string) (Credentials, error) {
+func ExtractCredentials(ctx context.Context, kube k8sclient.Client, host string, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string) (Credentials, error) {
+	if host == "" {
+		return Credentials{}, errors.New(errEmptyHost)
+	}
 	if source != xpv2.CredentialsSourceSecret {
 		return Credentials{}, errors.New(errUnsupportedCreds)
 	}
@@ -60,10 +73,9 @@ func ExtractCredentials(ctx context.Context, kube k8sclient.Client, source xpv2.
 		return Credentials{}, errors.Wrap(err, errGetSecret)
 	}
 
-	host := string(secret.Data["host"])
 	username := string(secret.Data["username"])
 	password := string(secret.Data["password"])
-	if host == "" || username == "" || password == "" {
+	if username == "" || password == "" {
 		return Credentials{}, errors.New(errMissingCredKey)
 	}
 

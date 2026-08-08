@@ -31,7 +31,9 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -104,13 +106,13 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// credentialsSecret returns a Secret carrying the host/username/password
-// keys the credential bridge expects.
-func credentialsSecret(ns, name, host, username, password string) *corev1.Secret {
+// credentialsSecret returns a Secret carrying the username/password keys
+// the credential bridge expects. The Grid Manager host is a
+// ProviderConfig-level spec field, not a Secret key.
+func credentialsSecret(ns, name, username, password string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Data: map[string][]byte{
-			"host":     []byte(host),
 			"username": []byte(username),
 			"password": []byte(password),
 		},
@@ -590,7 +592,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	hc, err := newHostRecordClientWithScheme(&nioCredentials{
+	conn, err := config.BuildConnector(dualclient.Credentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
@@ -598,6 +600,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	if err != nil {
 		t.Fatalf("cannot build test host record client: %v", err)
 	}
+	hc := newHostRecordClient(conn)
 	// prober is set to a fresh instance (not nil) so tests never share
 	// identity.DefaultProber's process-wide TTL cache across httptest
 	// servers — otherwise one test's cached verdict would leak into
@@ -1367,10 +1370,11 @@ func TestClusterConnectSuccess(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&clusterpcv1alpha1.ProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: clusterpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: clusterpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
@@ -1996,10 +2000,11 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
@@ -2036,10 +2041,11 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ClusterProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
@@ -2854,51 +2860,6 @@ func TestClusterCreateRejectsFilterParamsWithoutIpAddressType(t *testing.T) {
 	_, err := e.Create(context.Background(), cr)
 	if err == nil || !strings.Contains(err.Error(), errFilterParamsRequiresType) {
 		t.Errorf("Create: err = %v, want it to contain %q", err, errFilterParamsRequiresType)
-	}
-}
-
-// ── extractCredentials: ssl_verify key is fully ignored ────────────────
-//
-// TLS verification is governed by the ProviderConfig's own sslVerify spec
-// field (see cluster.go/namespaced.go's Connect methods), never by a key
-// in the credentials Secret. This pins the migration: a legacy
-// "ssl_verify" key in the Secret must have zero effect on
-// extractCredentials — nioCredentials has no SslVerify field to read it
-// into.
-func TestExtractCredentialsIgnoresSecretSslVerifyKey(t *testing.T) {
-	scheme := newTestScheme(t)
-	secret := credentialsSecret("crossplane-system", "infobloxnios-credentials", "grid.example.com", "admin", "s3cr3t")
-	secret.Data["ssl_verify"] = []byte("false")
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-
-	creds, err := extractCredentials(context.Background(), kube, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{
-		SecretReference: xpv2.SecretReference{Name: "infobloxnios-credentials", Namespace: "crossplane-system"},
-		Key:             "unused",
-	}, "")
-	if err != nil {
-		t.Fatalf("extractCredentials: unexpected error: %v", err)
-	}
-	if creds.Host != "grid.example.com" || creds.Username != "admin" || creds.Password != "s3cr3t" {
-		t.Errorf("extractCredentials: got %+v, want Host/Username/Password populated regardless of the ssl_verify key", creds)
-	}
-}
-
-func TestNewHostRecordClientWithSchemeUsesConfiguredSslVerify(t *testing.T) {
-	// Regression guard: newHostRecordClientWithScheme must not hardcode
-	// SslVerify to "true" — it must honor the sslVerify parameter. Both branches
-	// must construct successfully (transport config validation happens
-	// locally; no network round-trip occurs here).
-	for name, sslVerify := range map[string]bool{"Enabled": true, "Disabled": false} {
-		t.Run(name, func(t *testing.T) {
-			creds := &nioCredentials{Host: "127.0.0.1", Username: "admin", Password: "s3cr3t"}
-			client, err := newHostRecordClientWithScheme(creds, sslVerify, "http", "80")
-			if err != nil {
-				t.Fatalf("newHostRecordClientWithScheme: unexpected error: %v", err)
-			}
-			if client == nil {
-				t.Fatal("newHostRecordClientWithScheme: expected non-nil client")
-			}
-		})
 	}
 }
 

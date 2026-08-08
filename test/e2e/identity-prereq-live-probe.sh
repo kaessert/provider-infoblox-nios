@@ -659,7 +659,6 @@ delete_ea_def "${SCRATCH_KEY}"
 # observed.
 log "swapping the ProviderConfig secret to the restricted credential..."
 ${KUBECTL} create secret generic infobloxnios-credentials -n crossplane-system \
-  --from-literal="host=${INFOBLOX_HOST}" \
   --from-literal="username=${INFOBLOX_E2E_RESTRICTED_USER}" \
   --from-literal="password=${INFOBLOX_E2E_RESTRICTED_PASS}" \
   --from-literal="ssl_verify=false" \

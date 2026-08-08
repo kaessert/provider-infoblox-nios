@@ -3,21 +3,21 @@
 # cluster before uptest/chainsaw assertions run.
 #
 # This script creates:
-#   - infobloxnios-credentials Secret (host/username/password/ssl_verify) in
-#     crossplane-system, populated from the INFOBLOX_HOST, INFOBLOX_USER,
-#     and INFOBLOX_PASS environment variables (Hive nest secrets / CI
-#     secrets — see the credentials section of the provider blueprint).
-#     ssl_verify is set to "false" in the Secret itself because the
-#     controllers read this flag from the Secret data (not from the
-#     ProviderConfig spec) — the E2E Grid Manager's TLS certificate SAN
-#     does not match the reachable host address. This single Secret is
-#     shared by every ProviderConfig/ClusterProviderConfig created below
-#     (cluster-scoped and namespace-scoped alike), so setting it once here
-#     covers both scopes.
+#   - infobloxnios-credentials Secret (username/password/ssl_verify) in
+#     crossplane-system, populated from the INFOBLOX_USER and INFOBLOX_PASS
+#     environment variables (Hive nest secrets / CI secrets — see the
+#     credentials section of the provider blueprint). The Grid Manager
+#     hostname (INFOBLOX_HOST) is NOT a Secret key — it is a non-secret
+#     connection parameter, so it is set on spec.host on every
+#     ProviderConfig/ClusterProviderConfig created below instead. This
+#     single Secret is shared by every ProviderConfig/ClusterProviderConfig
+#     created below (cluster-scoped and namespace-scoped alike), so
+#     setting it once here covers both scopes.
 #   - ProviderConfig (cluster-scoped, group infobloxnios.crossplane.io) —
-#     used by cluster-scoped managed resources. spec.sslVerify is set to
-#     false because the E2E Grid Manager presents a self-signed
-#     certificate whose SAN does not match the reachable host address.
+#     used by cluster-scoped managed resources. spec.host is set from
+#     INFOBLOX_HOST. spec.sslVerify is set to false because the E2E Grid
+#     Manager presents a self-signed certificate whose SAN does not match
+#     the reachable host address.
 #   - ProviderConfig (namespace-scoped, group infobloxnios.m.crossplane.io)
 #     in BOTH the crossplane-system and default namespaces — used by
 #     namespaced managed resources that reference a same-namespace
@@ -139,7 +139,6 @@ echo "==> Creating infobloxnios-credentials Secret in crossplane-system..."
 
 ${KUBECTL} create secret generic infobloxnios-credentials \
   --namespace=crossplane-system \
-  --from-literal="host=${INFOBLOX_HOST}" \
   --from-literal="username=${INFOBLOX_USER}" \
   --from-literal="password=${INFOBLOX_PASS}" \
   --from-literal="ssl_verify=false" \
@@ -147,12 +146,13 @@ ${KUBECTL} create secret generic infobloxnios-credentials \
 
 echo "==> Creating cluster-scoped ProviderConfig (default)..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: "${INFOBLOX_HOST}"
   # sslVerify: false because the E2E Grid Manager presents a self-signed
   # certificate whose SAN does not match the reachable host address.
   sslVerify: false
@@ -166,13 +166,14 @@ EOF
 
 echo "==> Creating namespace-scoped ProviderConfig (default) in crossplane-system..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: default
   namespace: crossplane-system
 spec:
+  host: "${INFOBLOX_HOST}"
   # sslVerify: false because the E2E Grid Manager presents a self-signed
   # certificate whose SAN does not match the reachable host address.
   sslVerify: false
@@ -186,13 +187,14 @@ EOF
 
 echo "==> Creating namespace-scoped ProviderConfig (default) in default namespace..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: default
   namespace: default
 spec:
+  host: "${INFOBLOX_HOST}"
   # sslVerify: false because the E2E Grid Manager presents a self-signed
   # certificate whose SAN does not match the reachable host address.
   sslVerify: false
@@ -206,12 +208,13 @@ EOF
 
 echo "==> Creating ClusterProviderConfig (default, cluster-scoped)..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  host: "${INFOBLOX_HOST}"
   # sslVerify: false because the E2E Grid Manager presents a self-signed
   # certificate whose SAN does not match the reachable host address.
   sslVerify: false

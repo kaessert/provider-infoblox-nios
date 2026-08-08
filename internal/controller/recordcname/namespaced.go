@@ -20,6 +20,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordcname/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
@@ -59,8 +60,7 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.New(errGetPC + ": no ProviderConfigReference set")
 	}
 
-	var creds *nioCredentials
-	sslVerify := true
+	var conn *config.Conn
 	switch ref.Kind {
 	case "ProviderConfig":
 		pc := &apisv1alpha1.ProviderConfig{}
@@ -68,12 +68,9 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 			return nil, errors.Wrap(err, errGetPC)
 		}
 		var err error
-		creds, err = extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace())
+		conn, err = config.Get(ctx, c.kube, pc)
 		if err != nil {
 			return nil, err
-		}
-		if pc.Spec.SSLVerify != nil {
-			sslVerify = *pc.Spec.SSLVerify
 		}
 
 	case "ClusterProviderConfig":
@@ -82,28 +79,22 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 			return nil, errors.Wrap(err, errGetClusterPC)
 		}
 		var err error
-		creds, err = extractCredentials(ctx, c.kube, cpc.Spec.Credentials.Source, cpc.Spec.Credentials.SecretRef, "")
+		conn, err = config.GetCluster(ctx, c.kube, cpc)
 		if err != nil {
 			return nil, err
-		}
-		if cpc.Spec.SSLVerify != nil {
-			sslVerify = *cpc.Spec.SSLVerify
 		}
 
 	default:
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	mgrConn, err := newObjectManager(creds, sslVerify)
-	if err != nil {
-		return nil, err
-	}
+	mgrConn := identity.NewManagerAndConnector(conn.Connector)
 
 	return &namespacedExternal{
 		kube:     c.kube,
 		objMgr:   mgrConn.Manager,
 		conn:     mgrConn.Connector,
-		endpoint: creds.Host,
+		endpoint: conn.Endpoint,
 	}, nil
 }
 

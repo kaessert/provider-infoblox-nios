@@ -21,6 +21,14 @@ type ProviderCredentials struct {
 
 // A ProviderConfigSpec defines the desired state of a ProviderConfig.
 type ProviderConfigSpec struct {
+	// Host is the NIOS Grid Manager hostname or IP address (e.g.
+	// "gm.example.com"). It is a non-secret connection parameter, so it
+	// lives here rather than in the credentials Secret — the Secret
+	// carries only username and password.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+
 	// Credentials required to authenticate to this provider.
 	Credentials ProviderCredentials `json:"credentials"`
 
@@ -44,9 +52,17 @@ type ProviderConfigSpec struct {
 // ReadEndpoint configures an optional read-only NIOS endpoint (typically a
 // Grid Master Candidate) for offloading Observe traffic.
 type ReadEndpoint struct {
+	// Host is the read endpoint's own NIOS Grid Manager hostname or IP
+	// address (typically a Grid Master Candidate). It is a non-secret
+	// connection parameter, so it lives here rather than in the
+	// credentials Secret — the Secret carries only username and password.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+
 	// CredentialsRef references a Secret with the same key format as the
-	// primary credentials (host, username, password). Supports
-	// least-privilege read-only NIOS accounts.
+	// primary credentials (username, password). Supports least-privilege
+	// read-only NIOS accounts.
 	CredentialsRef xpv2.SecretReference `json:"credentialsRef"`
 
 	// Convergence configures how the controller detects replication
@@ -83,6 +99,7 @@ type ConvergenceConfig struct {
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="HOST",type="string",JSONPath=".spec.host"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
 // +kubebuilder:resource:scope=Namespaced,categories={crossplane,provider,infobloxnios}
 // A ProviderConfig configures an Infoblox NIOS provider. It is
@@ -108,6 +125,7 @@ type ProviderConfigList struct {
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="HOST",type="string",JSONPath=".spec.host"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,provider,infobloxnios}
 // A ClusterProviderConfig configures an Infoblox NIOS provider. It is

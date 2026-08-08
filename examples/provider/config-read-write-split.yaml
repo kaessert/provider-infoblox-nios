@@ -10,7 +10,9 @@
 # Prerequisites:
 #   - A NIOS Grid Master (GM) as the primary endpoint
 #   - A NIOS Grid Master Candidate (GMC) as the read endpoint
-#   - Two Secrets with the same key format (host, username, password)
+#   - Two Secrets with the same key format (username, password) — the host
+#     for each endpoint is a ProviderConfig field, not a Secret key: the
+#     primary's is spec.host, the candidate's is spec.readEndpoint.host
 
 # Primary credentials (read-write — Grid Master)
 apiVersion: v1
@@ -20,7 +22,6 @@ metadata:
   name: infoblox-primary
 type: Opaque
 stringData:
-  host: "gm.example.com"
   username: "admin"
   password: "change-me"
 ---
@@ -33,7 +34,6 @@ metadata:
   name: infoblox-candidate
 type: Opaque
 stringData:
-  host: "gmc.example.com"
   username: "readonly-user"
   password: "change-me"
 ---
@@ -43,6 +43,7 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: "gm.example.com"
   credentials:
     source: Secret
     secretRef:
@@ -50,6 +51,7 @@ spec:
       name: infoblox-primary
       key: password
   readEndpoint:
+    host: "gmc.example.com"
     credentialsRef:
       name: infoblox-candidate
       namespace: crossplane-system
@@ -70,6 +72,7 @@ kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  host: "gm.example.com"
   credentials:
     source: Secret
     secretRef:
@@ -77,6 +80,7 @@ spec:
       name: infoblox-primary
       key: password
   readEndpoint:
+    host: "gmc.example.com"
     credentialsRef:
       name: infoblox-candidate
       namespace: crossplane-system

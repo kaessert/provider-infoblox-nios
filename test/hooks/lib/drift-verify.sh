@@ -45,15 +45,21 @@ drift_condition_message() {
     drift_get "$resource" "$name" ".status.conditions[?(@.type==\"${type}\")].message" "$@"
 }
 
-# drift_wapi_creds reads host/username/password from the
+# drift_wapi_creds reads the Grid host from the cluster-scoped
+# ProviderConfig/default (spec.host is a non-secret connection parameter,
+# not a Secret key), and reads username/password from the
 # infobloxnios-credentials Secret that test/setup.sh creates in
-# crossplane-system, and exports DRIFT_WAPI_HOST/DRIFT_WAPI_USER/
-# DRIFT_WAPI_PASS. Reading from the Secret (rather than trusting
-# INFOBLOX_HOST/INFOBLOX_USER/INFOBLOX_PASS to still be exported in the
-# shell that invokes uptest) mirrors every other custom post-assert hook
-# pattern in this fleet.
+# crossplane-system. It exports DRIFT_WAPI_HOST/DRIFT_WAPI_USER/
+# DRIFT_WAPI_PASS. Reading credentials from the Secret (rather than
+# trusting INFOBLOX_USER/INFOBLOX_PASS to still be exported in the shell
+# that invokes uptest) mirrors every other custom post-assert hook pattern
+# in this fleet. test/setup.sh sets the same INFOBLOX_HOST on every
+# ProviderConfig/ClusterProviderConfig it creates (cluster- and
+# namespace-scoped alike), so the cluster-scoped ProviderConfig/default is
+# a valid host source regardless of which scope's hook is calling.
 drift_wapi_creds() {
-    DRIFT_WAPI_HOST="$("${KUBECTL:-kubectl}" -n crossplane-system get secret infobloxnios-credentials -o jsonpath='{.data.host}' | base64 -d)"
+    DRIFT_WAPI_HOST="$("${KUBECTL:-kubectl}" get providerconfig.infobloxnios.crossplane.io default -o jsonpath='{.spec.host}')"
+    : "${DRIFT_WAPI_HOST:?drift_wapi_creds: ProviderConfig/default has no spec.host}"
     DRIFT_WAPI_USER="$("${KUBECTL:-kubectl}" -n crossplane-system get secret infobloxnios-credentials -o jsonpath='{.data.username}' | base64 -d)"
     DRIFT_WAPI_PASS="$("${KUBECTL:-kubectl}" -n crossplane-system get secret infobloxnios-credentials -o jsonpath='{.data.password}' | base64 -d)"
     DRIFT_WAPI_BASE="https://${DRIFT_WAPI_HOST}/wapi/${INFOBLOX_WAPI_VERSION:-v2.13.1}"

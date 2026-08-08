@@ -1,0 +1,61 @@
+# ARecord — namespace-scoped variant that references the namespace-scoped
+# ProviderConfig (kind: ProviderConfig) instead of the cluster-scoped
+# ClusterProviderConfig used by record-a-namespaced.yaml. See record-a.yaml
+# for the full field documentation — this file only documents what differs.
+#
+# Why this file exists: every other namespaced example in this provider uses
+# `providerConfigRef.kind: ClusterProviderConfig`, so the namespace-scoped
+# `ProviderConfig` arm of Connect() — resolved via the same-namespace fallback
+# — has no live coverage without it. test/setup.sh already creates a
+# namespace-scoped ProviderConfig named "default" in the "default" namespace.
+#
+# Distinct identity: the owner name below differs from both record-a.yaml's
+# and record-a-namespaced.yaml's so all three examples can be applied to the
+# same NIOS Grid Manager at once without colliding on the same
+# (view, zone, name) WAPI identity.
+#
+# ${data.runToken}: see record-a.yaml — same per-run isolation token, applied
+# here too so this scope's identity ALSO differs across concurrent E2E runs.
+apiVersion: recorda.infobloxnios.m.crossplane.io/v1alpha1
+kind: ARecord
+metadata:
+  name: example-arecord-ns-pc
+  namespace: default
+  annotations:
+    meta.upbound.io/example-id: recorda/v1alpha1/arecord-pc
+    uptest.upbound.io/timeout: "120"
+    # uptest.upbound.io/update-parameter is intentionally omitted — see
+    # record-a.yaml for the rationale.
+    uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-record-a-namespaced-pc.sh
+    # See record-a.yaml for the useTtl/ttl transition rationale and the
+    # skip rationale for name/extAttrs/cidr/networkView/removeAssociatedPtr.
+    crossplane.io/update-test: |
+      - field: comment
+        value: "Updated by update-tester (namespaced, ProviderConfig)"
+      - field: ipv4Addr
+        value: "192.0.2.31"
+      - field: useTtl
+        value: true
+      - field: ttl
+        value: 3600
+      - field: useTtl
+        value: false
+      - field: name
+        skip: "renaming changes the record's _ref (external identity); not exercised here — asserting the rotated value would require predicting the new external-name ref ahead of time; end-to-end coverage of the shared external-name-refresh-persistence fix lives on record-srv.yaml's priority field instead"
+      - field: extAttrs
+        skip: "optional map field, low update-test value"
+      - field: cidr
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: networkView
+        skip: "create-time-only next-available-IP allocation input, ignored on Update"
+      - field: removeAssociatedPtr
+        skip: "write-only delete-time option; never present in the observed state to exercise via update"
+spec:
+  forProvider:
+    name: www-ns-pc-${data.runToken}.example.com
+    ipv4Addr: 192.0.2.30
+    view: default
+    comment: Managed by Crossplane (namespaced, ProviderConfig)
+  providerConfigRef:
+    kind: ProviderConfig
+    name: default
