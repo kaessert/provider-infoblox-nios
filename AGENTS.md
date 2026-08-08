@@ -134,7 +134,6 @@ metadata:
   namespace: crossplane-system
 type: Opaque
 stringData:
-  host: "<NIOS_HOST>"
   username: "<username>"
   password: "<password>"
 ```
@@ -146,6 +145,7 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: "<NIOS_HOST>"
   credentials:
     source: Secret
     secretRef:

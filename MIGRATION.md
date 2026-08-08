@@ -71,10 +71,11 @@ stringData:
 
 ### New format (v2)
 
-**Three separate top-level keys** — `host`, `username`, `password`. No JSON
-parsing. The `secretRef.key` field is required by the CRD schema but is
-**ignored** by the credential bridge (it reads the three keys directly from
-`Secret.data`).
+**Two separate top-level keys** — `username`, `password`. No JSON parsing.
+The `secretRef.key` field is required by the CRD schema but is **ignored** by
+the credential bridge (it reads the two keys directly from `Secret.data`).
+The Grid Manager host is not a Secret key at all — it moved to `spec.host` on
+the ProviderConfig (see [§3 ProviderConfig](#3-providerconfig)).
 
 ```yaml
 apiVersion: v1
@@ -84,18 +85,17 @@ metadata:
   namespace: crossplane-system
 type: Opaque
 stringData:
-  host: "10.0.0.1"
   username: "admin"
   password: "secret"
 ```
 
 ### Key name changes
 
-| Old JSON key | New Secret key | Notes |
+| Old JSON key | New location | Notes |
 |---|---|---|
-| `server` | `host` | **Renamed** |
-| `username` | `username` | Same |
-| `password` | `password` | Same |
+| `server` | `spec.host` on ProviderConfig | **Moved out of the Secret** — no longer a Secret key |
+| `username` | Secret key `username` | Same |
+| `password` | Secret key `password` | Same |
 | `sslmode` | *(removed)* | Moved to `spec.sslVerify` on ProviderConfig |
 | `port` | *(removed)* | No longer configurable (WAPI default) |
 | `connection_timeout` | *(removed)* | No longer configurable |
@@ -105,8 +105,9 @@ stringData:
 ### If you use External Secrets Operator
 
 If your Secret is synced from an external store (e.g. AWS SSM, Vault),
-update your `ExternalSecret` / `SecretStore` mapping to emit three discrete
-keys instead of a single JSON blob. For example, with AWS SSM:
+update your `ExternalSecret` / `SecretStore` mapping to emit two discrete
+keys instead of a single JSON blob (the host moves to the ProviderConfig, not
+the Secret). For example, with AWS SSM:
 
 ```yaml
 apiVersion: external-secrets.io/v1beta1
@@ -115,9 +116,6 @@ spec:
   target:
     name: infoblox-creds
   data:
-    - secretKey: host
-      remoteRef:
-        key: /infoblox/host
     - secretKey: username
       remoteRef:
         key: /infoblox/username
@@ -152,6 +150,7 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: "10.0.0.1"         # ← was "server" inside the JSON secret
   sslVerify: true          # ← was "sslmode" inside the JSON secret
   credentials:
     source: Secret
@@ -164,6 +163,9 @@ spec:
 **Key differences:**
 - API group changed from `infoblox-nios.crossplane.io` to `infobloxnios.crossplane.io` (no hyphen)
 - API version changed from `v1beta1` to `v1alpha1`
+- `host` (the Grid Manager hostname/IP, formerly `server` inside the
+  credentials JSON) is now a first-class ProviderConfig field, not a Secret
+  key
 - `sslVerify` is now a first-class ProviderConfig field (default: `true`),
   no longer buried in the credentials JSON
 - New optional `readEndpoint` field for read/write endpoint splitting (see

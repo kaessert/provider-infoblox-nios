@@ -3,17 +3,17 @@
 # Required keys (read directly from the Secret's data by the provider's
 # credential bridge — the "key" field below is required by the
 # ProviderConfig CRD schema but is NOT used to select a single value):
-#   host:     Grid Manager hostname or IP, e.g. "gm.example.com"
 #   username: WAPI username
 #   password: WAPI password
 #
-# TLS certificate verification is controlled by spec.sslVerify on the
-# ProviderConfig / ClusterProviderConfig below, not by a Secret key.
+# The Grid Manager hostname/IP is NOT a Secret key — it is spec.host on the
+# ProviderConfig / ClusterProviderConfig below, since it is a non-secret
+# connection parameter. TLS certificate verification is likewise controlled
+# by spec.sslVerify on the ProviderConfig / ClusterProviderConfig, not by a
+# Secret key.
 #
-# To create from the E2E credential env vars (INFOBLOX_HOST, INFOBLOX_USER,
-# INFOBLOX_PASS):
+# To create from the E2E credential env vars (INFOBLOX_USER, INFOBLOX_PASS):
 #   kubectl -n crossplane-system create secret generic infobloxnios-credentials \
-#     --from-literal=host="${INFOBLOX_HOST}" \
 #     --from-literal=username="${INFOBLOX_USER}" \
 #     --from-literal=password="${INFOBLOX_PASS}"
 apiVersion: v1
@@ -23,7 +23,6 @@ metadata:
   name: infobloxnios-credentials
 type: Opaque
 stringData:
-  host: "gm.example.com"
   username: "admin"
   password: "change-me"
 ---
@@ -34,6 +33,8 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  # Host is the NIOS Grid Manager hostname or IP address.
+  host: "gm.example.com"
   # sslVerify: set to false only when the Grid Manager presents a
   # self-signed certificate whose SAN does not match the reachable host
   # address. Defaults to true (verify) when omitted.
@@ -43,7 +44,7 @@ spec:
     secretRef:
       namespace: crossplane-system
       name: infobloxnios-credentials
-      # Unused by the credential bridge (which reads host/username/password
+      # Unused by the credential bridge (which reads username/password
       # directly from the Secret's data) but required by the CRD schema.
       key: password
 ---
@@ -55,6 +56,8 @@ metadata:
   name: default
   namespace: default
 spec:
+  # Host is the NIOS Grid Manager hostname or IP address.
+  host: "gm.example.com"
   # sslVerify: set to false only when the Grid Manager presents a
   # self-signed certificate whose SAN does not match the reachable host
   # address. Defaults to true (verify) when omitted.
@@ -73,6 +76,8 @@ kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  # Host is the NIOS Grid Manager hostname or IP address.
+  host: "gm.example.com"
   # sslVerify: set to false only when the Grid Manager presents a
   # self-signed certificate whose SAN does not match the reachable host
   # address. Defaults to true (verify) when omitted.

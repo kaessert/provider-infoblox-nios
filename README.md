@@ -54,7 +54,7 @@ resources declaratively using Kubernetes custom resources.
 
 - Kubernetes cluster with [Crossplane v2](https://docs.crossplane.io/) installed
 - An Infoblox NIOS Grid Manager appliance reachable from the cluster, with a
-  WAPI-capable user account (host, username, password)
+  WAPI-capable user account (hostname/IP, username, password)
 - A `Crossplane Internal ID` extensible attribute definition on the Grid — see
   [Identity extensible attribute definition](#identity-extensible-attribute-definition)
   below
@@ -155,13 +155,14 @@ make build docker-build
 
 ### 1. Create a Kubernetes Secret with your NIOS Grid Manager credentials
 
-The provider reads three keys directly from the Secret's data: `host`,
-`username`, and `password`.
+The provider reads two keys directly from the Secret's data: `username` and
+`password`. The Grid Manager hostname/IP is not a Secret key — it is a
+non-secret connection parameter set on `spec.host` of the ProviderConfig /
+ClusterProviderConfig (step 2).
 
 ```bash
 kubectl create secret generic infobloxnios-credentials \
   --namespace crossplane-system \
-  --from-literal=host=<nios-host-or-ip> \
   --from-literal=username=<wapi-username> \
   --from-literal=password=<wapi-password>
 ```
@@ -184,6 +185,7 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: gm.example.com
   credentials:
     source: Secret
     secretRef:
@@ -202,6 +204,7 @@ kind: ClusterProviderConfig
 metadata:
   name: default
 spec:
+  host: gm.example.com
   credentials:
     source: Secret
     secretRef:
@@ -236,6 +239,7 @@ kind: ProviderConfig
 metadata:
   name: default
 spec:
+  host: gm.example.com
   credentials:
     source: Secret
     secretRef:
@@ -243,6 +247,7 @@ spec:
       name: infoblox-primary
       key: password
   readEndpoint:
+    host: gmc.example.com
     credentialsRef:
       name: infoblox-candidate
       namespace: crossplane-system
@@ -252,22 +257,22 @@ spec:
       timeout: 60s          # fall back to primary if not converged in time
 ```
 
-The `readEndpoint.credentialsRef` secret uses the same format as the primary
-(keys: `host`, `username`, `password`), allowing a least-privilege read-only
-NIOS account for the candidate:
+The `readEndpoint.credentialsRef` secret uses the same key format as the
+primary (`username`, `password`), allowing a least-privilege read-only NIOS
+account for the candidate. Each endpoint's hostname/IP is its own `host`
+field on the ProviderConfig (`spec.host` for the primary,
+`spec.readEndpoint.host` for the candidate) — not a Secret key:
 
 ```bash
 # Primary (read-write)
 kubectl create secret generic infoblox-primary \
   --namespace crossplane-system \
-  --from-literal=host=gm.example.com \
   --from-literal=username=admin \
   --from-literal=password=<password>
 
 # Candidate (read-only)
 kubectl create secret generic infoblox-candidate \
   --namespace crossplane-system \
-  --from-literal=host=gmc.example.com \
   --from-literal=username=readonly-user \
   --from-literal=password=<password>
 ```
