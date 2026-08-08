@@ -28,18 +28,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
-	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recorda/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
-	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 )
 
@@ -60,8 +56,7 @@ const (
 	errEmptyUID                  = "cannot stamp ARecord identity: managed resource's metadata.uid is empty"
 	errDeleteUnverifiedOwnership = "refusing to delete: the resolved object's identity extensible attribute is absent or belongs to a different owner, so ownership cannot be verified before an irreversible delete. " +
 		"Reconcile the external-name annotation, verify the Grid object manually, or remove the finalizer to abandon it without deleting."
-	errPrerequisiteCheck      = "cannot verify the identity extensible attribute definition prerequisite"
-	errRecordConvergenceWrite = "cannot record convergence watermark for read-endpoint routing after a DNS write"
+	errPrerequisiteCheck = "cannot verify the identity extensible attribute definition prerequisite"
 )
 
 // unresolvedProbeEndpoint is the identity-prerequisite-probe cache key
@@ -725,87 +720,18 @@ func deleteARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMg
 // ── Read/write endpoint split (read-routing, shared by both scopes) ─────
 //
 // When the ProviderConfig configures a readEndpoint, a scope's external
-// struct carries a non-nil gate/readConn and every Observe consults the
-// SOA-serial convergence gate to decide whether reading through readConn
-// (the candidate) is safe; Create/Update/Delete always use objMgr/conn
-// (the primary) — see internal/controller/config for how these are
-// constructed. When no readEndpoint is configured, gate is nil and every
-// function below is a byte-for-byte no-op: no candidate connector is
+// struct carries a router (internal/controller/readrouting.Router) whose
+// Observe entry point, BeginObserve, decides whether reading through the
+// candidate is safe, sets the ReadRouting condition, and emits a Warning
+// event on fallback; Create/Update always use objMgr/conn (the primary)
+// and persist the resulting convergence watermark via router.RecordWrite
+// — see internal/controller/config for how a Conn's Router field is
+// constructed. When no readEndpoint is configured, router.Gate is nil and
+// every Router method is a byte-for-byte no-op: no candidate connector is
 // touched, no extra WAPI call is made, and no ReadRouting condition is
 // set — identical to this controller's behavior before the read/write
-// split existed. ARecord is a DNS resource, never IPAM, so the IPAM
-// convergence.EffectiveMode override never applies here.
-
-// arecordZoneView derives the zone_auth fqdn/view pair the convergence
-// gate keys its per-zone state on, from an ARecord's own name/view spec
-// fields — no round trip is needed, since the gate only needs the
-// record's parent zone name, not the zone object itself.
-func arecordZoneView(name, view *string) (fqdn, v string) {
-	return convergence.ZoneFQDNFromRecordName(strOrEmpty(name)), strOrEmpty(view)
-}
-
-// evaluateReadRouting consults gate (nil-safe: a nil gate always means no
-// readEndpoint is configured, so this returns the zero RouteDecision and
-// annotationChanged=false immediately, without ever touching cr's
-// annotations or issuing a candidate call) and reports whether the call
-// mutated cr's pending-zone-serial annotation (Gate.Evaluate clears it
-// once the candidate catches up, or once convergence.timeout elapses).
-// The caller must fold annotationChanged into
-// ExternalObservation.ResourceLateInitialized — crossplane-runtime only
-// persists metadata mutations made during Observe when that flag is set
-// (see the reconciler's late-initialize Update call), so an annotation
-// clear reported as ResourceLateInitialized: false is silently discarded
-// and every subsequent Observe re-derives it from the stale annotation.
-func evaluateReadRouting(ctx context.Context, gate *convergence.Gate, mode string, timeout time.Duration, cr k8sclient.Object, name, view *string) (decision convergence.RouteDecision, annotationChanged bool) {
-	if gate == nil {
-		return convergence.RouteDecision{}, false
-	}
-
-	fqdn, v := arecordZoneView(name, view)
-	effectiveMode, _ := convergence.EffectiveMode(mode, false)
-
-	before := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]
-	decision = gate.Evaluate(ctx, cr, fqdn, v, effectiveMode, timeout)
-	after := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]
-
-	return decision, before != after
-}
-
-// recordConvergenceWrite is gate.RecordAndPersistWrite's nil-safe,
-// zone-deriving wrapper, called from Create and Update right after a
-// successful DNS write. It persists the resulting pending-zone-serial
-// annotation immediately via a conflict-safe merge patch rather than
-// relying on crossplane-runtime to flush it — see
-// convergence.Gate.RecordAndPersistWrite's doc for why an in-memory-only
-// write is not safe here, particularly from Update().
-func recordConvergenceWrite(ctx context.Context, kube k8sclient.Client, gate *convergence.Gate, cr k8sclient.Object, name, view *string) error {
-	if gate == nil {
-		return nil
-	}
-	fqdn, v := arecordZoneView(name, view)
-	if err := gate.RecordAndPersistWrite(ctx, kube, cr, fqdn, v); err != nil {
-		return errors.Wrap(err, errRecordConvergenceWrite)
-	}
-	return nil
-}
-
-// emitReadRoutingWarning records a Kubernetes Warning event for a
-// fallback RouteDecision (ADR requirement: every fallback transition away
-// from the candidate must be visible via `kubectl describe`, not only in
-// the ReadRouting condition). It is a no-op when either the decision
-// carries no warning or the caller was built without a recorder (e.g.
-// this package's white-box unit tests that construct the external struct
-// directly instead of going through Connect()).
-func emitReadRoutingWarning(recorder event.Recorder, cr k8sclient.Object, decision convergence.RouteDecision) {
-	if recorder == nil || !decision.Warning {
-		return
-	}
-	recorder.Event(cr, event.Event{
-		Type:    event.TypeWarning,
-		Reason:  event.Reason(decision.Reason),
-		Message: decision.Message,
-	})
-}
+// split existed. ARecord is a DNS resource, never IPAM, so BeginObserve
+// is always called with isIPAM=false.
 
 // ── SafeStart gate registration ─────────────────────────────────────────
 

@@ -389,8 +389,8 @@ func readEndpointSecret(ns, name string) *corev1.Secret {
 
 // TestGetLegacyReadEndpointAbsentLeavesConnUnset proves the no-readEndpoint
 // case is byte-for-byte the provider's pre-split behavior: DualClient is
-// still built (a pure passthrough — see dualclient.New) but ReadConnector
-// and Gate are both nil, so every consumer's nil-checks route everything
+// still built (a pure passthrough — see dualclient.New) but Router.Candidate
+// and Router.Gate are both nil, so every consumer's nil-checks route everything
 // to the primary.
 func TestGetLegacyReadEndpointAbsentLeavesConnUnset(t *testing.T) {
 	scheme := newTestScheme(t)
@@ -415,10 +415,10 @@ func TestGetLegacyReadEndpointAbsentLeavesConnUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLegacy: unexpected error: %v", err)
 	}
-	if conn.ReadConnector != nil {
+	if conn.Router.Candidate != nil {
 		t.Fatal("GetLegacy: expected a nil ReadConnector when no readEndpoint is configured")
 	}
-	if conn.Gate != nil {
+	if conn.Router.Gate != nil {
 		t.Fatal("GetLegacy: expected a nil Gate when no readEndpoint is configured")
 	}
 	if conn.DualClient == nil {
@@ -430,7 +430,7 @@ func TestGetLegacyReadEndpointAbsentLeavesConnUnset(t *testing.T) {
 }
 
 // TestGetLegacyReadEndpointWiresGateAndCandidate proves a configured
-// readEndpoint produces a non-nil ReadConnector and Gate, and that the
+// readEndpoint produces a non-nil Router.Candidate and Router.Gate, and that the
 // convergence.mode/timeout CRD defaults are applied when the readEndpoint
 // omits its own convergence block.
 func TestGetLegacyReadEndpointWiresGateAndCandidate(t *testing.T) {
@@ -462,20 +462,20 @@ func TestGetLegacyReadEndpointWiresGateAndCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLegacy: unexpected error: %v", err)
 	}
-	if conn.ReadConnector == nil {
+	if conn.Router.Candidate == nil {
 		t.Fatal("GetLegacy: expected a non-nil ReadConnector when a readEndpoint is configured")
 	}
-	if conn.Gate == nil {
+	if conn.Router.Gate == nil {
 		t.Fatal("GetLegacy: expected a non-nil Gate when a readEndpoint is configured")
 	}
 	if conn.DualClient == nil || !conn.DualClient.HasCandidate() {
 		t.Fatal("GetLegacy: expected DualClient.HasCandidate() == true")
 	}
-	if conn.ConvergenceMode != "soaSerial" {
-		t.Fatalf("GetLegacy: ConvergenceMode = %q, want the CRD default %q", conn.ConvergenceMode, "soaSerial")
+	if conn.Router.Mode != "soaSerial" {
+		t.Fatalf("GetLegacy: ConvergenceMode = %q, want the CRD default %q", conn.Router.Mode, "soaSerial")
 	}
-	if conn.ConvergenceTimeout != 60*time.Second {
-		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want the CRD default 60s", conn.ConvergenceTimeout)
+	if conn.Router.Timeout != 60*time.Second {
+		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want the CRD default 60s", conn.Router.Timeout)
 	}
 }
 
@@ -516,11 +516,11 @@ func TestGetLegacyReadEndpointExplicitConvergenceOverridesDefaults(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetLegacy: unexpected error: %v", err)
 	}
-	if conn.ConvergenceMode != "primaryOnly" {
-		t.Fatalf("GetLegacy: ConvergenceMode = %q, want %q", conn.ConvergenceMode, "primaryOnly")
+	if conn.Router.Mode != "primaryOnly" {
+		t.Fatalf("GetLegacy: ConvergenceMode = %q, want %q", conn.Router.Mode, "primaryOnly")
 	}
-	if conn.ConvergenceTimeout != 5*time.Second {
-		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want 5s", conn.ConvergenceTimeout)
+	if conn.Router.Timeout != 5*time.Second {
+		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want 5s", conn.Router.Timeout)
 	}
 }
 
@@ -626,7 +626,7 @@ func TestGetReadEndpointFallsBackToProviderConfigNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: unexpected error: %v", err)
 	}
-	if conn.Gate == nil || conn.ReadConnector == nil {
+	if conn.Router.Gate == nil || conn.Router.Candidate == nil {
 		t.Fatal("Get: expected a wired Gate and ReadConnector")
 	}
 }
@@ -664,7 +664,7 @@ func TestGetClusterReadEndpointWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCluster: unexpected error: %v", err)
 	}
-	if conn.Gate == nil || conn.ReadConnector == nil {
+	if conn.Router.Gate == nil || conn.Router.Candidate == nil {
 		t.Fatal("GetCluster: expected a wired Gate and ReadConnector")
 	}
 }

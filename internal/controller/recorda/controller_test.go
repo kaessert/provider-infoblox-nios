@@ -39,6 +39,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -4337,10 +4338,11 @@ func TestUpdateARecordRefusesWhitespaceUID(t *testing.T) {
 
 // ── Read/write endpoint split (read-routing) ─────────────────────────────
 //
-// These tests exercise evaluateReadRouting/recordConvergenceWrite through
-// the real Observe/Create/Update methods, white-box-constructing
-// clusterExternal/namespacedExternal with a gate/readConn instead of going
-// through Connect() — mirroring every other test in this file.
+// These tests exercise readrouting.Router's BeginObserve/RecordWrite
+// methods through the real Observe/Create/Update methods,
+// white-box-constructing clusterExternal/namespacedExternal with a
+// router carrying a Gate/Candidate instead of going through Connect() —
+// mirroring every other test in this file.
 
 // poisonIBConnector fails the test if any of its methods is ever called —
 // used to prove a code path never touches the candidate (or, for the
@@ -4445,8 +4447,8 @@ func TestObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
 	mc := newTestObjectManager(t, srv)
 	e := &clusterExternal{
 		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
-		readConn: poisonIBConnector{t: t}, // gate is nil, so this must never be touched
-		prober:   identity.NewProber(), endpoint: t.Name(),
+		router: readrouting.Router{Candidate: poisonIBConnector{t: t}}, // gate is nil, so this must never be touched
+		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
 
@@ -4487,15 +4489,17 @@ func TestObserveRoutesToCandidateWhenGateReady(t *testing.T) {
 	gate := convergence.NewGate(nil, convergence.NewClientWithScheme("http", "unused", "0", wapiVersion, "u", "p", true), nil, "candidate-host")
 
 	e := &clusterExternal{
-		kube:               &recordingKubeClient{},
-		objMgr:             nil,                     // never touched — this is a pure read
-		conn:               poisonIBConnector{t: t}, // primary must not be touched when routing to candidate
-		readConn:           candidateMC.Connector,
-		gate:               gate,
-		convergenceMode:    convergence.ModeSOASerial,
-		convergenceTimeout: convergence.DefaultTimeout,
-		prober:             identity.NewProber(),
-		endpoint:           t.Name(),
+		kube:   &recordingKubeClient{},
+		objMgr: nil,                     // never touched — this is a pure read
+		conn:   poisonIBConnector{t: t}, // primary must not be touched when routing to candidate
+		router: readrouting.Router{
+			Candidate: candidateMC.Connector,
+			Gate:      gate,
+			Mode:      convergence.ModeSOASerial,
+			Timeout:   convergence.DefaultTimeout,
+		},
+		prober:   identity.NewProber(),
+		endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
 
@@ -4533,11 +4537,13 @@ func TestObserveConvergenceModePrimaryOnlyRoutesToPrimary(t *testing.T) {
 
 	e := &clusterExternal{
 		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
-		readConn:           poisonIBConnector{t: t},
-		gate:               gate,
-		convergenceMode:    convergence.ModePrimaryOnly,
-		convergenceTimeout: convergence.DefaultTimeout,
-		prober:             identity.NewProber(), endpoint: t.Name(),
+		router: readrouting.Router{
+			Candidate: poisonIBConnector{t: t},
+			Gate:      gate,
+			Mode:      convergence.ModePrimaryOnly,
+			Timeout:   convergence.DefaultTimeout,
+		},
+		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
 
@@ -4558,7 +4564,7 @@ func TestObserveConvergenceModePrimaryOnlyRoutesToPrimary(t *testing.T) {
 // that once the candidate catches up to a pending write, Observe clears
 // the pending-zone-serial annotation AND reports
 // ResourceLateInitialized=true — required so crossplane-runtime actually
-// persists the clear (see evaluateReadRouting's doc).
+// persists the clear (see readrouting.Router.BeginObserve's doc).
 func TestObserveClearsConvergedAnnotationAndReportsLateInitialized(t *testing.T) {
 	m := newMockWapiServer()
 	candidateSrv := httptest.NewServer(m.handler())
@@ -4579,13 +4585,15 @@ func TestObserveClearsConvergedAnnotationAndReportsLateInitialized(t *testing.T)
 	gate := convergence.NewGate(nil, newZoneClient(t, memberSrv), nil, candidateHostname)
 
 	e := &clusterExternal{
-		kube:               &recordingKubeClient{},
-		conn:               poisonIBConnector{t: t},
-		readConn:           candidateMC.Connector,
-		gate:               gate,
-		convergenceMode:    convergence.ModeSOASerial,
-		convergenceTimeout: convergence.DefaultTimeout,
-		prober:             identity.NewProber(), endpoint: t.Name(),
+		kube: &recordingKubeClient{},
+		conn: poisonIBConnector{t: t},
+		router: readrouting.Router{
+			Candidate: candidateMC.Connector,
+			Gate:      gate,
+			Mode:      convergence.ModeSOASerial,
+			Timeout:   convergence.DefaultTimeout,
+		},
+		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
 	if err := convergence.SetPendingSerial(cr, "example.com", "default", 5, time.Now()); err != nil {
@@ -4629,12 +4637,14 @@ func TestObserveConvergenceTimeoutFallsBackToPrimaryAndWarns(t *testing.T) {
 
 	e := &clusterExternal{
 		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
-		readConn:           poisonIBConnector{t: t},
-		gate:               gate,
-		convergenceMode:    convergence.ModeSOASerial,
-		convergenceTimeout: time.Millisecond,
-		prober:             identity.NewProber(), endpoint: t.Name(),
-		recorder: rec,
+		router: readrouting.Router{
+			Candidate: poisonIBConnector{t: t},
+			Gate:      gate,
+			Mode:      convergence.ModeSOASerial,
+			Timeout:   time.Millisecond,
+			Recorder:  rec,
+		},
+		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
 	if err := convergence.SetPendingSerial(cr, "example.com", "default", 99, time.Now().Add(-time.Hour)); err != nil {
@@ -4676,7 +4686,7 @@ func TestCreatePersistsConvergenceWriteViaPatch(t *testing.T) {
 
 	e := &clusterExternal{
 		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
-		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		router: readrouting.Router{Gate: gate, Mode: convergence.ModeSOASerial, Timeout: convergence.DefaultTimeout},
 		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", "my-arecord")
@@ -4744,7 +4754,7 @@ func TestUpdatePersistsConvergenceWriteViaPatch(t *testing.T) {
 
 	e := &clusterExternal{
 		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
-		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		router: readrouting.Router{Gate: gate, Mode: convergence.ModeSOASerial, Timeout: convergence.DefaultTimeout},
 		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
@@ -4764,7 +4774,7 @@ func TestUpdatePersistsConvergenceWriteViaPatch(t *testing.T) {
 }
 
 // TestDeleteNeverRecordsConvergenceWrite proves Delete() never calls
-// recordConvergenceWrite: the managed resource is being removed, so there
+// router.RecordWrite: the managed resource is being removed, so there
 // is no future Observe left to gate, and no Patch call should occur.
 func TestDeleteNeverRecordsConvergenceWrite(t *testing.T) {
 	m := newMockWapiServer()
@@ -4784,7 +4794,7 @@ func TestDeleteNeverRecordsConvergenceWrite(t *testing.T) {
 
 	e := &clusterExternal{
 		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
-		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		router: readrouting.Router{Gate: gate, Mode: convergence.ModeSOASerial, Timeout: convergence.DefaultTimeout},
 		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newClusterARecord("my-arecord", ref)
@@ -4799,8 +4809,8 @@ func TestDeleteNeverRecordsConvergenceWrite(t *testing.T) {
 
 // TestNamespacedObserveReadEndpointAbsentNoCandidateCall is the
 // namespaced-scope variant of TestObserveReadEndpointAbsentNoCandidateCall
-// — both scopes share the same evaluateReadRouting/recordConvergenceWrite
-// helpers, but each scope's Observe/Create/Update wiring is exercised
+// — both scopes share the same readrouting.Router, but each scope's
+// Observe/Create/Update wiring is exercised
 // independently per this package's existing convention.
 func TestNamespacedObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
 	m := newMockWapiServer()
@@ -4817,8 +4827,8 @@ func TestNamespacedObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
 	mc := newTestObjectManager(t, srv)
 	e := &namespacedExternal{
 		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
-		readConn: poisonIBConnector{t: t},
-		prober:   identity.NewProber(), endpoint: t.Name(),
+		router: readrouting.Router{Candidate: poisonIBConnector{t: t}},
+		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newNamespacedARecord("team-a", "my-arecord", ref, "ProviderConfig")
 
@@ -4857,7 +4867,7 @@ func TestNamespacedUpdatePersistsConvergenceWriteViaPatch(t *testing.T) {
 
 	e := &namespacedExternal{
 		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
-		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		router: readrouting.Router{Gate: gate, Mode: convergence.ModeSOASerial, Timeout: convergence.DefaultTimeout},
 		prober: identity.NewProber(), endpoint: t.Name(),
 	}
 	cr := newNamespacedARecord("team-a", "my-arecord", ref, "ProviderConfig")

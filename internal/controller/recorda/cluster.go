@@ -2,7 +2,6 @@ package recorda
 
 import (
 	"context"
-	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -24,6 +23,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -78,16 +78,13 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.ARec
 		// ensureIdentityPrerequisite) so every controller in the process
 		// shares one TTL-bounded verdict cache per Grid endpoint.
 		endpoint: conn.Endpoint,
-		// readConn/gate/convergenceMode/convergenceTimeout are all zero
-		// values (nil/""/0) when the ProviderConfig has no readEndpoint
-		// configured — every read-routing helper treats that as "always
-		// read from conn", so this is byte-for-byte identical to the
-		// provider's behavior before the read/write split existed.
-		readConn:           conn.ReadConnector,
-		gate:               conn.Gate,
-		convergenceMode:    conn.ConvergenceMode,
-		convergenceTimeout: conn.ConvergenceTimeout,
-		recorder:           c.recorder,
+		// router is conn.Router with this controller's own recorder
+		// injected — conn.Router itself is byte-for-byte "always read
+		// from the primary" when the ProviderConfig has no readEndpoint
+		// configured (see config.Conn.Router's doc), so this is
+		// byte-for-byte identical to the provider's behavior before the
+		// read/write split existed.
+		router: readrouting.WithRecorder(conn.Router, c.recorder),
 	}, nil
 }
 
@@ -110,24 +107,12 @@ type clusterExternal struct {
 	// ensureIdentityPrerequisite's empty-string fallback.
 	endpoint string
 
-	// readConn is the authenticated candidate (read-endpoint) WAPI
-	// connector Observe reads through when gate says it is safe. nil when
-	// no readEndpoint is configured — see the "Read/write endpoint split"
-	// doc in controller.go.
-	readConn ibclient.IBConnector
-	// gate implements the SOA-serial convergence check. nil when no
-	// readEndpoint is configured.
-	gate *convergence.Gate
-	// convergenceMode/convergenceTimeout are this ProviderConfig's
-	// resolved readEndpoint.convergence settings (CRD defaults already
-	// applied by internal/controller/config). Zero values when gate is
-	// nil.
-	convergenceMode    string
-	convergenceTimeout time.Duration
-	// recorder emits Kubernetes Warning events for read-routing fallback
-	// transitions. nil in this package's white-box tests that build
-	// clusterExternal directly.
-	recorder event.Recorder
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update.
+	// Its zero value (Gate == nil) is "always read from the primary" —
+	// see the "Read/write endpoint split" doc in controller.go.
+	router readrouting.Router
 }
 
 // Observe resolves the ARecord through the shared UID-in-EA identity
@@ -138,15 +123,8 @@ type clusterExternal struct {
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	decision, annotationChanged := evaluateReadRouting(ctx, e.gate, e.convergenceMode, e.convergenceTimeout, cr, p.Name, p.View)
-	readFrom := e.conn
-	if e.gate != nil {
-		cr.SetConditions(convergence.ReadRoutingCondition(decision))
-		emitReadRoutingWarning(e.recorder, cr, decision)
-		if decision.UseCandidate {
-			readFrom = e.readConn
-		}
-	}
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), false)
 
 	res, err := observeARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
@@ -213,8 +191,8 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AReco
 		// annotationChanged folds the read-routing gate's own annotation
 		// mutation (clearing pending-zone-serial once the candidate
 		// catches up) into the same persistence path already used for
-		// res.lateInit — see evaluateReadRouting's doc for why this is
-		// required, not optional.
+		// res.lateInit — see readrouting.Router.BeginObserve's doc for why
+		// this is required, not optional.
 		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
@@ -243,7 +221,8 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ARecor
 
 	meta.SetExternalName(cr, rec.Ref)
 
-	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
 		return managed.ExternalCreation{}, err
 	}
 
@@ -282,7 +261,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ARecor
 		}
 	}
 
-	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+	if err := e.router.RecordWrite(ctx, e.kube, cr, convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name)), strOrEmpty(p.View)); err != nil {
 		return managed.ExternalUpdate{}, err
 	}
 
@@ -292,7 +271,7 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ARecor
 // Delete removes the ARecord, resolving through the shared identity
 // ladder first — see deleteARecordIdentity for the full ownership-
 // verification rules a stale or rotated _ref must satisfy before a
-// delete is issued. Delete never calls recordConvergenceWrite: the
+// delete is issued. Delete never calls router.RecordWrite: the
 // managed resource is being removed, so there is no future Observe left
 // to gate on the resulting zone-serial bump.
 func (e *clusterExternal) Delete(ctx context.Context, cr *clusterv1alpha1.ARecord) (managed.ExternalDelete, error) {

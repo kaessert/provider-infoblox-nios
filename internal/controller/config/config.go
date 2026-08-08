@@ -35,6 +35,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // wapiVersion is the Infoblox NIOS WAPI version this provider targets
@@ -163,36 +164,19 @@ type Conn struct {
 	// the primary — see dualclient.New).
 	DualClient *dualclient.Client
 
-	// ReadConnector is the authenticated candidate (read-endpoint) WAPI
-	// connector, for controllers whose read path resolves objects through
-	// a raw ibclient.IBConnector (e.g. the UID-in-EA identity ladder)
-	// rather than through DualClient's ObjectManager-based Reader. nil
-	// when the ProviderConfig has no readEndpoint configured — every
-	// consumer MUST treat that as "read everything from Connector",
-	// identical to the provider's behavior before this field existed.
-	ReadConnector ibclient.IBConnector
-
-	// Gate implements the SOA-serial convergence check deciding, per
-	// Observe call, whether ReadConnector/DualClient's candidate is safe
-	// to read from. nil under the same no-readEndpoint condition as
-	// ReadConnector — callers MUST treat a nil Gate as "always read from
-	// the primary" and must never call Gate.Evaluate on a nil receiver.
-	Gate *convergence.Gate
-
-	// ConvergenceMode is the resolved readEndpoint.convergence.mode
-	// ("soaSerial" or "primaryOnly") as configured on the ProviderConfig,
-	// defaulted per the CRD's kubebuilder default when a readEndpoint is
-	// configured without an explicit mode. Callers apply
-	// convergence.EffectiveMode(ConvergenceMode, isIPAM) themselves, since
-	// only the caller knows whether its own resource type is IPAM. Empty
-	// when no readEndpoint is configured.
-	ConvergenceMode string
-
-	// ConvergenceTimeout is the resolved readEndpoint.convergence.timeout
-	// (CRD default applied when a readEndpoint is configured without an
-	// explicit timeout), passed to Gate.Evaluate on every call. Zero when
-	// no readEndpoint is configured.
-	ConvergenceTimeout time.Duration
+	// Router is everything a resource controller needs to route Observe
+	// reads between the primary (Connector, passed to
+	// readrouting.Router.BeginObserve as a parameter — Router keeps no
+	// copy of it) and an (optional) read-endpoint candidate, gated by
+	// SOA-serial convergence — see internal/controller/readrouting.
+	// Router.Candidate/Gate/Mode/Timeout are all zero values
+	// (nil/nil/""/0) when the ProviderConfig has no readEndpoint
+	// configured, which every Router method treats as "always read from
+	// the primary" — identical to the provider's behavior before the
+	// read/write split existed. Router.Recorder is left unset here: each
+	// controller package injects its own event.Recorder into a copy of
+	// this value at Connect() time.
+	Router readrouting.Router
 }
 
 // GetLegacy resolves an authenticated Conn for a legacy cluster-scoped
@@ -343,13 +327,13 @@ func resolve(ctx context.Context, kube k8sclient.Client, host string, source xpv
 	conn := &Conn{Connector: primaryConn, Endpoint: creds.Host, DualClient: dc}
 
 	if readCreds != nil {
-		conn.ReadConnector = candidateConn
-		conn.ConvergenceMode = re.mode
-		conn.ConvergenceTimeout = re.timeout
+		conn.Router.Candidate = candidateConn
+		conn.Router.Mode = re.mode
+		conn.Router.Timeout = re.timeout
 
 		primaryZone := convergence.NewClient(creds.Host, "443", wapiVersion, creds.Username, creds.Password, sslVerify)
 		candidateZone := convergence.NewClient(readCreds.Host, "443", wapiVersion, readCreds.Username, readCreds.Password, sslVerify)
-		conn.Gate = convergence.NewGate(primaryZone, candidateZone, breaker, readCreds.Host)
+		conn.Router.Gate = convergence.NewGate(primaryZone, candidateZone, breaker, readCreds.Host)
 	}
 
 	return conn, nil

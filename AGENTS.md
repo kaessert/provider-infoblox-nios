@@ -265,21 +265,28 @@ the primary, gated by a SOA-serial convergence check so a just-written record
 is never read back stale. Create/Update/Delete always go to the primary. See
 the `readEndpoint` field on ProviderConfig for the user-facing shape.
 
-**Shape:** the credential bridge (`internal/controller/config`) is the single
-place this is wired — `config.Conn` grows `DualClient`, `ReadConnector`,
-`Gate`, `ConvergenceMode` and `ConvergenceTimeout` fields, alongside the
-existing `Connector`/`Endpoint`. A resource package that ignores these new
-fields (leaves them at their zero value) gets byte-for-byte its pre-split
-behavior — every one of them is nil/empty exactly when the ProviderConfig has
-no `readEndpoint` configured. `config.Conn` was already a struct instead of a
-bare connector for exactly this reason: adding the read-endpoint routing and a
-convergence gate costs zero call-site signature changes.
+The decision logic itself — candidate-vs-primary routing, the ReadRouting
+condition, the Warning event on fallback, and the convergence write-recording
+a write path must persist — lives in `internal/controller/readrouting`, a
+shared package every resource package consumes. It is generic: nothing in it
+is specific to ARecord or to any other resource kind.
+
+**Shape:** extending `config.Conn` (over extending `dualclient.Client`) is
+where the read-side connector and convergence gate get built: `config.Conn`
+grows a `Router` field (`readrouting.Router`), built once in `config.resolve`
+via `dualclient.Connect` + `convergence.NewGate`. `config.Conn` was already a
+struct instead of a bare connector for exactly this reason: adding the
+read-endpoint routing and a convergence gate costs zero call-site signature
+changes. A resource package that ignores `conn.Router` (leaves it at its zero
+value) gets byte-for-byte its pre-split behavior — `Router{}` is exactly the
+"no readEndpoint configured" case, since `Router.Gate == nil` makes every
+`Router` method a no-op.
 
 **IPAM variant (verbatim):** IPAM resources have no serial signal, so their
-Observe must always call `convergence.EffectiveMode(mode, true)` — passing
-`isIPAM: true` unconditionally, regardless of the configured mode — before
-calling `Gate.Evaluate`. This forces `primaryOnly` and never issues a
-candidate call. DNS resources pass `isIPAM: false`.
+Observe must always call `router.BeginObserve(..., isIPAM: true)` —
+unconditionally, regardless of the configured mode. This forces `primaryOnly`
+inside `Router` (via `convergence.EffectiveMode`) and never issues a candidate
+call. DNS resources pass `isIPAM: false`.
 
 **Hazard — Update() must persist explicitly:** crossplane-runtime's managed
 reconciler persists metadata (including annotations) written inside `Create()`
@@ -291,28 +298,28 @@ itself returns. A convergence-gate annotation write made only in memory inside
 wedging the gate for that write until an unrelated change happens to trigger a
 late-init persist. Consequences for every rollout package:
 
-- Inside `Create()`, call `gate.RecordWrite(ctx, cr, fqdn, view)` — the
-  in-memory-only form. Its annotation write rides along with
-  `UpdateCriticalAnnotations`, which the reconciler always calls after
-  `Create()`.
-- Inside `Update()`, call `gate.RecordAndPersistWrite(ctx, kube, cr, fqdn,
-  view)` instead — it does the same read-and-set, then immediately persists
-  via a JSON merge patch scoped to `metadata.annotations`, wrapped in
-  `retry.RetryOnConflict` (`convergence.PersistPendingSerial`). This mirrors
-  `internal/controller/externalname.Refresh`'s pattern for the same reason:
-  a merge patch carries no whole-object version precondition, so a concurrent
+- `router.RecordWrite(ctx, kube, cr, fqdn, view)` always persists immediately,
+  via a JSON merge patch scoped to `metadata.annotations` wrapped in
+  `retry.RetryOnConflict` (`convergence.Gate.RecordAndPersistWrite` /
+  `PersistPendingSerial`) — the same call is correct from both `Create()` and
+  `Update()`. `Update()` MUST use it, for the reason above; `Create()`'s own
+  annotation write would ride along with `UpdateCriticalAnnotations` on its
+  own, but calling the one persisting method from both places keeps a rollout
+  package down to a single write-path call site instead of two, at the cost of
+  one extra (idempotent) read+patch in `Create()`. This mirrors
+  `internal/controller/externalname.Refresh`'s pattern for the same reason: a
+  merge patch carries no whole-object version precondition, so a concurrent
   writer touching an unrelated field never turns this into a lost update.
-- Inside `Observe()`, `Gate.Evaluate` may **clear** the annotation (once the
-  candidate catches up, or on a convergence timeout) by mutating `cr` in
-  place. Fold that into `ExternalObservation.ResourceLateInitialized` — set it
-  `true` whenever the pending-zone-serial annotation's value changed across
-  the `Evaluate` call, OR'd with whatever `lateInit` value the package already
-  computes. Without this, the clear is silently discarded exactly like the
-  Update() case, and the resource stays gated on a write that already
-  converged.
-- `Delete()` never calls either RecordWrite variant — the object is being
-  removed, so there is no future Observe left to gate on the resulting
-  zone-serial bump.
+- Inside `Observe()`, `router.BeginObserve` may **clear** the annotation (once
+  the candidate catches up, or on a convergence timeout) by mutating `cr` in
+  place, and reports this as its second return value. Fold that into
+  `ExternalObservation.ResourceLateInitialized` — OR it with whatever
+  `lateInit` value the package already computes. Without this, the clear is
+  silently discarded exactly like the Update() case, and the resource stays
+  gated on a write that already converged.
+- `Delete()` never calls `router.RecordWrite` — the object is being removed,
+  so there is no future Observe left to gate on the resulting zone-serial
+  bump.
 
 **(i) One Observe read path — before/after:**
 
@@ -330,15 +337,8 @@ func (e *external) Observe(ctx context.Context, cr *v1alpha1.ARecord) (managed.E
 func (e *external) Observe(ctx context.Context, cr *v1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	decision, annotationChanged := evaluateReadRouting(ctx, e.gate, e.convergenceMode, e.convergenceTimeout, cr, p.Name, p.View)
-	readFrom := e.conn
-	if e.gate != nil {
-		cr.SetConditions(convergence.ReadRoutingCondition(decision))
-		emitReadRoutingWarning(e.recorder, cr, decision) // no-op unless decision.Warning
-		if decision.UseCandidate {
-			readFrom = e.readConn
-		}
-	}
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), false)
 
 	res, err := observeARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	...
@@ -350,12 +350,17 @@ func (e *external) Observe(ctx context.Context, cr *v1alpha1.ARecord) (managed.E
 }
 ```
 
-`evaluateReadRouting` is a small per-package helper: nil-safe on `gate`
-(returns the zero `RouteDecision` and `annotationChanged: false` immediately
-when no readEndpoint is configured — no candidate call, no annotation touch),
-derives the zone from the record's own name field
-(`convergence.ZoneFQDNFromRecordName`), and diffs the pending-zone-serial
-annotation's value before/after `Gate.Evaluate` to compute `annotationChanged`.
+`router.BeginObserve` takes the caller's own primary connector (`e.conn`) as a
+parameter rather than storing a copy of it — every resource package already
+tracks its own primary for CRUD (and, in this provider, identity resolution),
+so `Router` only needs to own what the read/write split actually introduces:
+the candidate connector, the gate, and its settings. It sets the ReadRouting
+condition and emits the Warning event on fallback internally; the caller never
+touches `convergence.ReadRoutingCondition` or an event.Recorder directly. Zone
+derivation (`convergence.ZoneFQDNFromRecordName` for a record whose zone is
+implicit in its own name) stays in the resource package, since only it knows
+its own resource shape — this is the one line of judgment a rollout package
+writes.
 
 **(ii) One write path (Update) — before/after:**
 
@@ -375,7 +380,8 @@ func (e *external) Update(ctx context.Context, cr *v1alpha1.ARecord) (managed.Ex
 	p := cr.Spec.ForProvider
 	rec, err := updateARecord(e.objMgr, meta.GetExternalName(cr), p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
 	...
-	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
 		return managed.ExternalUpdate{}, err
 	}
 	return managed.ExternalUpdate{}, nil
@@ -383,12 +389,11 @@ func (e *external) Update(ctx context.Context, cr *v1alpha1.ARecord) (managed.Ex
 ```
 
 `e.objMgr`/`e.conn` are unconditionally the primary — Create/Update/Delete
-never read `e.gate` to decide which connector to use, only Observe does.
-`recordConvergenceWrite` is nil-safe on `gate` and calls
-`gate.RecordAndPersistWrite` (Update) — see the hazard above for why Create
-uses the plain `RecordWrite` instead.
+never consult `e.router` to decide which connector to use, only Observe does.
+`Create()` calls `e.router.RecordWrite` the same way, right after its own
+write succeeds.
 
-**(iii) External-struct field additions:**
+**(iii) External-struct field addition — ONE field, not five:**
 
 ```go
 type external struct {
@@ -398,14 +403,11 @@ type external struct {
 	prober   *identity.Prober
 	endpoint string
 
-	// Added for the read/write split — all zero values when no
-	// readEndpoint is configured, which is byte-for-byte this package's
-	// pre-split behavior.
-	readConn           ibclient.IBConnector // candidate; nil ⇒ never read
-	gate               *convergence.Gate    // nil ⇒ evaluateReadRouting/recordConvergenceWrite are no-ops
-	convergenceMode    string
-	convergenceTimeout time.Duration
-	recorder           event.Recorder // Warning events on fallback transitions; nil-safe
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and wraps
+	// the convergence gate's write-recording for Create/Update. Its zero
+	// value (Gate == nil) is "always read from the primary".
+	router readrouting.Router
 }
 ```
 
@@ -414,8 +416,8 @@ type external struct {
 The credential bridge already unifies cluster/namespaced/cluster-namespaced
 resolution into `config.GetLegacy`/`config.Get`/`config.GetCluster`, each
 returning a `*config.Conn`. Every package's `Connect()` — regardless of which
-of the three it calls — adds the same handful of fields to its external
-struct's constructor, unconditionally (nil-safety lives in `config.Conn`, not
+of the three it calls — adds one field to its external struct's constructor,
+unconditionally (nil-safety lives in `config.Conn`/`readrouting.Router`, not
 in the connector):
 
 ```go
@@ -429,11 +431,11 @@ return &external{
 	conn:     conn.Connector,
 	endpoint: conn.Endpoint,
 
-	readConn:           conn.ReadConnector,
-	gate:               conn.Gate,
-	convergenceMode:    conn.ConvergenceMode,
-	convergenceTimeout: conn.ConvergenceTimeout,
-	recorder:           c.recorder, // wired into setup*() via event.NewAPIRecorder, shared with managed.WithRecorder
+	// router is conn.Router with this controller's own recorder injected
+	// — conn.Router carries none of its own, since Connect() has no
+	// event.Recorder to give it (Setup builds one, shared with
+	// managed.WithRecorder).
+	router: readrouting.WithRecorder(conn.Router, c.recorder),
 }, nil
 ```
 
@@ -441,6 +443,15 @@ return &external{
 the primary when no readEndpoint is configured — see `dualclient.New`), so
 `conn.DualClient.Writer()` is always safe to call and always resolves to the
 primary object manager.
+
+**What a rollout package writes:** one import (`readrouting`), one struct
+field (`router readrouting.Router`), one `Connect()` line
+(`router: readrouting.WithRecorder(conn.Router, c.recorder)`), a two-line
+Observe call (zone derivation + `BeginObserve`), and a matching
+three-to-four-line `RecordWrite` call in each of `Create()`/`Update()` —
+roughly a dozen lines of code per scope, none of it read-routing judgment: the
+only package-specific line is deriving `fqdn`/`view` from the resource's own
+spec fields.
 
 ## Contributing
 
