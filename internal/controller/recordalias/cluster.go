@@ -20,9 +20,11 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordalias/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -40,6 +42,10 @@ const clusterControllerName = "cluster-recordalias.infobloxnios.crossplane.io"
 type clusterConnector struct {
 	kube  k8sclient.Client
 	usage *resource.LegacyProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build clusterConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -66,7 +72,13 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Alia
 	}
 	objMgr := identity.NewManagerAndConnector(conn.Connector)
 
-	return &clusterExternal{kube: c.kube, objMgr: objMgr.Manager, conn: objMgr.Connector, endpoint: conn.Endpoint}, nil
+	return &clusterExternal{
+		kube:     c.kube,
+		objMgr:   objMgr.Manager,
+		conn:     objMgr.Connector,
+		endpoint: conn.Endpoint,
+		router:   readrouting.WithRecorder(conn.Router, c.recorder),
+	}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.AliasRecord].
@@ -76,6 +88,12 @@ type clusterExternal struct {
 	conn     ibclient.IBConnector
 	prober   *identity.Prober
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update.
+	// Its zero value (Gate == nil) is "always read from the primary".
+	router readrouting.Router
 }
 
 // Observe resolves the AliasRecord through the shared UID-in-EA identity
@@ -83,7 +101,10 @@ type clusterExternal struct {
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AliasRecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeAliasRecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), true)
+
+	res, err := observeAliasRecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.Disable, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -122,9 +143,12 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.Alias
 	upToDate := isUpToDate(p.Name, p.TargetName, p.TargetType, p.Comment, p.Disable, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// res.lateInit.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -148,6 +172,12 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.AliasR
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	return managed.ExternalCreation{}, nil
 }
 
@@ -180,6 +210,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AliasR
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
 	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name)), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -221,15 +256,18 @@ func setupClusterAliasRecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*clusterv1alpha1.AliasRecord](driftdetection.WrapConnector[*clusterv1alpha1.AliasRecord](&clusterConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

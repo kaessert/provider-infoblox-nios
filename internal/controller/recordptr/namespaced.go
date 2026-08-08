@@ -18,9 +18,11 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recordptr/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -47,6 +49,10 @@ const namespacedControllerName = "namespaced-recordptr.infobloxnios.m.crossplane
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -92,7 +98,13 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 
 	objMgr := identity.NewManagerAndConnector(conn.Connector)
 
-	return &namespacedExternal{kube: c.kube, objMgr: objMgr.Manager, conn: objMgr.Connector, endpoint: conn.Endpoint}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		objMgr:   objMgr.Manager,
+		conn:     objMgr.Connector,
+		endpoint: conn.Endpoint,
+		router:   readrouting.WithRecorder(conn.Router, c.recorder),
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.PTRRecord].
@@ -102,6 +114,12 @@ type namespacedExternal struct {
 	conn     ibclient.IBConnector
 	prober   *identity.Prober
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update.
+	// Its zero value (Gate == nil) is "always read from the primary".
+	router readrouting.Router
 }
 
 // Observe resolves the PTRRecord through the shared UID-in-EA identity
@@ -109,7 +127,10 @@ type namespacedExternal struct {
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.PTRRecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observePTRRecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), true)
+
+	res, err := observePTRRecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Name, &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -154,9 +175,12 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	upToDate := isUpToDate(p.Ptrdname, p.Name, p.IPv4Addr, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// res.lateInit.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -180,6 +204,12 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	return managed.ExternalCreation{}, nil
 }
 
@@ -209,6 +239,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
 	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name)), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -250,15 +285,18 @@ func setupNamespacedPTRRecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.PTRRecord](driftdetection.WrapConnector[*namespacedv1alpha1.PTRRecord](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

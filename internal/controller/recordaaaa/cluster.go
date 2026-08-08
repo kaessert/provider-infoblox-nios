@@ -19,9 +19,11 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordaaaa/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -39,6 +41,10 @@ const clusterControllerName = "cluster-recordaaaa.infobloxnios.crossplane.io"
 type clusterConnector struct {
 	kube  k8sclient.Client
 	usage *resource.LegacyProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build clusterConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -73,6 +79,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.AAAA
 		// ensureIdentityPrerequisite) so every controller in the process
 		// shares one TTL-bounded verdict cache per Grid endpoint.
 		endpoint: conn.Endpoint,
+		// router is conn.Router with this controller's own recorder
+		// injected — conn.Router itself is byte-for-byte "always read
+		// from the primary" when the ProviderConfig has no readEndpoint
+		// configured, so this is byte-for-byte identical to the
+		// provider's behavior before the read/write split existed.
+		router: readrouting.WithRecorder(conn.Router, c.recorder),
 	}, nil
 }
 
@@ -94,6 +106,12 @@ type clusterExternal struct {
 	// resolved by Connect from the ProviderConfig's Grid host. See
 	// ensureIdentityPrerequisite's empty-string fallback.
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update.
+	// Its zero value (Gate == nil) is "always read from the primary".
+	router readrouting.Router
 }
 
 // Observe resolves the AAAARecord through the shared UID-in-EA identity
@@ -103,7 +121,10 @@ type clusterExternal struct {
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AAAARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeAAAARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), true)
+
+	res, err := observeAAAARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -154,9 +175,12 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.AAAAR
 	upToDate := isUpToDate(p.Name, p.IPv6Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// res.lateInit.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -181,6 +205,12 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.AAAARe
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	return managed.ExternalCreation{}, nil
 }
 
@@ -214,6 +244,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.AAAARe
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
 	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name)), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -257,15 +292,18 @@ func setupClusterAAAARecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*clusterv1alpha1.AAAARecord](driftdetection.WrapConnector[*clusterv1alpha1.AAAARecord](&clusterConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

@@ -34,6 +34,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -3551,5 +3552,108 @@ func TestNamespacedDeleteSteadyStateNeverProbesPrerequisite(t *testing.T) {
 	m.mu.Unlock()
 	if eaDefSearchCalls != 0 {
 		t.Errorf("eaDefSearchCalls = %d, want 0 — the steady-state delete path must never probe", eaDefSearchCalls)
+	}
+}
+
+// ── Read/write endpoint split (read-routing) ─────────────────────────────
+//
+// poisonIBConnector fails the test if any of its methods is ever called —
+// used to prove Observe never touches a candidate connector when no
+// readEndpoint is configured (router.Gate == nil, so BeginObserve always
+// returns the primary unchanged).
+type poisonIBConnector struct{ t *testing.T }
+
+func (p poisonIBConnector) CreateObject(ibclient.IBObject) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate CreateObject call")
+	return "", nil
+}
+
+func (p poisonIBConnector) GetObject(ibclient.IBObject, string, *ibclient.QueryParams, interface{}) error {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate GetObject call")
+	return nil
+}
+
+func (p poisonIBConnector) DeleteObject(string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate DeleteObject call")
+	return "", nil
+}
+
+func (p poisonIBConnector) UpdateObject(ibclient.IBObject, string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate UpdateObject call")
+	return "", nil
+}
+
+// TestObserveReadEndpointAbsentNoCandidateCall proves that with no
+// readEndpoint configured (router.Gate == nil), Observe never touches a
+// candidate connector — readFrom is always e.conn. router.Candidate is a
+// poisonIBConnector so any accidental candidate call fails the test
+// immediately instead of silently succeeding.
+func TestObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+		Ea:       identity.Stamp(nil, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		router: readrouting.Router{Candidate: poisonIBConnector{t: t}}, // gate is nil, so this must never be touched
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterSRVRecord("my-srvrecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+}
+
+// TestNamespacedObserveReadEndpointAbsentNoCandidateCall is the
+// namespaced-scope variant of TestObserveReadEndpointAbsentNoCandidateCall.
+func TestNamespacedObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordSRV{
+		Name:     stringPtr("_sip._tcp.example.com"),
+		Target:   stringPtr("sipserver.example.com"),
+		Priority: uint32Ptr(10),
+		Weight:   uint32Ptr(20),
+		Port:     uint32Ptr(5060),
+		View:     "default",
+		Ea:       identity.Stamp(nil, testUIDNamespaced),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		router: readrouting.Router{Candidate: poisonIBConnector{t: t}},
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newNamespacedSRVRecord("default", "my-srvrecord", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
 	}
 }
