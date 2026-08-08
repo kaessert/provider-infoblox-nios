@@ -21,6 +21,7 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/recordcname/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
@@ -58,26 +59,17 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.CNAM
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	creds, err := extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
+	conn, err := config.GetLegacy(ctx, c.kube, pc)
 	if err != nil {
 		return nil, err
 	}
-
-	sslVerify := true
-	if pc.Spec.SSLVerify != nil {
-		sslVerify = *pc.Spec.SSLVerify
-	}
-
-	mgrConn, err := newObjectManager(creds, sslVerify)
-	if err != nil {
-		return nil, err
-	}
+	mgrConn := identity.NewManagerAndConnector(conn.Connector)
 
 	return &clusterExternal{
 		kube:     c.kube,
 		objMgr:   mgrConn.Manager,
 		conn:     mgrConn.Connector,
-		endpoint: creds.Host,
+		endpoint: conn.Endpoint,
 	}, nil
 }
 
