@@ -293,7 +293,7 @@ UPTEST_MANIFESTS_RANGE_TEMPLATE := examples/range-template/range-template.yaml,e
 # bundling needed: each variant uses the built-in "default" view and a
 # per-run isolation token, so it needs nothing test/setup.sh doesn't already
 # provision for the baseline pair.
-UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml,examples/record-a/record-a-drift-ignore.yaml,examples/record-a/record-a-drift-ignore-namespaced.yaml,examples/record-a/record-a-drift-warn.yaml,examples/record-a/record-a-drift-warn-namespaced.yaml
+UPTEST_MANIFESTS_RECORD_A := examples/record-a/record-a.yaml,examples/record-a/record-a-namespaced.yaml,examples/record-a/record-a-namespaced-pc.yaml,examples/record-a/record-a-drift-ignore.yaml,examples/record-a/record-a-drift-ignore-namespaced.yaml,examples/record-a/record-a-drift-warn.yaml,examples/record-a/record-a-drift-warn-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_AAAA := examples/record-aaaa/record-aaaa.yaml,examples/record-aaaa/record-aaaa-namespaced.yaml
 UPTEST_MANIFESTS_RECORD_ALIAS := examples/record-alias/record-alias.yaml,examples/record-alias/record-alias-namespaced.yaml
 # canonicalRef/canonicalSelector let CNAMERecord.canonical resolve against
