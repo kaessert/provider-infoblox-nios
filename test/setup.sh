@@ -146,7 +146,7 @@ ${KUBECTL} create secret generic infobloxnios-credentials \
 
 echo "==> Creating cluster-scoped ProviderConfig (default)..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
@@ -166,7 +166,7 @@ EOF
 
 echo "==> Creating namespace-scoped ProviderConfig (default) in crossplane-system..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
@@ -187,7 +187,7 @@ EOF
 
 echo "==> Creating namespace-scoped ProviderConfig (default) in default namespace..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
@@ -208,7 +208,7 @@ EOF
 
 echo "==> Creating ClusterProviderConfig (default, cluster-scoped)..."
 
-${KUBECTL} apply -f - <<'EOF'
+${KUBECTL} apply -f - <<EOF
 apiVersion: infobloxnios.m.crossplane.io/v1alpha1
 kind: ClusterProviderConfig
 metadata:
