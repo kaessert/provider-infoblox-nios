@@ -21,6 +21,7 @@ import (
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -58,28 +59,12 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Zone
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	creds, err := extractCredentials(ctx, c.kube, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "")
+	conn, err := config.GetLegacy(ctx, c.kube, pc)
 	if err != nil {
 		return nil, err
 	}
 
-	// sslVerify governs TLS verification for all endpoints (primary and
-	// read); it is a ProviderConfig policy field, not a per-credential
-	// Secret key. Defaults to true (secure) when unset — the kubebuilder
-	// default handles the YAML path, but Go code must handle the
-	// nil-pointer case too (e.g. objects created before this field
-	// existed).
-	sslVerify := true
-	if pc.Spec.SSLVerify != nil {
-		sslVerify = *pc.Spec.SSLVerify
-	}
-
-	conn, err := newConnector(creds, sslVerify)
-	if err != nil {
-		return nil, err
-	}
-
-	return &clusterExternal{conn: conn, endpoint: creds.Host}, nil
+	return &clusterExternal{conn: conn.Connector, endpoint: conn.Endpoint}, nil
 }
 
 // clusterExternal implements managed.TypedExternalClient[*clusterv1alpha1.ZoneAuth].

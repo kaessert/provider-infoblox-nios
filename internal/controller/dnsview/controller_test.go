@@ -32,7 +32,9 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dnsview/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -87,13 +89,13 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// credentialsSecret returns a Secret carrying the host/username/password
-// keys the credential bridge expects.
-func credentialsSecret(ns, name, host, username, password string) *corev1.Secret {
+// credentialsSecret returns a Secret carrying the username/password keys
+// the credential bridge expects. The Grid Manager host is a
+// ProviderConfig-level spec field, not a Secret key.
+func credentialsSecret(ns, name, username, password string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Data: map[string][]byte{
-			"host":     []byte(host),
 			"username": []byte(username),
 			"password": []byte(password),
 		},
@@ -451,7 +453,7 @@ func newTestConnector(t *testing.T, srv *httptest.Server) ibclient.IBConnector {
 	if err != nil {
 		t.Fatalf("cannot parse test server URL: %v", err)
 	}
-	conn, err := newConnectorWithScheme(&nioCredentials{
+	conn, err := config.BuildConnector(dualclient.Credentials{
 		Host:     u.Hostname(),
 		Username: "test-user",
 		Password: "test-pass",
@@ -1294,10 +1296,11 @@ func TestClusterConnectSuccess(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&clusterpcv1alpha1.ProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: clusterpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: clusterpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
@@ -1668,10 +1671,11 @@ func TestNamespacedConnectWithProviderConfig(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: ns},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
@@ -1708,10 +1712,11 @@ func TestNamespacedConnectWithClusterProviderConfig(t *testing.T) {
 	kube := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
-			credentialsSecret(ns, secret, "grid.example.com", "admin", "s3cr3t"),
+			credentialsSecret(ns, secret, "admin", "s3cr3t"),
 			&namespacedpcv1alpha1.ClusterProviderConfig{
 				ObjectMeta: metav1.ObjectMeta{Name: "default"},
 				Spec: namespacedpcv1alpha1.ProviderConfigSpec{
+					Host: "grid.example.com",
 					Credentials: namespacedpcv1alpha1.ProviderCredentials{
 						Source: xpv2.CredentialsSourceSecret,
 						CommonCredentialSelectors: xpv2.CommonCredentialSelectors{

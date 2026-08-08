@@ -33,12 +33,8 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	ibclient "github.com/infobloxopen/infoblox-go-client/v2"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/zoneauth/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
@@ -53,11 +49,6 @@ const (
 	errGetPC                     = "cannot get ProviderConfig"
 	errGetClusterPC              = "cannot get ClusterProviderConfig"
 	errUnsupportedKind           = "unsupported provider config kind"
-	errGetSecret                 = "cannot get credentials secret"
-	errNoSecretRef               = "credentials secretRef is required for the Infoblox NIOS WAPI client"
-	errUnsupportedCreds          = "unsupported credentials source: only Secret is supported"
-	errMissingCredKey            = "credentials secret is missing one of the required host/username/password keys"
-	errNewConnector              = "cannot create Infoblox NIOS WAPI connector"
 	errObserveZoneAuth           = "cannot observe ZoneAuth"
 	errCreateZoneAuth            = "cannot create ZoneAuth"
 	errUpdateZoneAuth            = "cannot update ZoneAuth"
@@ -75,100 +66,6 @@ const unresolvedProbeEndpoint = "unresolved-grid-endpoint"
 // wapiVersion is the NIOS WAPI version this provider targets
 // (https://<host>/wapi/2.9.7/ per the provider's base URL convention).
 const wapiVersion = "2.9.7"
-
-// ── Credential bridge ───────────────────────────────────────────────────────
-
-// nioCredentials holds the WAPI connection parameters extracted from the
-// ProviderConfig's credentials Secret (host/username/password keys). TLS
-// verification is governed by the ProviderConfig's own sslVerify spec
-// field, not by anything in this Secret.
-type nioCredentials struct {
-	Host     string
-	Username string
-	Password string
-}
-
-// extractCredentials reads the Secret referenced by a ProviderConfig's
-// credentials block and parses the host/username/password keys. source and
-// secretRef are the shared crossplane-runtime CommonCredentialSelectors
-// fields, which are structurally identical across every ProviderConfig
-// kind this provider defines (cluster ProviderConfig, namespaced
-// ProviderConfig, namespaced ClusterProviderConfig) — so this single
-// helper serves all three connectors.
-func extractCredentials(ctx context.Context, kube k8sclient.Client, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string) (*nioCredentials, error) {
-	if source != xpv2.CredentialsSourceSecret {
-		return nil, errors.New(errUnsupportedCreds)
-	}
-	if secretRef == nil {
-		return nil, errors.New(errNoSecretRef)
-	}
-
-	ns := secretRef.Namespace
-	if ns == "" {
-		ns = fallbackNamespace
-	}
-
-	secret := &corev1.Secret{}
-	if err := kube.Get(ctx, types.NamespacedName{Namespace: ns, Name: secretRef.Name}, secret); err != nil {
-		return nil, errors.Wrap(err, errGetSecret)
-	}
-
-	host := string(secret.Data["host"])
-	username := string(secret.Data["username"])
-	password := string(secret.Data["password"])
-	if host == "" || username == "" || password == "" {
-		return nil, errors.New(errMissingCredKey)
-	}
-
-	return &nioCredentials{Host: host, Username: username, Password: password}, nil
-}
-
-// newConnector constructs an authenticated ibclient.IBConnector from the
-// given credentials. The Connector performs HTTP Basic Auth on every
-// request and only validates configuration locally — no network
-// round-trip happens until the first Observe/Create/Update/Delete call.
-func newConnector(creds *nioCredentials, sslVerify bool) (ibclient.IBConnector, error) {
-	return newConnectorWithScheme(creds, sslVerify, "https", "443")
-}
-
-// newConnectorWithScheme is the scheme/port-parameterized variant of
-// newConnector used by unit tests to point the SDK at a plain-HTTP
-// httptest.Server instead of a real HTTPS Grid Manager.
-func newConnectorWithScheme(creds *nioCredentials, sslVerify bool, scheme, port string) (ibclient.IBConnector, error) {
-	hostConfig := ibclient.HostConfig{
-		Scheme:  scheme,
-		Host:    creds.Host,
-		Version: wapiVersion,
-		Port:    port,
-	}
-	authConfig := ibclient.AuthConfig{
-		Username: creds.Username,
-		Password: creds.Password,
-	}
-	// sslVerify comes from the ProviderConfig's own spec field (not
-	// the credentials Secret) — see the Connect methods in
-	// cluster.go/namespaced.go. Set to false only when the Grid
-	// Manager uses a self-signed certificate whose SAN does not match
-	// the reachable host address.
-	sslVerifyStr := "true"
-	if !sslVerify {
-		sslVerifyStr = "false"
-	}
-	transportConfig := ibclient.NewTransportConfig(sslVerifyStr, 60, 10)
-
-	conn, err := ibclient.NewConnector(
-		hostConfig,
-		authConfig,
-		transportConfig,
-		&ibclient.WapiRequestBuilder{},
-		&ibclient.WapiHttpRequestor{},
-	)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewConnector)
-	}
-
-	return conn, nil
-}
 
 // ── primitive translation helpers (shared by both scopes) ──────────────────
 
