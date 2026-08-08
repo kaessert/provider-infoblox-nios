@@ -18,9 +18,11 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -44,6 +46,10 @@ const namespacedControllerName = "namespaced-hostrecord.infobloxnios.m.crossplan
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -87,7 +93,7 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	hc := newHostRecordClient(conn.Connector)
+	hc := newHostRecordClient(conn.Connector, readrouting.WithRecorder(conn.Router, c.recorder))
 	hc.endpoint = conn.Endpoint
 
 	return &namespacedExternal{kube: c.kube, client: hc}, nil
@@ -181,8 +187,17 @@ func namespacedIpv6AddrsFromValues(vals []ipv6AddrValue) []namespacedv1alpha1.Ho
 
 // Observe resolves the HostRecord through the shared UID-in-EA identity
 // ladder and compares the result against the desired spec.
+//
+// A HostRecord IS a DNS record inside a zone, so it carries a real SOA
+// serial to gate reads on — hasZoneSerial is unconditionally true, and
+// fqdn/view are derived from the record's own spec fields, mirroring the
+// base-case ARecord controller.
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.HostRecord) (managed.ExternalObservation, error) {
-	res, err := observeHostRecordIdentity(ctx, e.client.conn, e.client.prober, e.client.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
+	p := &cr.Spec.ForProvider
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.client.router.BeginObserve(ctx, cr, e.client.conn, fqdn, strOrEmpty(p.View), true)
+
+	res, err := observeHostRecordIdentity(ctx, readFrom, e.client.prober, e.client.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
 	if err != nil {
 		var prereq *identity.PrerequisiteError
 		if errors.As(err, &prereq) {
@@ -196,7 +211,6 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	rec := res.rec
 
 	o := observeFromHostRecord(rec.Ref, rec)
-	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = namespacedv1alpha1.HostRecordObservation{
 		Name:            o.Name,
 		Ipv4Addrs:       namespacedIpv4AddrsFromValues(o.Ipv4Addrs),
@@ -250,9 +264,12 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	upToDate := isUpToDate(namespacedCompareFields(p), rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// lateInit — see readrouting.Router.BeginObserve's doc.
+		ResourceLateInitialized: lateInit || annotationChanged,
 	}, nil
 }
 
@@ -282,6 +299,11 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.client.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 	return managed.ExternalCreation{}, nil
 }
 
@@ -312,6 +334,11 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
+	}
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.client.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 	return managed.ExternalUpdate{}, nil
 }
@@ -354,15 +381,18 @@ func setupNamespacedHostRecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.HostRecord](driftdetection.WrapConnector[*namespacedv1alpha1.HostRecord](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

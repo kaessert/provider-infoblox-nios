@@ -32,9 +32,11 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -444,7 +446,107 @@ func newTestClients(t *testing.T, srv *httptest.Server) *dtcServerClients {
 	if err != nil {
 		t.Fatalf("cannot build test clients: %v", err)
 	}
-	return newClients(conn)
+	return newClients(conn, readrouting.Router{})
+}
+
+// poisonConnector fails the test if any of its methods is ever called —
+// used to prove Observe never issues a candidate read for a signal-less
+// resource, even when a readEndpoint IS configured.
+type poisonConnector struct{ t *testing.T }
+
+func (p poisonConnector) CreateObject(ibclient.IBObject) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate CreateObject call")
+	return "", nil
+}
+
+func (p poisonConnector) GetObject(ibclient.IBObject, string, *ibclient.QueryParams, interface{}) error {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate GetObject call")
+	return nil
+}
+
+func (p poisonConnector) DeleteObject(string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate DeleteObject call")
+	return "", nil
+}
+
+func (p poisonConnector) UpdateObject(ibclient.IBObject, string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate UpdateObject call")
+	return "", nil
+}
+
+// newPoisonZoneClient builds a *convergence.Client pointed at a server
+// that fails the test if it receives any request — used as the gate's
+// candidate zone client to prove a signal-less resource never attempts a
+// convergence check.
+func newPoisonZoneClient(t *testing.T) *convergence.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected candidate zone_auth request: %s %s", r.Method, r.URL.String())
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("cannot parse test server URL: %v", err)
+	}
+	return convergence.NewClientWithScheme("http", u.Hostname(), u.Port(), wapiVersion, "test-user", "test-pass", true)
+}
+
+// TestObservePrimaryOnlyEvenWithReadEndpointConfigured proves DTCServer
+// never issues a candidate read, even when a readEndpoint IS configured
+// with a working convergence gate. DTCServer has no zone_auth entry, so
+// Observe always passes hasZoneSerial: false, which forces the router's
+// decision to PrimaryOnly before Gate.Candidate or Router.Candidate is
+// ever touched.
+func TestObservePrimaryOnlyEvenWithReadEndpointConfigured(t *testing.T) {
+	m := newMockDtcServerServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name: stringPtr("my-dtc-server"),
+		Host: stringPtr("2.3.4.5"),
+		Ea:   ibclient.EA{identity.EAKey: "test-uid-cluster"},
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
+	e.clients.router = readrouting.Router{
+		Candidate: poisonConnector{t: t},
+		Gate:      convergence.NewGate(nil, newPoisonZoneClient(t), nil, "candidate-host"),
+		Mode:      convergence.ModeSOASerial,
+		Timeout:   convergence.DefaultTimeout,
+	}
+	cr := newClusterDTCServer("my-dtcserver", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+}
+
+// TestObserveWithoutReadEndpointNeverTouchesCandidate proves that with no
+// readEndpoint configured (Gate == nil), a populated Candidate field is
+// never touched — byte-for-byte the pre-read-routing-split behavior.
+func TestObserveWithoutReadEndpointNeverTouchesCandidate(t *testing.T) {
+	m := newMockDtcServerServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.DtcServer{
+		Name: stringPtr("my-dtc-server"),
+		Host: stringPtr("2.3.4.5"),
+		Ea:   ibclient.EA{identity.EAKey: "test-uid-cluster"},
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, clients: newTestClients(t, srv), prober: identity.NewProber(), endpoint: t.Name()}
+	e.clients.router = readrouting.Router{Candidate: poisonConnector{t: t}} // Gate is nil: no readEndpoint configured
+	cr := newClusterDTCServer("my-dtcserver", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
 }
 
 // ── cluster: Observe ────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // recordingKubeClient is a minimal client.Client stub used to verify that
@@ -600,7 +601,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	if err != nil {
 		t.Fatalf("cannot build test host record client: %v", err)
 	}
-	hc := newHostRecordClient(conn)
+	hc := newHostRecordClient(conn, readrouting.Router{})
 	// prober is set to a fresh instance (not nil) so tests never share
 	// identity.DefaultProber's process-wide TTL cache across httptest
 	// servers — otherwise one test's cached verdict would leak into
@@ -613,6 +614,60 @@ func newTestClient(t *testing.T, srv *httptest.Server) *hostRecordClient {
 	hc.prober = identity.NewProber()
 	hc.endpoint = t.Name()
 	return hc
+}
+
+// poisonConnector fails the test if any of its methods is ever called —
+// used to prove Observe never issues a candidate read when no
+// readEndpoint is configured.
+type poisonConnector struct{ t *testing.T }
+
+func (p poisonConnector) CreateObject(ibclient.IBObject) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate CreateObject call")
+	return "", nil
+}
+
+func (p poisonConnector) GetObject(ibclient.IBObject, string, *ibclient.QueryParams, interface{}) error {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate GetObject call")
+	return nil
+}
+
+func (p poisonConnector) DeleteObject(string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate DeleteObject call")
+	return "", nil
+}
+
+func (p poisonConnector) UpdateObject(ibclient.IBObject, string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate UpdateObject call")
+	return "", nil
+}
+
+// TestObserveWithoutReadEndpointNeverTouchesCandidate proves that with no
+// readEndpoint configured (Gate == nil), a populated Candidate field is
+// never touched — byte-for-byte the pre-read-routing-split behavior.
+func TestObserveWithoutReadEndpointNeverTouchesCandidate(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.HostRecord{
+		Name:        stringPtr("host.example.com"),
+		Ipv4Addrs:   []ibclient.HostRecordIpv4Addr{{Ipv4Addr: stringPtr("10.0.0.1")}},
+		NetworkView: "default",
+		View:        stringPtr("default"),
+		Ea:          identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	e := &clusterExternal{kube: &recordingKubeClient{}, client: newTestClient(t, srv)}
+	e.client.router = readrouting.Router{Candidate: poisonConnector{t: t}} // Gate is nil: no readEndpoint configured
+	cr := newClusterHostRecord("host-example-com", ref)
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
 }
 
 // ── cluster: Observe ────────────────────────────────────────────────────

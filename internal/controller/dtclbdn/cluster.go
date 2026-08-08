@@ -22,6 +22,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -41,6 +42,10 @@ const clusterControllerName = "cluster-dtclbdn.infobloxnios.crossplane.io"
 type clusterConnector struct {
 	kube  k8sclient.Client
 	usage *resource.LegacyProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build clusterConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -66,7 +71,7 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.DTCL
 		return nil, err
 	}
 
-	clients := newClients(conn.Connector)
+	clients := newClients(conn.Connector, readrouting.WithRecorder(conn.Router, c.recorder))
 
 	return &clusterExternal{kube: c.kube, clients: clients, endpoint: conn.Endpoint}, nil
 }
@@ -85,10 +90,21 @@ type clusterExternal struct {
 
 // Observe resolves the DTCLBDN through the shared UID-in-EA identity
 // ladder and compares the result against the desired spec.
+//
+// A DTC LBDN is not a DNS record inside a zone — it has no zone_auth
+// entry and therefore no SOA serial to gate reads on (ADR-IN-0005 §3's
+// "no signal ⇒ primary-only" principle, extended to this resource
+// class). hasZoneSerial is unconditionally false, and fqdn/view are
+// passed empty: BeginObserve's forced-PrimaryOnly branch never inspects
+// them, and there is no real zone key to derive for a DTC LBDN. This
+// guarantees no candidate call is ever attempted, regardless of the
+// configured mode.
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.DTCLBDN) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeDtcLbdn(ctx, e.clients.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	readFrom, annotationChanged := e.clients.router.BeginObserve(ctx, cr, e.clients.conn, "", "", false)
+
+	res, err := observeDtcLbdn(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Priority, &p.Persistence, &p.Topology, &p.TTL, &p.UseTTL, &p.Comment, &p.Disable, &p.ExtAttrs)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -140,9 +156,12 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.DTCLB
 	upToDate := isUpToDate(p.Name, p.LBMethod, p.Patterns, pools, p.AuthZones, p.Types, p.Priority, p.Persistence, p.Topology, p.TTL, p.UseTTL, p.Comment, p.Disable, p.ExtAttrs, rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// res.lateInit — see readrouting.Router.BeginObserve's doc.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -277,15 +296,18 @@ func setupClusterDTCLBDN(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*clusterv1alpha1.DTCLBDN](driftdetection.WrapConnector[*clusterv1alpha1.DTCLBDN](&clusterConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

@@ -39,6 +39,7 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/dtcserver/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/dtcserver/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -83,15 +84,25 @@ const wapiVersion = "2.9.7"
 type dtcServerClients struct {
 	objMgr ibclient.IBObjectManager
 	conn   ibclient.IBConnector
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint. DTCServer has no zone_auth entry — it is
+	// not a DNS record inside a zone, so there is no SOA serial to gate
+	// reads on — so every call site passes hasZoneSerial: false, which
+	// forces the router's decision to PrimaryOnly and no candidate call
+	// is ever attempted. Its zero value (Gate == nil) is likewise "always
+	// read from the primary".
+	router readrouting.Router
 }
 
 // newClients wraps an already-authenticated *ibclient.Connector (built by
 // internal/controller/config from the resolved ProviderConfig) with the
-// high-level ObjectManager this package's Get/Delete calls need.
-func newClients(conn *ibclient.Connector) *dtcServerClients {
+// high-level ObjectManager this package's Get/Delete calls need, plus the
+// read-routing state its caller already resolved from the ProviderConfig.
+func newClients(conn *ibclient.Connector, router readrouting.Router) *dtcServerClients {
 	return &dtcServerClients{
 		objMgr: ibclient.NewObjectManager(conn, "", ""),
 		conn:   conn,
+		router: router,
 	}
 }
 

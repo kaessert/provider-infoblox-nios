@@ -35,6 +35,7 @@ import (
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/hostrecord/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 )
 
 // Error constants — all errors must use the crossplane-runtime errors
@@ -98,16 +99,25 @@ type hostRecordClient struct {
 	// construction. See ensureIdentityPrerequisite's empty-string
 	// fallback.
 	endpoint string
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update. A
+	// HostRecord IS a DNS record inside a zone, so it is wired as the
+	// gated (hasZoneSerial: true) base case. Its zero value (Gate == nil)
+	// is "always read from the primary".
+	router readrouting.Router
 }
 
 // newHostRecordClient wraps an already-authenticated *ibclient.Connector
 // (built by internal/controller/config from the resolved ProviderConfig)
 // with the high-level ObjectManager this package's Create/Update/Delete
-// convenience wrappers need.
-func newHostRecordClient(conn *ibclient.Connector) *hostRecordClient {
+// convenience wrappers need, plus the read-routing state its caller
+// already resolved from the ProviderConfig.
+func newHostRecordClient(conn *ibclient.Connector, router readrouting.Router) *hostRecordClient {
 	return &hostRecordClient{
 		objMgr: ibclient.NewObjectManager(conn, "", ""),
 		conn:   conn,
+		router: router,
 	}
 }
 

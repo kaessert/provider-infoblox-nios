@@ -21,6 +21,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -43,6 +44,10 @@ const namespacedControllerName = "namespaced-dtcserver.infobloxnios.m.crossplane
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -86,7 +91,7 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	clients := newClients(conn.Connector)
+	clients := newClients(conn.Connector, readrouting.WithRecorder(conn.Router, c.recorder))
 
 	return &namespacedExternal{kube: c.kube, clients: clients, endpoint: conn.Endpoint}, nil
 }
@@ -105,11 +110,22 @@ type namespacedExternal struct {
 
 // Observe resolves the DTCServer through the shared UID-in-EA identity
 // ladder and compares the result against the desired spec.
+//
+// A DTC server is not a DNS record inside a zone — it has no zone_auth
+// entry and therefore no SOA serial to gate reads on (ADR-IN-0005 §3's
+// "no signal ⇒ primary-only" principle, extended to this resource
+// class). hasZoneSerial is unconditionally false, and fqdn/view are
+// passed empty: BeginObserve's forced-PrimaryOnly branch never inspects
+// them, and there is no real zone key to derive for a DTC server. This
+// guarantees no candidate call is ever attempted, regardless of the
+// configured mode.
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.DTCServer) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 	monitors := monitorsFromNamespaced(p.Monitors)
 
-	res, err := observeDtcServer(ctx, e.clients.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	readFrom, annotationChanged := e.clients.router.BeginObserve(ctx, cr, e.clients.conn, "", "", false)
+
+	res, err := observeDtcServer(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.Disable, &p.AutoCreateHostRecord, &p.UseSniHostname, &p.SniHostname, &monitors, &p.ExtAttrs)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -158,9 +174,12 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	upToDate := isUpToDate(p.Name, p.Host, p.Comment, p.Disable, p.AutoCreateHostRecord, p.UseSniHostname, p.SniHostname, monitors, p.ExtAttrs, rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// res.lateInit — see readrouting.Router.BeginObserve's doc.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -293,15 +312,18 @@ func setupNamespacedDTCServer(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.DTCServer](driftdetection.WrapConnector[*namespacedv1alpha1.DTCServer](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

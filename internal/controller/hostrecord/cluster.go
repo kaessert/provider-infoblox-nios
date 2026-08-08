@@ -19,9 +19,11 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/hostrecord/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -40,6 +42,10 @@ const clusterControllerName = "cluster-hostrecord.infobloxnios.crossplane.io"
 type clusterConnector struct {
 	kube  k8sclient.Client
 	usage *resource.LegacyProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build clusterConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -65,7 +71,7 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Host
 		return nil, err
 	}
 
-	hc := newHostRecordClient(conn.Connector)
+	hc := newHostRecordClient(conn.Connector, readrouting.WithRecorder(conn.Router, c.recorder))
 	hc.endpoint = conn.Endpoint
 
 	return &clusterExternal{kube: c.kube, client: hc}, nil
@@ -159,8 +165,17 @@ func clusterIpv6AddrsFromValues(vals []ipv6AddrValue) []clusterv1alpha1.HostReco
 
 // Observe resolves the HostRecord through the shared UID-in-EA identity
 // ladder and compares the result against the desired spec.
+//
+// A HostRecord IS a DNS record inside a zone, so it carries a real SOA
+// serial to gate reads on — hasZoneSerial is unconditionally true, and
+// fqdn/view are derived from the record's own spec fields, mirroring the
+// base-case ARecord controller.
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.HostRecord) (managed.ExternalObservation, error) {
-	res, err := observeHostRecordIdentity(ctx, e.client.conn, e.client.prober, e.client.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
+	p := &cr.Spec.ForProvider
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	readFrom, annotationChanged := e.client.router.BeginObserve(ctx, cr, e.client.conn, fqdn, strOrEmpty(p.View), true)
+
+	res, err := observeHostRecordIdentity(ctx, readFrom, e.client.prober, e.client.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()))
 	if err != nil {
 		var prereq *identity.PrerequisiteError
 		if errors.As(err, &prereq) {
@@ -174,7 +189,6 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.HostR
 	rec := res.rec
 
 	o := observeFromHostRecord(rec.Ref, rec)
-	p := &cr.Spec.ForProvider
 	cr.Status.AtProvider = clusterv1alpha1.HostRecordObservation{
 		Name:            o.Name,
 		Ipv4Addrs:       clusterIpv4AddrsFromValues(o.Ipv4Addrs),
@@ -228,9 +242,12 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.HostR
 	upToDate := isUpToDate(clusterCompareFields(p), rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation into the same persistence path already used for
+		// lateInit — see readrouting.Router.BeginObserve's doc.
+		ResourceLateInitialized: lateInit || annotationChanged,
 	}, nil
 }
 
@@ -260,6 +277,11 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.HostRe
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.client.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 	return managed.ExternalCreation{}, nil
 }
 
@@ -292,6 +314,11 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.HostRe
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
+	}
+
+	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
+	if err := e.client.router.RecordWrite(ctx, e.kube, cr, fqdn, strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 	return managed.ExternalUpdate{}, nil
 }
@@ -334,15 +361,18 @@ func setupClusterHostRecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*clusterv1alpha1.HostRecord](driftdetection.WrapConnector[*clusterv1alpha1.HostRecord](&clusterConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())
