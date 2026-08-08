@@ -91,8 +91,8 @@ type Router struct {
 	Gate *convergence.Gate
 	// Mode is the ProviderConfig's resolved
 	// readEndpoint.convergence.mode ("soaSerial" or "primaryOnly"),
-	// before any per-call IPAM override — see BeginObserve's isIPAM
-	// parameter.
+	// before any per-call zone-serial-signal override — see
+	// BeginObserve's hasZoneSerial parameter.
 	Mode string
 	// Timeout is the resolved readEndpoint.convergence.timeout.
 	Timeout time.Duration
@@ -119,11 +119,14 @@ type Router struct {
 // watermark on — the caller derives these from its own resource's spec
 // fields (e.g. convergence.ZoneFQDNFromRecordName for a record whose
 // zone is implicit in its own name); Router has no resource-specific
-// knowledge of how to compute them. isIPAM applies the mandatory IPAM
-// override (see convergence.EffectiveMode): IPAM resources have no
-// serial signal and must always pass isIPAM=true, which forces
-// primaryOnly and never issues a candidate call. DNS resources pass
-// isIPAM=false.
+// knowledge of how to compute them. hasZoneSerial states whether this
+// call's resource has a zone SOA-serial convergence signal at all (see
+// convergence.EffectiveMode) — IPAM is one instance of a signal-less
+// resource, not the definition of one: DTC pools/LBDNs/servers, DNS
+// views and extensible-attribute definitions are equally signal-less
+// and must also pass hasZoneSerial=false, which forces primaryOnly and
+// never issues a candidate call. DNS record and zone resources with a
+// real SOA serial pass hasZoneSerial=true.
 //
 // annotationChanged MUST be folded into the caller's
 // ExternalObservation.ResourceLateInitialized: crossplane-runtime only
@@ -131,12 +134,12 @@ type Router struct {
 // (see the reconciler's late-initialize Update call), so an annotation
 // clear reported as ResourceLateInitialized: false is silently discarded
 // and every subsequent Observe re-derives it from the stale annotation.
-func (r Router) BeginObserve(ctx context.Context, cr Object, primary ibclient.IBConnector, fqdn, view string, isIPAM bool) (readFrom ibclient.IBConnector, annotationChanged bool) {
+func (r Router) BeginObserve(ctx context.Context, cr Object, primary ibclient.IBConnector, fqdn, view string, hasZoneSerial bool) (readFrom ibclient.IBConnector, annotationChanged bool) {
 	if r.Gate == nil {
 		return primary, false
 	}
 
-	effectiveMode, _ := convergence.EffectiveMode(r.Mode, isIPAM)
+	effectiveMode, _ := convergence.EffectiveMode(r.Mode, !hasZoneSerial)
 
 	before := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]
 	decision := r.Gate.Evaluate(ctx, cr, fqdn, view, effectiveMode, r.Timeout)

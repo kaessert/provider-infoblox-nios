@@ -282,11 +282,30 @@ value) gets byte-for-byte its pre-split behavior — `Router{}` is exactly the
 "no readEndpoint configured" case, since `Router.Gate == nil` makes every
 `Router` method a no-op.
 
-**IPAM variant (verbatim):** IPAM resources have no serial signal, so their
-Observe must always call `router.BeginObserve(..., isIPAM: true)` —
-unconditionally, regardless of the configured mode. This forces `primaryOnly`
-inside `Router` (via `convergence.EffectiveMode`) and never issues a candidate
-call. DNS resources pass `isIPAM: false`.
+**Signal-less variant (verbatim):** the routing predicate is named for the
+*signal*, not for IPAM — `router.BeginObserve`'s last parameter is
+`hasZoneSerial bool`, and IPAM is only one instance of a resource with no zone
+SOA-serial signal to gate on. DTC pools/LBDNs/servers, DNS views, and
+extensible-attribute definitions are equally signal-less. Any signal-less
+resource's Observe must always call `router.BeginObserve(..., hasZoneSerial:
+false)` — unconditionally, regardless of the configured mode. This forces
+`primaryOnly` inside `Router` (via `convergence.EffectiveMode(mode,
+!hasZoneSerial)`) and never issues a candidate call. A DNS record or zone
+resource with a real SOA serial passes `hasZoneSerial: true`.
+
+**Classification table** (filled in as each rollout ticket lands; a resource
+absent from this table is unreviewed, not merely undocumented):
+
+| Resource class | Packages | Connector field | `hasZoneSerial` | Gate key (fqdn, view) |
+|---|---|---|---|---|
+| DNS record (base case) | `recorda` | `e.conn` | `true` | `convergence.ZoneFQDNFromRecordName(name)`, `view` |
+| DNS record (7 more) | owned by IN-RWS-WIRE-A | — | `true` | derived from the record's own name field, same pattern as `recorda` |
+| DNS zone (zoneauth) | owned by IN-RWS-WIRE-B | `e.conn` | open question — IN-RWS-WIRE-B must answer, with a test, whether a zone carries a usable SOA serial for its own fqdn | if gated: the zone's OWN fqdn/view field, never `ZoneFQDNFromRecordName` (that strips a label, which is correct for a record and wrong for a zone) |
+| DNS zone (zonedelegated, zoneforward) | owned by IN-RWS-WIRE-B | `e.conn` | `false` — no `zone_auth` match for a zone the Grid does not serve authoritatively (ADR §7) | n/a |
+| Non-standard client structs (dtcpool, dtclbdn, dtcserver, hostrecord) | owned by IN-RWS-WIRE-C | `e.clients.conn` / `e.client.conn` | `false` for dtc×3 (no serial signal); `true` for hostrecord (has one) | n/a for dtc×3; record-name-derived for hostrecord |
+| IPAM (7 packages) | owned by IN-RWS-WIRE-D | — | `false` | n/a — IPAM has no zone_auth object at all |
+| extensibleattributedef, dnsview | owned by IN-RWS-WIRE-E | — | `false` — neither is an object inside a DNS zone | n/a |
+| recordns | owned by IN-RWS-WIRE-E | — | open question — an NS record's name IS the delegated zone, so the base-case derivation may name the wrong zone; IN-RWS-WIRE-E must answer explicitly rather than assume | record-name-derived only if the derivation is proven correct; otherwise primary-only |
 
 **Hazard — Update() must persist explicitly:** crossplane-runtime's managed
 reconciler persists metadata (including annotations) written inside `Create()`

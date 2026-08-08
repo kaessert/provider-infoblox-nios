@@ -137,7 +137,7 @@ func TestBeginObserveRoutesToCandidateWhenGateReady(t *testing.T) {
 	cr := newObj("test")
 	primary := poisonIBConnector{t: t} // must not be touched or returned once the gate says candidate
 
-	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", false)
+	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", true)
 	if readFrom != ibclient.IBConnector(candidate) {
 		t.Fatalf("BeginObserve: expected Candidate to be returned, got %#v", readFrom)
 	}
@@ -147,10 +147,11 @@ func TestBeginObserveRoutesToCandidateWhenGateReady(t *testing.T) {
 	}
 }
 
-// TestBeginObserveIPAMOverrideForcesPrimaryOnly proves isIPAM=true
-// forces primaryOnly regardless of the configured mode, and never issues
-// a candidate call.
-func TestBeginObserveIPAMOverrideForcesPrimaryOnly(t *testing.T) {
+// TestBeginObserveNoZoneSerialSignalForcesPrimaryOnly proves
+// hasZoneSerial=false (any signal-less resource — IPAM, DTC, dnsview,
+// extensibleattributedef) forces primaryOnly regardless of the
+// configured mode, and never issues a candidate call.
+func TestBeginObserveNoZoneSerialSignalForcesPrimaryOnly(t *testing.T) {
 	gate := convergence.NewGate(nil, newZoneClient(t, poisonServer(t)), nil, "candidate-host")
 	r := Router{
 		Candidate: poisonIBConnector{t: t},
@@ -161,13 +162,13 @@ func TestBeginObserveIPAMOverrideForcesPrimaryOnly(t *testing.T) {
 	cr := newObj("test")
 	primary := poisonIBConnector{t: t}
 
-	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", true)
+	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", false)
 	if readFrom != ibclient.IBConnector(primary) {
-		t.Fatalf("BeginObserve: expected the primary to be returned for an IPAM resource, got %#v", readFrom)
+		t.Fatalf("BeginObserve: expected the primary to be returned for a signal-less resource, got %#v", readFrom)
 	}
 	cond := cr.GetCondition(convergence.ReadRoutingConditionType)
 	if cond.Status != corev1.ConditionFalse || string(cond.Reason) != convergence.ReasonPrimaryOnly {
-		t.Fatalf("BeginObserve: unexpected ReadRouting condition for an IPAM resource: %+v", cond)
+		t.Fatalf("BeginObserve: unexpected ReadRouting condition for a signal-less resource: %+v", cond)
 	}
 }
 
@@ -194,7 +195,7 @@ func TestBeginObserveEmitsWarningOnFallback(t *testing.T) {
 	}
 	primary := poisonIBConnector{t: t}
 
-	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", false)
+	readFrom, _ := r.BeginObserve(context.Background(), cr, primary, "example.com", "default", true)
 	if readFrom != ibclient.IBConnector(primary) {
 		t.Fatalf("BeginObserve: expected the primary on candidate failure, got %#v", readFrom)
 	}

@@ -730,8 +730,8 @@ func deleteARecordIdentity(ctx context.Context, conn ibclient.IBConnector, objMg
 // every Router method is a byte-for-byte no-op: no candidate connector is
 // touched, no extra WAPI call is made, and no ReadRouting condition is
 // set — identical to this controller's behavior before the read/write
-// split existed. ARecord is a DNS resource, never IPAM, so BeginObserve
-// is always called with isIPAM=false.
+// split existed. ARecord is a DNS record with a real zone SOA serial, so
+// BeginObserve is always called with hasZoneSerial=true.
 
 // ── SafeStart gate registration ─────────────────────────────────────────
 

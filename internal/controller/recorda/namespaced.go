@@ -146,7 +146,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	p := &cr.Spec.ForProvider
 
 	fqdn := convergence.ZoneFQDNFromRecordName(strOrEmpty(p.Name))
-	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), false)
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, strOrEmpty(p.View), true)
 
 	res, err := observeARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
