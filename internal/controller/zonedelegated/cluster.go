@@ -23,6 +23,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -40,6 +41,10 @@ const clusterControllerName = "cluster-zonedelegated.infobloxnios.crossplane.io"
 type clusterConnector struct {
 	kube  k8sclient.Client
 	usage *resource.LegacyProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build clusterConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -71,6 +76,7 @@ func (c *clusterConnector) Connect(ctx context.Context, cr *clusterv1alpha1.Zone
 		objMgr:   objMgr.Manager,
 		conn:     objMgr.Connector,
 		endpoint: conn.Endpoint,
+		router:   readrouting.WithRecorder(conn.Router, c.recorder),
 	}, nil
 }
 
@@ -87,6 +93,14 @@ type clusterExternal struct {
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key.
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint. ZoneDelegated has no zone_auth entry (it
+	// is not authoritative), so hasZoneSerial is always false — this
+	// forces the router's decision to PrimaryOnly and no candidate call
+	// is ever attempted. Its zero value (Gate == nil) is likewise
+	// "always read from the primary".
+	router readrouting.Router
 }
 
 // clusterDelegateToSDK converts the CRD's ZoneDelegatedNameServer list
@@ -119,10 +133,18 @@ func clusterDelegateFromSDK(in []ibclient.NameServer) []clusterv1alpha1.ZoneDele
 
 // Observe resolves the ZoneDelegated through the shared UID-in-EA
 // identity ladder and compares the result against the desired spec.
+//
+// ZoneDelegated is not an authoritative zone — it produces no zone_auth
+// entry (ADR-IN-0005 §7), so there is no SOA serial to gate reads on.
+// hasZoneSerial is unconditionally false: this forces the router's
+// decision to PrimaryOnly and BeginObserve never attempts a candidate
+// call, regardless of the configured mode.
 func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ZoneDelegated) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeZoneDelegated(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, strOrEmpty(p.Fqdn), strOrEmpty(p.View), false)
+
+	res, err := observeZoneDelegated(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.NsGroup, &p.Disable, &p.Locked, &p.UseDelegatedTTL, &p.DelegatedTTL, &p.ExtAttrs, &p.View, &p.ZoneFormat)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -170,7 +192,7 @@ func (e *clusterExternal) Observe(ctx context.Context, cr *clusterv1alpha1.ZoneD
 	return managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -194,6 +216,10 @@ func (e *clusterExternal) Create(ctx context.Context, cr *clusterv1alpha1.ZoneDe
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, strOrEmpty(p.Fqdn), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 	return managed.ExternalCreation{}, nil
 }
 
@@ -222,6 +248,10 @@ func (e *clusterExternal) Update(ctx context.Context, cr *clusterv1alpha1.ZoneDe
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
+	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, strOrEmpty(p.Fqdn), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 	return managed.ExternalUpdate{}, nil
 }
@@ -266,15 +296,18 @@ func setupClusterZoneDelegated(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*clusterv1alpha1.ZoneDelegated](driftdetection.WrapConnector[*clusterv1alpha1.ZoneDelegated](&clusterConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewLegacyProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

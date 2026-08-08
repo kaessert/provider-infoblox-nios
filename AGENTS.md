@@ -300,8 +300,8 @@ absent from this table is unreviewed, not merely undocumented):
 |---|---|---|---|---|
 | DNS record (base case) | `recorda` | `e.conn` | `true` | `convergence.ZoneFQDNFromRecordName(name)`, `view` |
 | DNS record (7 more) | owned by IN-RWS-WIRE-A | — | `true` | derived from the record's own name field, same pattern as `recorda` |
-| DNS zone (zoneauth) | owned by IN-RWS-WIRE-B | `e.conn` | open question — IN-RWS-WIRE-B must answer, with a test, whether a zone carries a usable SOA serial for its own fqdn | if gated: the zone's OWN fqdn/view field, never `ZoneFQDNFromRecordName` (that strips a label, which is correct for a record and wrong for a zone) |
-| DNS zone (zonedelegated, zoneforward) | owned by IN-RWS-WIRE-B | `e.conn` | `false` — no `zone_auth` match for a zone the Grid does not serve authoritatively (ADR §7) | n/a |
+| DNS zone (zoneauth) | done — wired | `e.conn` | `true` — a ZoneAuth zone carries its own soa_serial_number/member_soa_serials for its own fqdn | the zone's OWN fqdn/view field, never the record-derivation helper (that strips a label, which is correct for a record and wrong for a zone) |
+| DNS zone (zonedelegated, zoneforward) | done — wired | `e.conn` | `false` — no `zone_auth` match for a zone the Grid does not serve authoritatively (ADR §7) | n/a |
 | Non-standard client structs (dtcpool, dtclbdn, dtcserver, hostrecord) | owned by IN-RWS-WIRE-C | `e.clients.conn` / `e.client.conn` | `false` for dtc×3 (no serial signal); `true` for hostrecord (has one) | n/a for dtc×3; record-name-derived for hostrecord |
 | IPAM (7 packages) | owned by IN-RWS-WIRE-D | — | `false` | n/a — IPAM has no zone_auth object at all |
 | extensibleattributedef, dnsview | owned by IN-RWS-WIRE-E | — | `false` — neither is an object inside a DNS zone | n/a |

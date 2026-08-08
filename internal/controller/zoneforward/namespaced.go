@@ -22,6 +22,7 @@ import (
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -44,6 +45,10 @@ const namespacedControllerName = "namespaced-zoneforward.infobloxnios.m.crosspla
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -94,6 +99,7 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		objMgr:   objMgr.Manager,
 		conn:     objMgr.Connector,
 		endpoint: conn.Endpoint,
+		router:   readrouting.WithRecorder(conn.Router, c.recorder),
 	}, nil
 }
 
@@ -110,6 +116,14 @@ type namespacedExternal struct {
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key.
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint. ZoneForward has no zone_auth entry (it is
+	// not authoritative), so hasZoneSerial is always false — this forces
+	// the router's decision to PrimaryOnly and no candidate call is ever
+	// attempted. Its zero value (Gate == nil) is likewise "always read
+	// from the primary".
+	router readrouting.Router
 }
 
 // namespacedNameServersToSDK converts the CRD's NameServer list into the
@@ -184,11 +198,14 @@ func namespacedForwardingServersFromSDK(in []*ibclient.Forwardingmemberserver) [
 }
 
 // Observe resolves the ZoneForward through the shared UID-in-EA identity
-// ladder and compares the result against the desired spec.
+// ladder and compares the result against the desired spec. See the
+// cluster-scoped Observe for why hasZoneSerial is always false here.
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ZoneForward) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeZoneForward(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, strOrEmpty(p.Fqdn), strOrEmpty(p.View), false)
+
+	res, err := observeZoneForward(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.NsGroup, &p.ExternalNsGroup, &p.Disable, &p.ForwardersOnly, &p.ExtAttrs, &p.View, &p.ZoneFormat)
 	if err != nil {
 		var prereq *identity.PrerequisiteError
@@ -243,7 +260,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	return managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -267,6 +284,10 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, strOrEmpty(p.Fqdn), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 	return managed.ExternalCreation{}, nil
 }
 
@@ -295,6 +316,10 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 		if err := externalname.Refresh(ctx, e.kube, cr, rec.Ref); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
+	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, strOrEmpty(p.Fqdn), strOrEmpty(p.View)); err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 	return managed.ExternalUpdate{}, nil
 }
@@ -339,15 +364,18 @@ func setupNamespacedZoneForward(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.ZoneForward](driftdetection.WrapConnector[*namespacedv1alpha1.ZoneForward](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

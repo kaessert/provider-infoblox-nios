@@ -21,6 +21,7 @@ import (
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/zoneauth/v1alpha1"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/readrouting"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/statemetrics"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/driftdetection"
 )
@@ -43,6 +44,10 @@ const namespacedControllerName = "namespaced-zoneauth.infobloxnios.m.crossplane.
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see readrouting.Router's emitWarning). nil in this
+	// package's white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -86,11 +91,17 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	return &namespacedExternal{conn: conn.Connector, endpoint: conn.Endpoint}, nil
+	return &namespacedExternal{
+		kube:     c.kube,
+		conn:     conn.Connector,
+		endpoint: conn.Endpoint,
+		router:   readrouting.WithRecorder(conn.Router, c.recorder),
+	}, nil
 }
 
 // namespacedExternal implements managed.TypedExternalClient[*namespacedv1alpha1.ZoneAuth].
 type namespacedExternal struct {
+	kube k8sclient.Client
 	conn ibclient.IBConnector
 	// prober checks the identity extensible-attribute-definition
 	// prerequisite before Create stamps identity onto a new object. nil
@@ -98,6 +109,12 @@ type namespacedExternal struct {
 	prober *identity.Prober
 	// endpoint is this client's identity-prerequisite-probe cache key.
 	endpoint string
+
+	// router routes Observe reads between the primary and an (optional)
+	// candidate read endpoint, gated by SOA-serial convergence, and
+	// wraps the convergence gate's write-recording for Create/Update.
+	// Its zero value (Gate == nil) is "always read from the primary".
+	router readrouting.Router
 }
 
 // namespacedFieldsFromSpec converts a namespaced ZoneAuthParameters into
@@ -201,14 +218,21 @@ func namespacedExternalServersFromValues(in []externalServerValue) []namespacedv
 }
 
 // Observe resolves the ZoneAuth through the shared UID-in-EA identity
-// ladder and compares the result against the desired spec.
+// ladder and compares the result against the desired spec. See the
+// cluster-scoped Observe for why the gate key is the zone's own
+// fqdn/view and why both read sites route through readFrom.
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ZoneAuth) (managed.ExternalObservation, error) {
 	ref := observeRefFor(cr.GetName(), meta.GetExternalName(cr))
 
-	rec, outcome, err := resolveZoneAuthIdentity(ctx, e.conn, ref, string(cr.GetUID()))
+	p := &cr.Spec.ForProvider
+	fqdn := strOrEmpty(p.FQDN)
+	view := strOrEmpty(p.View)
+	readFrom, annotationChanged := e.router.BeginObserve(ctx, cr, e.conn, fqdn, view, true)
+
+	rec, outcome, err := resolveZoneAuthIdentity(ctx, readFrom, ref, string(cr.GetUID()))
 	if err != nil {
 		if identity.IsSearchFailure(err) {
-			if prereqErr := ensureIdentityPrerequisite(ctx, e.prober, e.conn, e.endpoint); prereqErr != nil {
+			if prereqErr := ensureIdentityPrerequisite(ctx, e.prober, readFrom, e.endpoint); prereqErr != nil {
 				return managed.ExternalObservation{}, prereqErr
 			}
 		}
@@ -239,7 +263,6 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	cr.Status.AtProvider.ExternalSecondaries = namespacedExternalServersFromValues(observed.ExternalSecondaries)
 	cr.Status.AtProvider.Ref = strPtrOrNil(rec.Ref)
 
-	p := &cr.Spec.ForProvider
 	desired := namespacedFieldsFromSpec(p)
 	// Strip the reserved identity extattr before comparing/late-initializing
 	// — the CRD schema never includes it, and the full-mirror AtProvider
@@ -279,7 +302,7 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	return managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: lateInit,
+		ResourceLateInitialized: lateInit || annotationChanged,
 	}, nil
 }
 
@@ -302,6 +325,10 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	meta.SetExternalName(cr, ref)
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, f.FQDN, strOrEmpty(f.View)); err != nil {
+		return managed.ExternalCreation{}, err
+	}
 	return managed.ExternalCreation{}, nil
 }
 
@@ -323,6 +350,10 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 
 	if err := updateZoneAuth(e.conn, externalID, f, string(cr.GetUID())); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateZoneAuth)
+	}
+
+	if err := e.router.RecordWrite(ctx, e.kube, cr, f.FQDN, strOrEmpty(f.View)); err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 
 	// _ref stability: see clusterExternal.Update — no external-name
@@ -370,15 +401,18 @@ func setupNamespacedZoneAuth(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.ZoneAuth](driftdetection.WrapConnector[*namespacedv1alpha1.ZoneAuth](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())
