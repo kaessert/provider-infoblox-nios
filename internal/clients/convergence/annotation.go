@@ -1,16 +1,21 @@
 package convergence
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
-	errMarshalAnnotation   = "cannot marshal pending-zone-serial annotation"
-	errUnmarshalAnnotation = "cannot unmarshal pending-zone-serial annotation"
+	errMarshalAnnotation    = "cannot marshal pending-zone-serial annotation"
+	errUnmarshalAnnotation  = "cannot unmarshal pending-zone-serial annotation"
+	errBuildAnnotationPatch = "cannot build pending-zone-serial annotation patch"
 )
 
 // PendingZoneSerialAnnotation is the well-known annotation key the
@@ -88,4 +93,46 @@ func ClearPendingSerial(obj metav1.Object) {
 	}
 	delete(ann, PendingZoneSerialAnnotation)
 	obj.SetAnnotations(ann)
+}
+
+// PersistPendingSerial calls SetPendingSerial and then immediately
+// persists ONLY that annotation to the API server via a JSON merge patch
+// scoped to metadata.annotations, wrapped in a bounded conflict-retry
+// loop — mirroring the external-name persistence pattern controllers
+// already use for other Update()-time metadata changes.
+//
+// crossplane-runtime's managed reconciler does not guarantee that
+// metadata changes made inside an ExternalClient's Update() method are
+// written back to the API server: it persists status via a subresource
+// update, but the only path that persists metadata/annotations is the
+// reconciler's own separate late-initialize Update call, which fires
+// only when Observe reported ResourceLateInitialized. A Gate.RecordWrite
+// call made directly inside Update() (as opposed to Create(), whose
+// annotation changes the reconciler always persists via
+// UpdateCriticalAnnotations) can therefore be silently discarded once
+// that reconcile ends — wedging the read-after-write convergence gate
+// for that write until some unrelated later change happens to trigger a
+// late-init persist. Call this from Update() instead of SetPendingSerial
+// directly whenever the write happens outside Create()/Observe().
+func PersistPendingSerial(ctx context.Context, kube client.Client, obj client.Object, fqdn, view string, serial uint32, now time.Time) error {
+	if err := SetPendingSerial(obj, fqdn, view, serial, now); err != nil {
+		return err
+	}
+
+	value := obj.GetAnnotations()[PendingZoneSerialAnnotation]
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
+				PendingZoneSerialAnnotation: value,
+			},
+		},
+	})
+	if err != nil {
+		return errors.Wrap(err, errBuildAnnotationPatch)
+	}
+
+	rawPatch := client.RawPatch(types.MergePatchType, patch)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return kube.Patch(ctx, obj, rawPatch)
+	})
 }

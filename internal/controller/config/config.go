@@ -18,6 +18,7 @@ package config
 
 import (
 	"context"
+	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -32,6 +33,7 @@ import (
 
 	clusterv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 )
 
@@ -150,6 +152,47 @@ type Conn struct {
 	Connector *ibclient.Connector
 	// Endpoint is the resolved primary Grid host.
 	Endpoint string
+
+	// DualClient bundles the primary and (when a readEndpoint is
+	// configured) candidate WAPI ObjectManagers built from this
+	// ProviderConfig. Writer() always returns the primary — Create,
+	// Update and Delete must never touch the candidate — so a package
+	// that builds its objMgr from DualClient.Writer() instead of wrapping
+	// Connector directly gets that invariant for free. Never nil, even
+	// when no readEndpoint is configured (Writer/Reader both fall back to
+	// the primary — see dualclient.New).
+	DualClient *dualclient.Client
+
+	// ReadConnector is the authenticated candidate (read-endpoint) WAPI
+	// connector, for controllers whose read path resolves objects through
+	// a raw ibclient.IBConnector (e.g. the UID-in-EA identity ladder)
+	// rather than through DualClient's ObjectManager-based Reader. nil
+	// when the ProviderConfig has no readEndpoint configured — every
+	// consumer MUST treat that as "read everything from Connector",
+	// identical to the provider's behavior before this field existed.
+	ReadConnector ibclient.IBConnector
+
+	// Gate implements the SOA-serial convergence check deciding, per
+	// Observe call, whether ReadConnector/DualClient's candidate is safe
+	// to read from. nil under the same no-readEndpoint condition as
+	// ReadConnector — callers MUST treat a nil Gate as "always read from
+	// the primary" and must never call Gate.Evaluate on a nil receiver.
+	Gate *convergence.Gate
+
+	// ConvergenceMode is the resolved readEndpoint.convergence.mode
+	// ("soaSerial" or "primaryOnly") as configured on the ProviderConfig,
+	// defaulted per the CRD's kubebuilder default when a readEndpoint is
+	// configured without an explicit mode. Callers apply
+	// convergence.EffectiveMode(ConvergenceMode, isIPAM) themselves, since
+	// only the caller knows whether its own resource type is IPAM. Empty
+	// when no readEndpoint is configured.
+	ConvergenceMode string
+
+	// ConvergenceTimeout is the resolved readEndpoint.convergence.timeout
+	// (CRD default applied when a readEndpoint is configured without an
+	// explicit timeout), passed to Gate.Evaluate on every call. Zero when
+	// no readEndpoint is configured.
+	ConvergenceTimeout time.Duration
 }
 
 // GetLegacy resolves an authenticated Conn for a legacy cluster-scoped
@@ -157,31 +200,91 @@ type Conn struct {
 // whether they embed xpv1.ResourceSpec or xpv2.ClusterManagedResourceSpec
 // — both resolve identically here). The credentials Secret has no
 // fallback namespace: a cluster-scoped ProviderConfig has none of its
-// own, so secretRef.namespace must be set explicitly.
+// own, so secretRef.namespace must be set explicitly. Applies the same
+// rule to the readEndpoint's credentialsRef, when configured.
 func GetLegacy(ctx context.Context, kube k8sclient.Client, pc *clusterv1alpha1.ProviderConfig) (*Conn, error) {
-	return resolve(ctx, kube, pc.Spec.Host, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "", pc.Spec.SSLVerify)
+	return resolve(ctx, kube, pc.Spec.Host, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, "", pc.Spec.SSLVerify, readEndpointFromCluster(pc.Spec.ReadEndpoint))
 }
 
 // Get resolves an authenticated Conn for a namespaced ProviderConfig,
 // used by ModernManaged resources in the same namespace. A secretRef
-// with no namespace falls back to the ProviderConfig's own namespace.
+// with no namespace falls back to the ProviderConfig's own namespace —
+// the same fallback applies to the readEndpoint's credentialsRef.
 func Get(ctx context.Context, kube k8sclient.Client, pc *namespacedv1alpha1.ProviderConfig) (*Conn, error) {
-	return resolve(ctx, kube, pc.Spec.Host, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace(), pc.Spec.SSLVerify)
+	return resolve(ctx, kube, pc.Spec.Host, pc.Spec.Credentials.Source, pc.Spec.Credentials.SecretRef, pc.GetNamespace(), pc.Spec.SSLVerify, readEndpointFromNamespaced(pc.Spec.ReadEndpoint))
 }
 
 // GetCluster resolves an authenticated Conn for a namespaced
 // ClusterProviderConfig, used by ModernManaged resources from any
 // namespace. The credentials Secret has no fallback namespace: a
 // cluster-scoped config has none of its own, so secretRef.namespace must
-// be set explicitly.
+// be set explicitly — the same rule applies to the readEndpoint's
+// credentialsRef.
 func GetCluster(ctx context.Context, kube k8sclient.Client, cpc *namespacedv1alpha1.ClusterProviderConfig) (*Conn, error) {
-	return resolve(ctx, kube, cpc.Spec.Host, cpc.Spec.Credentials.Source, cpc.Spec.Credentials.SecretRef, "", cpc.Spec.SSLVerify)
+	return resolve(ctx, kube, cpc.Spec.Host, cpc.Spec.Credentials.Source, cpc.Spec.Credentials.SecretRef, "", cpc.Spec.SSLVerify, readEndpointFromNamespaced(cpc.Spec.ReadEndpoint))
 }
 
-// resolve extracts credentials, applies the SSLVerify nil-default exactly
-// once, and builds the authenticated Conn against the real Grid endpoint
-// (scheme "https", port "443").
-func resolve(ctx context.Context, kube k8sclient.Client, host string, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string, sslVerifyField *bool) (*Conn, error) {
+// readEndpointSpec captures a ProviderConfig's readEndpoint fields in a
+// package-agnostic shape. The cluster and namespaced ReadEndpoint/
+// ConvergenceConfig types (like ProviderConfigSpec itself) are
+// structurally identical but distinct named Go types, so GetLegacy/Get/
+// GetCluster each extract their own typed pc.Spec.ReadEndpoint into this
+// before calling the shared resolve.
+type readEndpointSpec struct {
+	host           string
+	credentialsRef xpv2.SecretReference
+	mode           string
+	timeout        time.Duration
+}
+
+// readEndpointFromCluster adapts a cluster-scoped ProviderConfig's
+// ReadEndpoint into the package-agnostic shape resolve expects, applying
+// the same CRD defaults (soaSerial / 60s) Go code must also honor for
+// objects that predate a field, or for callers (tests) that build one
+// without going through defaulting webhooks.
+func readEndpointFromCluster(re *clusterv1alpha1.ReadEndpoint) *readEndpointSpec {
+	if re == nil {
+		return nil
+	}
+	spec := &readEndpointSpec{host: re.Host, credentialsRef: re.CredentialsRef, mode: convergence.ModeSOASerial, timeout: convergence.DefaultTimeout}
+	if re.Convergence != nil {
+		if re.Convergence.Mode != "" {
+			spec.mode = re.Convergence.Mode
+		}
+		if re.Convergence.Timeout != nil {
+			spec.timeout = re.Convergence.Timeout.Duration
+		}
+	}
+	return spec
+}
+
+// readEndpointFromNamespaced is readEndpointFromCluster's namespaced-type
+// counterpart, shared by Get and GetCluster.
+func readEndpointFromNamespaced(re *namespacedv1alpha1.ReadEndpoint) *readEndpointSpec {
+	if re == nil {
+		return nil
+	}
+	spec := &readEndpointSpec{host: re.Host, credentialsRef: re.CredentialsRef, mode: convergence.ModeSOASerial, timeout: convergence.DefaultTimeout}
+	if re.Convergence != nil {
+		if re.Convergence.Mode != "" {
+			spec.mode = re.Convergence.Mode
+		}
+		if re.Convergence.Timeout != nil {
+			spec.timeout = re.Convergence.Timeout.Duration
+		}
+	}
+	return spec
+}
+
+// resolve extracts primary (and, when configured, read-endpoint)
+// credentials, applies the SSLVerify nil-default exactly once, and builds
+// the authenticated Conn against the real Grid endpoint(s) (scheme
+// "https", port "443"). A misconfigured readEndpoint — a credentialsRef
+// Secret that is missing or lacks required keys — fails resolve (and
+// therefore Connect()) outright: per the read/write split's design, a
+// broken read endpoint must never silently degrade to primary-only
+// routing.
+func resolve(ctx context.Context, kube k8sclient.Client, host string, source xpv2.CredentialsSource, secretRef *xpv2.SecretKeySelector, fallbackNamespace string, sslVerifyField *bool, re *readEndpointSpec) (*Conn, error) {
 	creds, err := dualclient.ExtractCredentials(ctx, kube, host, source, secretRef, fallbackNamespace)
 	if err != nil {
 		return nil, err
@@ -198,12 +301,58 @@ func resolve(ctx context.Context, kube k8sclient.Client, host string, source xpv
 		sslVerify = *sslVerifyField
 	}
 
-	conn, err := BuildConnector(creds, sslVerify, "https", "443")
+	var readCreds *dualclient.Credentials
+	if re != nil {
+		rc, err := dualclient.ExtractCredentials(ctx, kube, re.host, xpv2.CredentialsSourceSecret, &xpv2.SecretKeySelector{SecretReference: re.credentialsRef}, fallbackNamespace)
+		if err != nil {
+			return nil, err
+		}
+		readCreds = &rc
+	}
+
+	// The closure distinguishes which endpoint it was asked to build by
+	// comparing the host it was called with against the primary's host —
+	// dualclient.Connect calls it once for the primary and, only when
+	// readCreds != nil, once more for the candidate, and the two hosts are
+	// always different in practice (there is no reason to configure a
+	// read endpoint pointed at the primary itself).
+	var primaryConn, candidateConn *ibclient.Connector
+	newObjMgr := func(c dualclient.Credentials, verify bool) (ibclient.IBObjectManager, error) {
+		conn, err := BuildConnector(c, verify, "https", "443")
+		if err != nil {
+			return nil, err
+		}
+		if c.Host == creds.Host {
+			primaryConn = conn
+		} else {
+			candidateConn = conn
+		}
+		return ibclient.NewObjectManager(conn, "", ""), nil
+	}
+
+	var breaker *dualclient.CircuitBreaker
+	if readCreds != nil {
+		breaker = dualclient.NewCircuitBreaker(dualclient.DefaultCircuitBreakerThreshold, dualclient.DefaultCircuitBreakerBackoff)
+	}
+
+	dc, err := dualclient.Connect(creds, readCreds, sslVerify, newObjMgr, breaker)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Conn{Connector: conn, Endpoint: creds.Host}, nil
+	conn := &Conn{Connector: primaryConn, Endpoint: creds.Host, DualClient: dc}
+
+	if readCreds != nil {
+		conn.ReadConnector = candidateConn
+		conn.ConvergenceMode = re.mode
+		conn.ConvergenceTimeout = re.timeout
+
+		primaryZone := convergence.NewClient(creds.Host, "443", wapiVersion, creds.Username, creds.Password, sslVerify)
+		candidateZone := convergence.NewClient(readCreds.Host, "443", wapiVersion, readCreds.Username, readCreds.Password, sslVerify)
+		conn.Gate = convergence.NewGate(primaryZone, candidateZone, breaker, readCreds.Host)
+	}
+
+	return conn, nil
 }
 
 // BuildConnector constructs an authenticated *ibclient.Connector from the

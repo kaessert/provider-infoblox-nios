@@ -8,6 +8,7 @@ import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 )
@@ -129,18 +130,44 @@ func NewGate(primary, candidate *Client, breaker *dualclient.CircuitBreaker, can
 // RecordWrite simply does not set an annotation, so subsequent Observes
 // route to primary/candidate purely per EffectiveMode/configuration with
 // no pending gate.
+//
+// RecordWrite only mutates obj in memory. Call it from Create(), whose
+// annotation changes crossplane-runtime always persists on the caller's
+// behalf. Everywhere else — most importantly Update() — call
+// RecordAndPersistWrite instead: crossplane-runtime does not guarantee
+// metadata written during Update() reaches the API server (see
+// PersistPendingSerial's doc), so an in-memory-only RecordWrite call
+// there is silently discarded and permanently wedges the gate for that
+// write.
 func (g *Gate) RecordWrite(ctx context.Context, obj metav1.Object, fqdn, view string) error {
-	if g.Primary == nil {
-		return nil
-	}
-	serial, found, err := g.Primary.ReadZoneSerial(ctx, fqdn, view)
-	if err != nil {
+	serial, found, err := g.readZoneSerial(ctx, fqdn, view)
+	if err != nil || !found {
 		return err
 	}
-	if !found {
-		return nil
-	}
 	return SetPendingSerial(obj, fqdn, view, serial, g.now())
+}
+
+// RecordAndPersistWrite is RecordWrite plus an immediate, conflict-safe
+// persist of the resulting annotation to the API server — see
+// PersistPendingSerial's doc for why this matters specifically for calls
+// made from an ExternalClient's Update() method.
+func (g *Gate) RecordAndPersistWrite(ctx context.Context, kube client.Client, obj client.Object, fqdn, view string) error {
+	serial, found, err := g.readZoneSerial(ctx, fqdn, view)
+	if err != nil || !found {
+		return err
+	}
+	return PersistPendingSerial(ctx, kube, obj, fqdn, view, serial, g.now())
+}
+
+// readZoneSerial is the shared primary-read step behind RecordWrite and
+// RecordAndPersistWrite. found is false (with a nil error) both when no
+// readEndpoint is configured (g.Primary == nil — nothing to gate on) and
+// when the primary reports no serial for this zone.
+func (g *Gate) readZoneSerial(ctx context.Context, fqdn, view string) (serial uint32, found bool, err error) {
+	if g.Primary == nil {
+		return 0, false, nil
+	}
+	return g.Primary.ReadZoneSerial(ctx, fqdn, view)
 }
 
 // Evaluate decides whether obj's next Observe should read from the

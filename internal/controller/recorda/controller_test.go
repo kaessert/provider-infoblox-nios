@@ -8,6 +8,7 @@ package recorda
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,8 +16,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	cperrors "github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
@@ -32,6 +35,7 @@ import (
 	clusterpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/cluster/v1alpha1"
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	namespacedpcv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/dualclient"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
@@ -4328,5 +4332,545 @@ func TestUpdateARecordRefusesWhitespaceUID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty") {
 		t.Errorf("updateARecord: error = %v, want it to mention the empty uid", err)
+	}
+}
+
+// ── Read/write endpoint split (read-routing) ─────────────────────────────
+//
+// These tests exercise evaluateReadRouting/recordConvergenceWrite through
+// the real Observe/Create/Update methods, white-box-constructing
+// clusterExternal/namespacedExternal with a gate/readConn instead of going
+// through Connect() — mirroring every other test in this file.
+
+// poisonIBConnector fails the test if any of its methods is ever called —
+// used to prove a code path never touches the candidate (or, for the
+// convergence-timeout test, never touches the candidate zone_auth query)
+// when routing decided against it.
+type poisonIBConnector struct{ t *testing.T }
+
+func (p poisonIBConnector) CreateObject(ibclient.IBObject) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate CreateObject call")
+	return "", nil
+}
+
+func (p poisonIBConnector) GetObject(ibclient.IBObject, string, *ibclient.QueryParams, interface{}) error {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate GetObject call")
+	return nil
+}
+
+func (p poisonIBConnector) DeleteObject(string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate DeleteObject call")
+	return "", nil
+}
+
+func (p poisonIBConnector) UpdateObject(ibclient.IBObject, string) (string, error) {
+	p.t.Helper()
+	p.t.Fatal("unexpected candidate UpdateObject call")
+	return "", nil
+}
+
+// poisonZoneServer fails the test if it receives any HTTP request — used
+// to prove a code path never issues a zone_auth query at all.
+func poisonZoneServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected zone_auth request: %s %s", r.Method, r.URL.String())
+	}))
+}
+
+// newZoneClient builds a convergence.Client pointed at an httptest.Server
+// via plain HTTP, mirroring newTestObjectManager's pattern for the SDK
+// connector.
+func newZoneClient(t *testing.T, srv *httptest.Server) *convergence.Client {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("cannot parse test server URL: %v", err)
+	}
+	return convergence.NewClientWithScheme("http", u.Hostname(), u.Port(), wapiVersion, "test-user", "test-pass", true)
+}
+
+// zoneAuthSerialServer answers every zone_auth query with a fixed
+// soa_serial_number — used for RecordWrite/RecordAndPersistWrite's
+// primary-side read.
+func zoneAuthSerialServer(t *testing.T, serial uint32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `[{"soa_serial_number":%d}]`, serial)
+	}))
+}
+
+// zoneAuthMemberSerialsServer answers every zone_auth query with a fixed
+// member_soa_serials array — used for Gate.Evaluate's candidate-side read.
+func zoneAuthMemberSerialsServer(t *testing.T, hostname string, serial uint32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `[{"member_soa_serials":[{"grid_primary":%q,"serial":%d}]}]`, hostname, serial)
+	}))
+}
+
+// fakeEventRecorder captures the events passed to Event, for tests that
+// assert a Kubernetes Warning event was (or was not) emitted on a
+// read-routing fallback transition.
+type fakeEventRecorder struct{ events []event.Event }
+
+func (r *fakeEventRecorder) Event(_ runtime.Object, e event.Event)    { r.events = append(r.events, e) }
+func (r *fakeEventRecorder) WithAnnotations(...string) event.Recorder { return r }
+
+// TestObserveReadEndpointAbsentNoCandidateCall is the wave's central
+// byte-for-byte-behavior proof: with no readEndpoint configured (gate ==
+// nil), Observe must never construct or touch a candidate connector, must
+// never set the ReadRouting condition, and must behave identically to the
+// controller before the read/write split existed. readConn is a
+// poisonIBConnector so any accidental candidate call fails the test
+// immediately rather than silently succeeding against a mock that happens
+// to answer.
+func TestObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &clusterExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		readConn: poisonIBConnector{t: t}, // gate is nil, so this must never be touched
+		prober:   identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	if cond := cr.GetCondition(convergence.ReadRoutingConditionType); cond.Status != corev1.ConditionUnknown {
+		t.Fatalf("Observe: expected no ReadRouting condition when no readEndpoint is configured, got %+v", cond)
+	}
+}
+
+// TestObserveRoutesToCandidateWhenGateReady proves the steady-state case:
+// no pending-zone-serial annotation means the gate reports UseCandidate
+// immediately (without any zone_auth call — see Gate.evaluatePending),
+// and Observe reads the record through readConn, never touching the
+// primary connector.
+func TestObserveRoutesToCandidateWhenGateReady(t *testing.T) {
+	m := newMockWapiServer()
+	candidateSrv := httptest.NewServer(m.handler())
+	defer candidateSrv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	candidateMC := newTestObjectManager(t, candidateSrv)
+	// The Gate's own Candidate client is never dialed for this decision
+	// (no pending annotation short-circuits before any zone_auth call —
+	// see evaluatePending), so pointing it at a real client is enough;
+	// no server is needed.
+	gate := convergence.NewGate(nil, convergence.NewClientWithScheme("http", "unused", "0", wapiVersion, "u", "p", true), nil, "candidate-host")
+
+	e := &clusterExternal{
+		kube:               &recordingKubeClient{},
+		objMgr:             nil,                     // never touched — this is a pure read
+		conn:               poisonIBConnector{t: t}, // primary must not be touched when routing to candidate
+		readConn:           candidateMC.Connector,
+		gate:               gate,
+		convergenceMode:    convergence.ModeSOASerial,
+		convergenceTimeout: convergence.DefaultTimeout,
+		prober:             identity.NewProber(),
+		endpoint:           t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	cond := cr.GetCondition(convergence.ReadRoutingConditionType)
+	if cond.Status != corev1.ConditionTrue || string(cond.Reason) != convergence.ReasonCandidateReady {
+		t.Fatalf("Observe: unexpected ReadRouting condition: %+v", cond)
+	}
+}
+
+// TestObserveConvergenceModePrimaryOnlyRoutesToPrimary proves an explicit
+// primaryOnly mode routes to the primary, sets the ReadRouting condition
+// to False/PrimaryOnly, and never calls the candidate connector — even
+// though one is configured.
+func TestObserveConvergenceModePrimaryOnlyRoutesToPrimary(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(nil, convergence.NewClientWithScheme("http", "unused", "0", wapiVersion, "u", "p", true), nil, "candidate-host")
+
+	e := &clusterExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		readConn:           poisonIBConnector{t: t},
+		gate:               gate,
+		convergenceMode:    convergence.ModePrimaryOnly,
+		convergenceTimeout: convergence.DefaultTimeout,
+		prober:             identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	cond := cr.GetCondition(convergence.ReadRoutingConditionType)
+	if cond.Status != corev1.ConditionFalse || string(cond.Reason) != convergence.ReasonPrimaryOnly {
+		t.Fatalf("Observe: unexpected ReadRouting condition: %+v", cond)
+	}
+}
+
+// TestObserveClearsConvergedAnnotationAndReportsLateInitialized proves
+// that once the candidate catches up to a pending write, Observe clears
+// the pending-zone-serial annotation AND reports
+// ResourceLateInitialized=true — required so crossplane-runtime actually
+// persists the clear (see evaluateReadRouting's doc).
+func TestObserveClearsConvergedAnnotationAndReportsLateInitialized(t *testing.T) {
+	m := newMockWapiServer()
+	candidateSrv := httptest.NewServer(m.handler())
+	defer candidateSrv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	const candidateHostname = "candidate.example.com"
+	memberSrv := zoneAuthMemberSerialsServer(t, candidateHostname, 10)
+	defer memberSrv.Close()
+
+	candidateMC := newTestObjectManager(t, candidateSrv)
+	gate := convergence.NewGate(nil, newZoneClient(t, memberSrv), nil, candidateHostname)
+
+	e := &clusterExternal{
+		kube:               &recordingKubeClient{},
+		conn:               poisonIBConnector{t: t},
+		readConn:           candidateMC.Connector,
+		gate:               gate,
+		convergenceMode:    convergence.ModeSOASerial,
+		convergenceTimeout: convergence.DefaultTimeout,
+		prober:             identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+	if err := convergence.SetPendingSerial(cr, "example.com", "default", 5, time.Now()); err != nil {
+		t.Fatalf("SetPendingSerial: unexpected error: %v", err)
+	}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: expected ResourceLateInitialized=true so the annotation clear is persisted")
+	}
+	if _, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]; ok {
+		t.Fatal("Observe: expected the pending-zone-serial annotation to be cleared")
+	}
+}
+
+// TestObserveConvergenceTimeoutFallsBackToPrimaryAndWarns proves a
+// convergence timeout routes to the primary, emits a Warning event, and
+// never issues the candidate zone_auth query at all (evaluateTimeout
+// short-circuits before evaluateCandidateSerial — see gate.go).
+func TestObserveConvergenceTimeoutFallsBackToPrimaryAndWarns(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	poisonZone := poisonZoneServer(t)
+	defer poisonZone.Close()
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(nil, newZoneClient(t, poisonZone), nil, "candidate-host")
+	rec := &fakeEventRecorder{}
+
+	e := &clusterExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		readConn:           poisonIBConnector{t: t},
+		gate:               gate,
+		convergenceMode:    convergence.ModeSOASerial,
+		convergenceTimeout: time.Millisecond,
+		prober:             identity.NewProber(), endpoint: t.Name(),
+		recorder: rec,
+	}
+	cr := newClusterARecord("my-arecord", ref)
+	if err := convergence.SetPendingSerial(cr, "example.com", "default", 99, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("SetPendingSerial: unexpected error: %v", err)
+	}
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	if !got.ResourceLateInitialized {
+		t.Fatal("Observe: expected ResourceLateInitialized=true so the timeout's annotation clear is persisted")
+	}
+	if _, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]; ok {
+		t.Fatal("Observe: expected the pending-zone-serial annotation to be cleared on timeout")
+	}
+	if len(rec.events) != 1 || rec.events[0].Type != event.TypeWarning {
+		t.Fatalf("Observe: expected exactly one Warning event, got %+v", rec.events)
+	}
+}
+
+// TestCreatePersistsConvergenceWriteViaPatch proves Create() records the
+// convergence watermark and persists it via kube.Patch when a readEndpoint
+// is configured.
+func TestCreatePersistsConvergenceWriteViaPatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	zoneSrv := zoneAuthSerialServer(t, 42)
+	defer zoneSrv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(newZoneClient(t, zoneSrv), nil, nil, "")
+	kube := &recordingKubeClient{}
+
+	e := &clusterExternal{
+		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
+		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", "my-arecord")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+
+	ann, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]
+	if !ok || ann == "" {
+		t.Fatal("Create: expected the pending-zone-serial annotation to be set")
+	}
+	if kube.updated == nil {
+		t.Fatal("Create: expected the annotation to be persisted via kube.Patch")
+	}
+}
+
+// TestCreateReadEndpointAbsentSkipsConvergenceWrite proves Create() is a
+// byte-for-byte no-op on the convergence path when no readEndpoint is
+// configured: no annotation is set, and kube.Patch is never called for it.
+func TestCreateReadEndpointAbsentSkipsConvergenceWrite(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	kube := &recordingKubeClient{}
+	e := &clusterExternal{kube: kube, objMgr: mc.Manager, conn: mc.Connector, prober: identity.NewProber(), endpoint: t.Name()}
+	cr := newClusterARecord("my-arecord", "my-arecord")
+
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+	if _, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]; ok {
+		t.Fatal("Create: expected no pending-zone-serial annotation when no readEndpoint is configured")
+	}
+	if kube.updated != nil {
+		t.Fatal("Create: expected no Patch call when no readEndpoint is configured")
+	}
+}
+
+// TestUpdatePersistsConvergenceWriteViaPatch is the hazard-2 pin: Update()
+// must explicitly persist the convergence watermark via kube.Patch,
+// because crossplane-runtime's managed reconciler does not flush metadata
+// mutations made inside Update() on its own (unlike Create(), whose
+// annotation changes UpdateCriticalAnnotations always persists).
+func TestUpdatePersistsConvergenceWriteViaPatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	zoneSrv := zoneAuthSerialServer(t, 7)
+	defer zoneSrv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(newZoneClient(t, zoneSrv), nil, nil, "")
+	kube := &recordingKubeClient{}
+
+	e := &clusterExternal{
+		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
+		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+	cr.Spec.ForProvider.Comment = stringPtr("updated")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	ann, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]
+	if !ok || ann == "" {
+		t.Fatal("Update: expected the pending-zone-serial annotation to be set")
+	}
+	if kube.updated == nil {
+		t.Fatal("Update: expected the annotation to be persisted via kube.Patch — an in-memory-only write is silently discarded by crossplane-runtime")
+	}
+}
+
+// TestDeleteNeverRecordsConvergenceWrite proves Delete() never calls
+// recordConvergenceWrite: the managed resource is being removed, so there
+// is no future Observe left to gate, and no Patch call should occur.
+func TestDeleteNeverRecordsConvergenceWrite(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDCluster),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(newZoneClient(t, poisonZoneServer(t)), nil, nil, "")
+	kube := &recordingKubeClient{}
+
+	e := &clusterExternal{
+		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
+		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newClusterARecord("my-arecord", ref)
+
+	if _, err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: unexpected error: %v", err)
+	}
+	if kube.updated != nil {
+		t.Fatal("Delete: expected no Patch call — Delete never records a convergence write")
+	}
+}
+
+// TestNamespacedObserveReadEndpointAbsentNoCandidateCall is the
+// namespaced-scope variant of TestObserveReadEndpointAbsentNoCandidateCall
+// — both scopes share the same evaluateReadRouting/recordConvergenceWrite
+// helpers, but each scope's Observe/Create/Update wiring is exercised
+// independently per this package's existing convention.
+func TestNamespacedObserveReadEndpointAbsentNoCandidateCall(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDNamespaced),
+	})
+
+	mc := newTestObjectManager(t, srv)
+	e := &namespacedExternal{
+		kube: &recordingKubeClient{}, objMgr: mc.Manager, conn: mc.Connector,
+		readConn: poisonIBConnector{t: t},
+		prober:   identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newNamespacedARecord("team-a", "my-arecord", ref, "ProviderConfig")
+
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error: %v", err)
+	}
+	if !got.ResourceExists {
+		t.Fatal("Observe: want ResourceExists=true, got false")
+	}
+	if cond := cr.GetCondition(convergence.ReadRoutingConditionType); cond.Status != corev1.ConditionUnknown {
+		t.Fatalf("Observe: expected no ReadRouting condition when no readEndpoint is configured, got %+v", cond)
+	}
+}
+
+// TestNamespacedUpdatePersistsConvergenceWriteViaPatch is the namespaced
+// counterpart of TestUpdatePersistsConvergenceWriteViaPatch.
+func TestNamespacedUpdatePersistsConvergenceWriteViaPatch(t *testing.T) {
+	m := newMockWapiServer()
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	ref := m.seed(&ibclient.RecordA{
+		Name:     stringPtr("host.example.com"),
+		Ipv4Addr: stringPtr("10.0.0.1"),
+		View:     "default",
+		Ea:       identity.Stamp(ibclient.EA{}, testUIDNamespaced),
+	})
+
+	zoneSrv := zoneAuthSerialServer(t, 7)
+	defer zoneSrv.Close()
+
+	mc := newTestObjectManager(t, srv)
+	gate := convergence.NewGate(newZoneClient(t, zoneSrv), nil, nil, "")
+	kube := &recordingKubeClient{}
+
+	e := &namespacedExternal{
+		kube: kube, objMgr: mc.Manager, conn: mc.Connector,
+		gate: gate, convergenceMode: convergence.ModeSOASerial, convergenceTimeout: convergence.DefaultTimeout,
+		prober: identity.NewProber(), endpoint: t.Name(),
+	}
+	cr := newNamespacedARecord("team-a", "my-arecord", ref, "ProviderConfig")
+	cr.Spec.ForProvider.Comment = stringPtr("updated")
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+
+	if _, ok := cr.GetAnnotations()[convergence.PendingZoneSerialAnnotation]; !ok {
+		t.Fatal("Update: expected the pending-zone-serial annotation to be set")
+	}
+	if kube.updated == nil {
+		t.Fatal("Update: expected the annotation to be persisted via kube.Patch")
 	}
 }

@@ -2,6 +2,7 @@ package recorda
 
 import (
 	"context"
+	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
@@ -18,6 +19,7 @@ import (
 
 	namespacedv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/recorda/v1alpha1"
 	apisv1alpha1 "github.com/crossplane-contrib/provider-infoblox-nios/apis/namespaced/v1alpha1"
+	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/convergence"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/clients/identity"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/config"
 	"github.com/crossplane-contrib/provider-infoblox-nios/internal/controller/externalname"
@@ -43,6 +45,10 @@ const namespacedControllerName = "namespaced-recorda.infobloxnios.m.crossplane.i
 type namespacedConnector struct {
 	kube  k8sclient.Client
 	usage *resource.ProviderConfigUsageTracker
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions (see emitReadRoutingWarning). nil in this package's
+	// white-box tests that build namespacedConnector directly.
+	recorder event.Recorder
 }
 
 // Connect tracks ProviderConfig usage, resolves the referenced
@@ -86,16 +92,24 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 		return nil, errors.Errorf("%s: %s", errUnsupportedKind, ref.Kind)
 	}
 
-	mgrConn := identity.NewManagerAndConnector(conn.Connector)
-
 	return &namespacedExternal{
 		kube:   c.kube,
-		objMgr: mgrConn.Manager,
-		conn:   mgrConn.Connector,
+		objMgr: conn.DualClient.Writer(),
+		conn:   conn.Connector,
 		// prober is left nil (defaults to identity.DefaultProber in
 		// ensureIdentityPrerequisite) so every controller in the process
 		// shares one TTL-bounded verdict cache per Grid endpoint.
 		endpoint: conn.Endpoint,
+		// readConn/gate/convergenceMode/convergenceTimeout are all zero
+		// values (nil/""/0) when the ProviderConfig has no readEndpoint
+		// configured — every read-routing helper treats that as "always
+		// read from conn", so this is byte-for-byte identical to the
+		// provider's behavior before the read/write split existed.
+		readConn:           conn.ReadConnector,
+		gate:               conn.Gate,
+		convergenceMode:    conn.ConvergenceMode,
+		convergenceTimeout: conn.ConvergenceTimeout,
+		recorder:           c.recorder,
 	}, nil
 }
 
@@ -103,9 +117,9 @@ func (c *namespacedConnector) Connect(ctx context.Context, cr *namespacedv1alpha
 type namespacedExternal struct {
 	kube   k8sclient.Client
 	objMgr ibclient.IBObjectManager
-	// conn is the lower-level WAPI connector the identity ladder resolves
-	// against directly — it needs visibility into search match counts
-	// that objMgr's typed methods hide. See resolveARecordIdentity.
+	// conn is the lower-level primary WAPI connector the identity ladder
+	// resolves against directly — it needs visibility into search match
+	// counts that objMgr's typed methods hide. See resolveARecordIdentity.
 	conn ibclient.IBConnector
 	// prober checks that the Grid's "Crossplane Internal ID" extensible
 	// attribute definition exists before Create stamps identity onto a
@@ -117,6 +131,25 @@ type namespacedExternal struct {
 	// resolved by Connect from the ProviderConfig's Grid host. See
 	// ensureIdentityPrerequisite's empty-string fallback.
 	endpoint string
+
+	// readConn is the authenticated candidate (read-endpoint) WAPI
+	// connector Observe reads through when gate says it is safe. nil when
+	// no readEndpoint is configured — see the "Read/write endpoint split"
+	// doc in controller.go.
+	readConn ibclient.IBConnector
+	// gate implements the SOA-serial convergence check. nil when no
+	// readEndpoint is configured.
+	gate *convergence.Gate
+	// convergenceMode/convergenceTimeout are this ProviderConfig's
+	// resolved readEndpoint.convergence settings (CRD defaults already
+	// applied by internal/controller/config). Zero values when gate is
+	// nil.
+	convergenceMode    string
+	convergenceTimeout time.Duration
+	// recorder emits Kubernetes Warning events for read-routing fallback
+	// transitions. nil in this package's white-box tests that build
+	// namespacedExternal directly.
+	recorder event.Recorder
 }
 
 // Observe resolves the ARecord through the shared UID-in-EA identity
@@ -127,7 +160,17 @@ type namespacedExternal struct {
 func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalObservation, error) {
 	p := &cr.Spec.ForProvider
 
-	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
+	decision, annotationChanged := evaluateReadRouting(ctx, e.gate, e.convergenceMode, e.convergenceTimeout, cr, p.Name, p.View)
+	readFrom := e.conn
+	if e.gate != nil {
+		cr.SetConditions(convergence.ReadRoutingCondition(decision))
+		emitReadRoutingWarning(e.recorder, cr, decision)
+		if decision.UseCandidate {
+			readFrom = e.readConn
+		}
+	}
+
+	res, err := observeARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()),
 		&p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
 	if err != nil {
 		// A *identity.PrerequisiteError carries the missing-extensible-
@@ -187,9 +230,14 @@ func (e *namespacedExternal) Observe(ctx context.Context, cr *namespacedv1alpha1
 	upToDate := isUpToDate(p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, res.rec) && !res.adopted
 
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        upToDate,
-		ResourceLateInitialized: res.lateInit,
+		ResourceExists:   true,
+		ResourceUpToDate: upToDate,
+		// annotationChanged folds the read-routing gate's own annotation
+		// mutation (clearing pending-zone-serial once the candidate
+		// catches up) into the same persistence path already used for
+		// res.lateInit — see evaluateReadRouting's doc for why this is
+		// required, not optional.
+		ResourceLateInitialized: res.lateInit || annotationChanged,
 	}, nil
 }
 
@@ -216,6 +264,11 @@ func (e *namespacedExternal) Create(ctx context.Context, cr *namespacedv1alpha1.
 	}
 
 	meta.SetExternalName(cr, rec.Ref)
+
+	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
 	return managed.ExternalCreation{}, nil
 }
 
@@ -247,13 +300,20 @@ func (e *namespacedExternal) Update(ctx context.Context, cr *namespacedv1alpha1.
 			return managed.ExternalUpdate{}, errors.Wrap(err, errPersistExternalName)
 		}
 	}
+
+	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
 // Delete removes the ARecord, resolving through the shared identity
 // ladder first — see deleteARecordIdentity for the full ownership-
 // verification rules a stale or rotated _ref must satisfy before a
-// delete is issued.
+// delete is issued. Delete never calls recordConvergenceWrite: the
+// managed resource is being removed, so there is no future Observe left
+// to gate on the resulting zone-serial bump.
 func (e *namespacedExternal) Delete(ctx context.Context, cr *namespacedv1alpha1.ARecord) (managed.ExternalDelete, error) {
 	externalID := meta.GetExternalName(cr)
 	if err := deleteARecordIdentity(ctx, e.conn, e.objMgr, e.prober, e.endpoint, externalID, string(cr.GetUID())); err != nil {
@@ -290,15 +350,18 @@ func setupNamespacedARecord(mgr ctrl.Manager, o controller.Options) error {
 		}
 	}
 
+	//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
+	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
+
 	opts := []managed.ReconcilerOption{
 		managed.WithTypedExternalConnector[*namespacedv1alpha1.ARecord](driftdetection.WrapConnector[*namespacedv1alpha1.ARecord](&namespacedConnector{
-			kube:  mgr.GetClient(),
-			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:     mgr.GetClient(),
+			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			recorder: recorder,
 		})),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		//nolint:staticcheck // event.NewAPIRecorder still requires the deprecated record.EventRecorder type; no replacement exists yet in this crossplane-runtime version.
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithRecorder(recorder),
 	}
 	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 		opts = append(opts, managed.WithManagementPolicies())

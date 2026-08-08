@@ -8,6 +8,7 @@ package config
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -377,6 +378,294 @@ func TestGetClusterSslVerifyVariants(t *testing.T) {
 				t.Fatalf("GetCluster: unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// ── ReadEndpoint (read/write endpoint split) ────────────────────────────────
+
+func readEndpointSecret(ns, name string) *corev1.Secret {
+	return credentialsSecret(ns, name, "candidate-admin", "c4nd1d4t3")
+}
+
+// TestGetLegacyReadEndpointAbsentLeavesConnUnset proves the no-readEndpoint
+// case is byte-for-byte the provider's pre-split behavior: DualClient is
+// still built (a pure passthrough — see dualclient.New) but ReadConnector
+// and Gate are both nil, so every consumer's nil-checks route everything
+// to the primary.
+func TestGetLegacyReadEndpointAbsentLeavesConnUnset(t *testing.T) {
+	scheme := newTestScheme(t)
+	secret := credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t")
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	pc := &clusterv1alpha1.ProviderConfig{
+		Spec: clusterv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: clusterv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+		},
+	}
+
+	conn, err := GetLegacy(context.Background(), kube, pc)
+	if err != nil {
+		t.Fatalf("GetLegacy: unexpected error: %v", err)
+	}
+	if conn.ReadConnector != nil {
+		t.Fatal("GetLegacy: expected a nil ReadConnector when no readEndpoint is configured")
+	}
+	if conn.Gate != nil {
+		t.Fatal("GetLegacy: expected a nil Gate when no readEndpoint is configured")
+	}
+	if conn.DualClient == nil {
+		t.Fatal("GetLegacy: expected a non-nil (passthrough) DualClient")
+	}
+	if conn.DualClient.HasCandidate() {
+		t.Fatal("GetLegacy: passthrough DualClient must report HasCandidate() == false")
+	}
+}
+
+// TestGetLegacyReadEndpointWiresGateAndCandidate proves a configured
+// readEndpoint produces a non-nil ReadConnector and Gate, and that the
+// convergence.mode/timeout CRD defaults are applied when the readEndpoint
+// omits its own convergence block.
+func TestGetLegacyReadEndpointWiresGateAndCandidate(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t"),
+		readEndpointSecret("crossplane-system", "candidate"),
+	).Build()
+
+	pc := &clusterv1alpha1.ProviderConfig{
+		Spec: clusterv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: clusterv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+			ReadEndpoint: &clusterv1alpha1.ReadEndpoint{
+				Host:           "candidate.example.com",
+				CredentialsRef: xpv2.SecretReference{Name: "candidate", Namespace: "crossplane-system"},
+			},
+		},
+	}
+
+	conn, err := GetLegacy(context.Background(), kube, pc)
+	if err != nil {
+		t.Fatalf("GetLegacy: unexpected error: %v", err)
+	}
+	if conn.ReadConnector == nil {
+		t.Fatal("GetLegacy: expected a non-nil ReadConnector when a readEndpoint is configured")
+	}
+	if conn.Gate == nil {
+		t.Fatal("GetLegacy: expected a non-nil Gate when a readEndpoint is configured")
+	}
+	if conn.DualClient == nil || !conn.DualClient.HasCandidate() {
+		t.Fatal("GetLegacy: expected DualClient.HasCandidate() == true")
+	}
+	if conn.ConvergenceMode != "soaSerial" {
+		t.Fatalf("GetLegacy: ConvergenceMode = %q, want the CRD default %q", conn.ConvergenceMode, "soaSerial")
+	}
+	if conn.ConvergenceTimeout != 60*time.Second {
+		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want the CRD default 60s", conn.ConvergenceTimeout)
+	}
+}
+
+// TestGetLegacyReadEndpointExplicitConvergenceOverridesDefaults proves an
+// explicit convergence block on the readEndpoint (mode/timeout) is
+// honored instead of the CRD defaults.
+func TestGetLegacyReadEndpointExplicitConvergenceOverridesDefaults(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t"),
+		readEndpointSecret("crossplane-system", "candidate"),
+	).Build()
+
+	timeout := metav1.Duration{Duration: 5 * time.Second}
+	pc := &clusterv1alpha1.ProviderConfig{
+		Spec: clusterv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: clusterv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+			ReadEndpoint: &clusterv1alpha1.ReadEndpoint{
+				Host:           "candidate.example.com",
+				CredentialsRef: xpv2.SecretReference{Name: "candidate", Namespace: "crossplane-system"},
+				Convergence: &clusterv1alpha1.ConvergenceConfig{
+					Mode:    "primaryOnly",
+					Timeout: &timeout,
+				},
+			},
+		},
+	}
+
+	conn, err := GetLegacy(context.Background(), kube, pc)
+	if err != nil {
+		t.Fatalf("GetLegacy: unexpected error: %v", err)
+	}
+	if conn.ConvergenceMode != "primaryOnly" {
+		t.Fatalf("GetLegacy: ConvergenceMode = %q, want %q", conn.ConvergenceMode, "primaryOnly")
+	}
+	if conn.ConvergenceTimeout != 5*time.Second {
+		t.Fatalf("GetLegacy: ConvergenceTimeout = %v, want 5s", conn.ConvergenceTimeout)
+	}
+}
+
+// TestGetLegacyReadEndpointMissingSecretFailsLoudly pins ADR §7's
+// mandatory guard: a readEndpoint whose credentialsRef Secret does not
+// exist must fail Connect() (via GetLegacy) outright — it must NOT
+// silently degrade to primary-only routing.
+func TestGetLegacyReadEndpointMissingSecretFailsLoudly(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t"),
+	).Build()
+
+	pc := &clusterv1alpha1.ProviderConfig{
+		Spec: clusterv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: clusterv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+			ReadEndpoint: &clusterv1alpha1.ReadEndpoint{
+				Host:           "candidate.example.com",
+				CredentialsRef: xpv2.SecretReference{Name: "does-not-exist", Namespace: "crossplane-system"},
+			},
+		},
+	}
+
+	if _, err := GetLegacy(context.Background(), kube, pc); err == nil {
+		t.Fatal("GetLegacy: expected an error for a missing readEndpoint credentials Secret, got nil — a misconfigured readEndpoint must fail loudly, not silently degrade to primary-only")
+	}
+}
+
+// TestGetLegacyReadEndpointMissingCredentialKeysFailsLoudly is the same
+// guard for a Secret that exists but lacks the required keys.
+func TestGetLegacyReadEndpointMissingCredentialKeysFailsLoudly(t *testing.T) {
+	scheme := newTestScheme(t)
+	badSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "candidate", Namespace: "crossplane-system"},
+		Data:       map[string][]byte{"username": []byte("candidate-admin")}, // missing password
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t"),
+		badSecret,
+	).Build()
+
+	pc := &clusterv1alpha1.ProviderConfig{
+		Spec: clusterv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: clusterv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+			ReadEndpoint: &clusterv1alpha1.ReadEndpoint{
+				Host:           "candidate.example.com",
+				CredentialsRef: xpv2.SecretReference{Name: "candidate", Namespace: "crossplane-system"},
+			},
+		},
+	}
+
+	if _, err := GetLegacy(context.Background(), kube, pc); err == nil {
+		t.Fatal("GetLegacy: expected an error for a readEndpoint credentials Secret missing required keys, got nil")
+	}
+}
+
+// TestGetReadEndpointFallsBackToProviderConfigNamespace proves the
+// namespaced Get resolver applies the same secretRef-namespace fallback
+// to the readEndpoint's credentialsRef that it already applies to the
+// primary credentials.
+func TestGetReadEndpointFallsBackToProviderConfigNamespace(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("team-a", "primary", "admin", "s3cr3t"),
+		readEndpointSecret("team-a", "candidate"),
+	).Build()
+
+	pc := &namespacedv1alpha1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "team-a"},
+		Spec: namespacedv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: namespacedv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{SecretReference: xpv2.SecretReference{Name: "primary"}},
+				},
+			},
+			ReadEndpoint: &namespacedv1alpha1.ReadEndpoint{
+				Host: "candidate.example.com",
+				// No Namespace set — must fall back to "team-a".
+				CredentialsRef: xpv2.SecretReference{Name: "candidate"},
+			},
+		},
+	}
+
+	conn, err := Get(context.Background(), kube, pc)
+	if err != nil {
+		t.Fatalf("Get: unexpected error: %v", err)
+	}
+	if conn.Gate == nil || conn.ReadConnector == nil {
+		t.Fatal("Get: expected a wired Gate and ReadConnector")
+	}
+}
+
+// TestGetClusterReadEndpointWiring is GetCluster's variant of
+// TestGetLegacyReadEndpointWiresGateAndCandidate — the namespaced
+// ClusterProviderConfig resolver.
+func TestGetClusterReadEndpointWiring(t *testing.T) {
+	scheme := newTestScheme(t)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		credentialsSecret("crossplane-system", "primary", "admin", "s3cr3t"),
+		readEndpointSecret("crossplane-system", "candidate"),
+	).Build()
+
+	cpc := &namespacedv1alpha1.ClusterProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: namespacedv1alpha1.ProviderConfigSpec{
+			Host: "grid.example.com",
+			Credentials: namespacedv1alpha1.ProviderCredentials{
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: "primary", Namespace: "crossplane-system"},
+					},
+				},
+			},
+			ReadEndpoint: &namespacedv1alpha1.ReadEndpoint{
+				Host:           "candidate.example.com",
+				CredentialsRef: xpv2.SecretReference{Name: "candidate", Namespace: "crossplane-system"},
+			},
+		},
+	}
+
+	conn, err := GetCluster(context.Background(), kube, cpc)
+	if err != nil {
+		t.Fatalf("GetCluster: unexpected error: %v", err)
+	}
+	if conn.Gate == nil || conn.ReadConnector == nil {
+		t.Fatal("GetCluster: expected a wired Gate and ReadConnector")
 	}
 }
 

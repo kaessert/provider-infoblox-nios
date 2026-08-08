@@ -256,6 +256,192 @@ to this migration.
   retargeted at the shared credential-extraction helper — it is still the
   right assertion, just in a new home.
 
+## Read/write endpoint split wiring
+
+`ProviderConfigSpec.ReadEndpoint`, `internal/clients/dualclient` and
+`internal/clients/convergence` implement an opt-in split: Observe may read from
+a read-only candidate endpoint (typically a Grid Master Candidate) instead of
+the primary, gated by a SOA-serial convergence check so a just-written record
+is never read back stale. Create/Update/Delete always go to the primary. See
+the `readEndpoint` field on ProviderConfig for the user-facing shape.
+
+**Shape:** the credential bridge (`internal/controller/config`) is the single
+place this is wired — `config.Conn` grows `DualClient`, `ReadConnector`,
+`Gate`, `ConvergenceMode` and `ConvergenceTimeout` fields, alongside the
+existing `Connector`/`Endpoint`. A resource package that ignores these new
+fields (leaves them at their zero value) gets byte-for-byte its pre-split
+behavior — every one of them is nil/empty exactly when the ProviderConfig has
+no `readEndpoint` configured. `config.Conn` was already a struct instead of a
+bare connector for exactly this reason: adding the read-endpoint routing and a
+convergence gate costs zero call-site signature changes.
+
+**IPAM variant (verbatim):** IPAM resources have no serial signal, so their
+Observe must always call `convergence.EffectiveMode(mode, true)` — passing
+`isIPAM: true` unconditionally, regardless of the configured mode — before
+calling `Gate.Evaluate`. This forces `primaryOnly` and never issues a
+candidate call. DNS resources pass `isIPAM: false`.
+
+**Hazard — Update() must persist explicitly:** crossplane-runtime's managed
+reconciler persists metadata (including annotations) written inside `Create()`
+automatically, via `UpdateCriticalAnnotations`. It does **not** do the same for
+`Update()` — the only metadata flush after `Update()` succeeds is triggered by
+`ResourceLateInitialized` from a *later* `Observe`, not by anything `Update()`
+itself returns. A convergence-gate annotation write made only in memory inside
+`Update()` is therefore silently discarded at the end of that reconcile,
+wedging the gate for that write until an unrelated change happens to trigger a
+late-init persist. Consequences for every rollout package:
+
+- Inside `Create()`, call `gate.RecordWrite(ctx, cr, fqdn, view)` — the
+  in-memory-only form. Its annotation write rides along with
+  `UpdateCriticalAnnotations`, which the reconciler always calls after
+  `Create()`.
+- Inside `Update()`, call `gate.RecordAndPersistWrite(ctx, kube, cr, fqdn,
+  view)` instead — it does the same read-and-set, then immediately persists
+  via a JSON merge patch scoped to `metadata.annotations`, wrapped in
+  `retry.RetryOnConflict` (`convergence.PersistPendingSerial`). This mirrors
+  `internal/controller/externalname.Refresh`'s pattern for the same reason:
+  a merge patch carries no whole-object version precondition, so a concurrent
+  writer touching an unrelated field never turns this into a lost update.
+- Inside `Observe()`, `Gate.Evaluate` may **clear** the annotation (once the
+  candidate catches up, or on a convergence timeout) by mutating `cr` in
+  place. Fold that into `ExternalObservation.ResourceLateInitialized` — set it
+  `true` whenever the pending-zone-serial annotation's value changed across
+  the `Evaluate` call, OR'd with whatever `lateInit` value the package already
+  computes. Without this, the clear is silently discarded exactly like the
+  Update() case, and the resource stays gated on a write that already
+  converged.
+- `Delete()` never calls either RecordWrite variant — the object is being
+  removed, so there is no future Observe left to gate on the resulting
+  zone-serial bump.
+
+**(i) One Observe read path — before/after:**
+
+```go
+// before
+func (e *external) Observe(ctx context.Context, cr *v1alpha1.ARecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
+	res, err := observeARecord(ctx, e.conn, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
+	...
+}
+```
+
+```go
+// after
+func (e *external) Observe(ctx context.Context, cr *v1alpha1.ARecord) (managed.ExternalObservation, error) {
+	p := &cr.Spec.ForProvider
+
+	decision, annotationChanged := evaluateReadRouting(ctx, e.gate, e.convergenceMode, e.convergenceTimeout, cr, p.Name, p.View)
+	readFrom := e.conn
+	if e.gate != nil {
+		cr.SetConditions(convergence.ReadRoutingCondition(decision))
+		emitReadRoutingWarning(e.recorder, cr, decision) // no-op unless decision.Warning
+		if decision.UseCandidate {
+			readFrom = e.readConn
+		}
+	}
+
+	res, err := observeARecord(ctx, readFrom, e.prober, e.endpoint, cr.GetName(), meta.GetExternalName(cr), string(cr.GetUID()), &p.Comment, &p.TTL, &p.UseTTL, &p.ExtAttrs)
+	...
+	return managed.ExternalObservation{
+		ResourceExists:          true,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: res.lateInit || annotationChanged,
+	}, nil
+}
+```
+
+`evaluateReadRouting` is a small per-package helper: nil-safe on `gate`
+(returns the zero `RouteDecision` and `annotationChanged: false` immediately
+when no readEndpoint is configured — no candidate call, no annotation touch),
+derives the zone from the record's own name field
+(`convergence.ZoneFQDNFromRecordName`), and diffs the pending-zone-serial
+annotation's value before/after `Gate.Evaluate` to compute `annotationChanged`.
+
+**(ii) One write path (Update) — before/after:**
+
+```go
+// before
+func (e *external) Update(ctx context.Context, cr *v1alpha1.ARecord) (managed.ExternalUpdate, error) {
+	p := cr.Spec.ForProvider
+	rec, err := updateARecord(e.objMgr, meta.GetExternalName(cr), p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
+	...
+	return managed.ExternalUpdate{}, nil
+}
+```
+
+```go
+// after
+func (e *external) Update(ctx context.Context, cr *v1alpha1.ARecord) (managed.ExternalUpdate, error) {
+	p := cr.Spec.ForProvider
+	rec, err := updateARecord(e.objMgr, meta.GetExternalName(cr), p.Name, p.IPv4Addr, p.Comment, p.TTL, p.UseTTL, p.ExtAttrs, string(cr.GetUID()))
+	...
+	if err := recordConvergenceWrite(ctx, e.kube, e.gate, cr, p.Name, p.View); err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+	return managed.ExternalUpdate{}, nil
+}
+```
+
+`e.objMgr`/`e.conn` are unconditionally the primary — Create/Update/Delete
+never read `e.gate` to decide which connector to use, only Observe does.
+`recordConvergenceWrite` is nil-safe on `gate` and calls
+`gate.RecordAndPersistWrite` (Update) — see the hazard above for why Create
+uses the plain `RecordWrite` instead.
+
+**(iii) External-struct field additions:**
+
+```go
+type external struct {
+	kube     k8sclient.Client
+	objMgr   ibclient.IBObjectManager // primary — Writer(), never the candidate
+	conn     ibclient.IBConnector     // primary
+	prober   *identity.Prober
+	endpoint string
+
+	// Added for the read/write split — all zero values when no
+	// readEndpoint is configured, which is byte-for-byte this package's
+	// pre-split behavior.
+	readConn           ibclient.IBConnector // candidate; nil ⇒ never read
+	gate               *convergence.Gate    // nil ⇒ evaluateReadRouting/recordConvergenceWrite are no-ops
+	convergenceMode    string
+	convergenceTimeout time.Duration
+	recorder           event.Recorder // Warning events on fallback transitions; nil-safe
+}
+```
+
+**(iv) Connect() additions, for all three ProviderConfig kinds:**
+
+The credential bridge already unifies cluster/namespaced/cluster-namespaced
+resolution into `config.GetLegacy`/`config.Get`/`config.GetCluster`, each
+returning a `*config.Conn`. Every package's `Connect()` — regardless of which
+of the three it calls — adds the same handful of fields to its external
+struct's constructor, unconditionally (nil-safety lives in `config.Conn`, not
+in the connector):
+
+```go
+conn, err := config.GetLegacy(ctx, c.kube, pc) // or config.Get / config.GetCluster
+if err != nil {
+	return nil, err
+}
+return &external{
+	kube:     c.kube,
+	objMgr:   conn.DualClient.Writer(), // always primary, even without a readEndpoint
+	conn:     conn.Connector,
+	endpoint: conn.Endpoint,
+
+	readConn:           conn.ReadConnector,
+	gate:               conn.Gate,
+	convergenceMode:    conn.ConvergenceMode,
+	convergenceTimeout: conn.ConvergenceTimeout,
+	recorder:           c.recorder, // wired into setup*() via event.NewAPIRecorder, shared with managed.WithRecorder
+}, nil
+```
+
+`conn.DualClient` is never nil (a passthrough `dualclient.Client` wraps just
+the primary when no readEndpoint is configured — see `dualclient.New`), so
+`conn.DualClient.Writer()` is always safe to call and always resolves to the
+primary object manager.
+
 ## Contributing
 
 ### Code Conventions

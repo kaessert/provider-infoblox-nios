@@ -1,10 +1,13 @@
 package convergence
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func newTestObj() *metav1.ObjectMeta {
@@ -147,3 +150,81 @@ func TestPendingSerialSurvivesRestart(t *testing.T) {
 		t.Fatalf("expected the pending serial to survive a restart, got ok=%v pending=%+v", ok, pending)
 	}
 }
+
+// ── PersistPendingSerial ─────────────────────────────────────────────────
+//
+// PersistPendingSerial is the fix for the hazard SetPendingSerial alone
+// does not cover: crossplane-runtime does not guarantee metadata written
+// during an ExternalClient's Update() reaches the API server, only status.
+// These tests use a recording client.Client stub — not a full fake
+// client — because the point under test is "was Patch called with this
+// object", not full merge-patch semantics (already covered by
+// externalname.Refresh's own tests, whose pattern this mirrors).
+
+type recordingPatchClient struct {
+	client.Client
+	patched   client.Object
+	patchType client.Patch
+}
+
+func (c *recordingPatchClient) Patch(_ context.Context, obj client.Object, patch client.Patch, _ ...client.PatchOption) error {
+	c.patched = obj
+	c.patchType = patch
+	return nil
+}
+
+func newPersistTestObj(name string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name}}
+}
+
+func TestPersistPendingSerialSetsAnnotationAndPatches(t *testing.T) {
+	kube := &recordingPatchClient{}
+	obj := newPersistTestObj("r1")
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	if err := PersistPendingSerial(context.Background(), kube, obj, "example.com", "Internal", 9, now); err != nil {
+		t.Fatalf("PersistPendingSerial: unexpected error: %v", err)
+	}
+
+	// In-memory mutation happened (same contract as SetPendingSerial).
+	pending, ok, err := GetPendingSerial(obj)
+	if err != nil || !ok {
+		t.Fatalf("expected the pending annotation to be set in memory, ok=%v err=%v", ok, err)
+	}
+	if pending.Serial != 9 || pending.Zone != "example.com/Internal" {
+		t.Fatalf("unexpected pending serial: %+v", pending)
+	}
+
+	// AND the change was submitted to the API server via Patch — not
+	// merely left in memory for crossplane-runtime to maybe flush later.
+	if kube.patched == nil {
+		t.Fatal("expected PersistPendingSerial to call kube.Patch")
+	}
+	if kube.patchType == nil {
+		t.Fatal("expected a non-nil merge patch")
+	}
+}
+
+func TestPersistPendingSerialPropagatesPatchError(t *testing.T) {
+	kube := &failingPatchClient{err: &boomError{}}
+	obj := newPersistTestObj("r1")
+
+	if err := PersistPendingSerial(context.Background(), kube, obj, "example.com", "Internal", 9, time.Now()); err == nil {
+		t.Fatal("expected PersistPendingSerial to propagate a Patch error")
+	}
+}
+
+type failingPatchClient struct {
+	client.Client
+	err error
+}
+
+func (c *failingPatchClient) Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error {
+	return c.err
+}
+
+// boomError is a minimal error type used only to prove PersistPendingSerial
+// propagates whatever error the Patch call returns.
+type boomError struct{}
+
+func (*boomError) Error() string { return "boom" }

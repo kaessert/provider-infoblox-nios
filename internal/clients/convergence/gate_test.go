@@ -212,6 +212,68 @@ func TestGateRecordWriteNoSerialSignalDoesNothing(t *testing.T) {
 	}
 }
 
+// ── Gate.RecordAndPersistWrite ──────────────────────────────────────────────
+//
+// RecordAndPersistWrite is RecordWrite plus an immediate, conflict-safe
+// persist — see PersistPendingSerial's doc for why Update() callers must
+// use this instead of the in-memory-only RecordWrite.
+
+func TestGateRecordAndPersistWriteSetsAndPatchesAnnotation(t *testing.T) {
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		return []zoneAuthObject{{Ref: testZoneAuthRef, SOASerialNumber: uint32Ptr(11)}}, http.StatusOK
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	g := NewGate(newTestClient(t, srv), nil, nil, "")
+	kube := &recordingPatchClient{}
+	obj := newPersistTestObj("r1")
+
+	if err := g.RecordAndPersistWrite(context.Background(), kube, obj, "example.com", "Internal"); err != nil {
+		t.Fatalf("RecordAndPersistWrite: unexpected error: %v", err)
+	}
+
+	pending, ok, err := GetPendingSerial(obj)
+	if err != nil || !ok || pending.Serial != 11 {
+		t.Fatalf("expected pending serial 11 in memory, ok=%v err=%v pending=%+v", ok, err, pending)
+	}
+	if kube.patched == nil {
+		t.Fatal("expected RecordAndPersistWrite to persist the annotation via kube.Patch")
+	}
+}
+
+func TestGateRecordAndPersistWriteNoSerialSignalSkipsPatch(t *testing.T) {
+	m := &mockZoneAuthServer{respond: func(r *http.Request) (interface{}, int) {
+		return []zoneAuthObject{}, http.StatusOK // zone not found — nothing to gate on
+	}}
+	srv := httptest.NewServer(m.handler())
+	defer srv.Close()
+
+	g := NewGate(newTestClient(t, srv), nil, nil, "")
+	kube := &recordingPatchClient{}
+	obj := newPersistTestObj("r1")
+
+	if err := g.RecordAndPersistWrite(context.Background(), kube, obj, "example.com", "Internal"); err != nil {
+		t.Fatalf("RecordAndPersistWrite: unexpected error: %v", err)
+	}
+	if kube.patched != nil {
+		t.Fatal("RecordAndPersistWrite must not call Patch when there is no serial signal to record")
+	}
+}
+
+func TestGateRecordAndPersistWriteNoPrimaryConfiguredIsNoop(t *testing.T) {
+	g := NewGate(nil, nil, nil, "")
+	kube := &recordingPatchClient{}
+	obj := newPersistTestObj("r1")
+
+	if err := g.RecordAndPersistWrite(context.Background(), kube, obj, "example.com", "Internal"); err != nil {
+		t.Fatalf("RecordAndPersistWrite with no primary configured: unexpected error: %v", err)
+	}
+	if kube.patched != nil {
+		t.Fatal("RecordAndPersistWrite must not call Patch when no primary client is configured")
+	}
+}
+
 // ── Gate.Evaluate: pending-write convergence lifecycle ─────────────────────
 
 func gateWithPending(t *testing.T, candidateServer *httptest.Server, breaker *dualclient.CircuitBreaker, hostname string) (*Gate, *metav1.ObjectMeta) {
